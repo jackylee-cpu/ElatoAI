@@ -144,6 +144,89 @@ export const grokVoices: VoiceType[] = [
     }
 ];
 
+export const minimaxVoices: VoiceType[] = [
+    {
+        id: "Calm_Woman",
+        name: "Calm Woman",
+        description: "Soft and steady",
+        color: "bg-teal-100",
+        emoji: "👩",
+        provider: "openrouter",
+    },
+    {
+        id: "Friendly_Person",
+        name: "Friendly Person",
+        description: "Warm and approachable",
+        color: "bg-amber-100",
+        emoji: "🙂",
+        provider: "openrouter",
+    },
+    {
+        id: "Wise_Woman",
+        name: "Wise Woman",
+        description: "Calm and thoughtful",
+        color: "bg-violet-100",
+        emoji: "👩‍🏫",
+        provider: "openrouter",
+    },
+    {
+        id: "Lively_Girl",
+        name: "Lively Girl",
+        description: "Bright and energetic",
+        color: "bg-pink-100",
+        emoji: "👧",
+        provider: "openrouter",
+    },
+    {
+        id: "Casual_Guy",
+        name: "Casual Guy",
+        description: "Relaxed and natural",
+        color: "bg-sky-100",
+        emoji: "👨",
+        provider: "openrouter",
+    },
+    {
+        id: "Deep_Voice_Man",
+        name: "Deep Voice Man",
+        description: "Low and grounded",
+        color: "bg-slate-200",
+        emoji: "🧔",
+        provider: "openrouter",
+    },
+    {
+        id: "Chinese (Mandarin)_Reliable_Executive",
+        name: "可靠女聲",
+        description: "穩重國語女聲",
+        color: "bg-red-100",
+        emoji: "🎙️",
+        provider: "openrouter",
+    },
+    {
+        id: "Chinese (Mandarin)_News_Anchor",
+        name: "新聞主播",
+        description: "清晰國語播報",
+        color: "bg-orange-100",
+        emoji: "📺",
+        provider: "openrouter",
+    },
+    {
+        id: "Chinese (Mandarin)_Unrestrained_Young_Man",
+        name: "陽光男聲",
+        description: "年輕國語男聲",
+        color: "bg-lime-100",
+        emoji: "👦",
+        provider: "openrouter",
+    },
+    {
+        id: "Chinese (Mandarin)_Mature_Woman",
+        name: "成熟女聲",
+        description: "溫柔國語女聲",
+        color: "bg-rose-100",
+        emoji: "👩‍💼",
+        provider: "openrouter",
+    },
+];
+
 export const geminiVoices: VoiceType[] = [
     {
         id: "Zephyr",
@@ -356,6 +439,13 @@ export const geminiVoices: VoiceType[] = [
         provider: "gemini",
     },
 ];
+
+export const voicesByProvider: Record<"openai" | "gemini" | "grok" | "openrouter", VoiceType[]> = {
+    openai: openaiVoices,
+    gemini: geminiVoices,
+    grok: grokVoices,
+    openrouter: minimaxVoices,
+};
 
 export const emotionOptions = [
     { value: "neutral", label: "Neutral", icon: "😐", color: "bg-red-100" },

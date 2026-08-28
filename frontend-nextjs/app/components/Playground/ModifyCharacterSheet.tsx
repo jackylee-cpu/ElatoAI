@@ -115,7 +115,9 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                     <div className="space-y-2 text-left w-full relative">
                     <div className="absolute top-0 right-0">
                     <Badge variant="outline">
-                        {openPersonality.provider}
+                        {openPersonality.provider === "openrouter"
+                            ? "OR + MX"
+                            : openPersonality.provider}
                     </Badge>
                 </div>
                     <div className="flex flex-row items-center gap-2">

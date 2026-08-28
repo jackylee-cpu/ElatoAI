@@ -2,21 +2,16 @@
 
 <div align="center">
 
-  <a href="https://elatoai.com"><picture>
+  <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/darkelato.png">
     <source media="(prefers-color-scheme: light)" srcset="assets/lightelato.png">
     <img alt="elato logo" src="assets/lightelato.png" height="70" style="max-width: 100%;">
-  </picture></a>
+  </picture>
   
 <div style="display:flex; flex-direction:row; align-items:center; flex-wrap:wrap; justify-content:center;">
   <a style="display:inline-flex;" href="https://cookbook.openai.com/examples/voice_solutions/running_realtime_api_speech_on_esp32_arduino_edge_runtime_elatoai"><img src="assets/oai.png" height="42" style="width: auto;"></a>  
   <a style="display:inline-flex;" href="https://www.elatoai.com/docs"><img src="assets/docs.png" height="42" style="width: auto;"></a>
-  <a style="display:inline-flex;" href="https://discord.gg/KJWxDPBRUj"><img src="assets/discord.png" height="42" style="width: auto;"></a>
-      <a style="display:inline-flex;" href="https://www.kickstarter.com/projects/elatoai/elato-make-toys-talk-with-ai-voices"><img src="assets/ks.png" height="42" style="width: auto;"></a>
 </div>
-<a href="https://www.kickstarter.com/projects/elatoai/elato-make-toys-talk-with-ai-voices" target="_blank">
- <img src="assets/cover.png" alt="Elato Logo" width="100%">
-</a>
 
 <br />
 </div>
@@ -197,5 +192,3 @@ graph TD
 ## 许可证
 
 本项目基于 MIT License 发布，详情请查看 [LICENSE](LICENSE)。
-
-**欢迎查看我们的硬件产品：[ElatoAI Products](https://www.elatoai.com/)。如果你觉得这个项目有趣或有帮助，欢迎在 GitHub 上给它点个 Star。⭐**

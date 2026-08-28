@@ -277,9 +277,27 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/nextjs")
     async def nextjs_websocket(websocket: WebSocket):
         await websocket.accept()
-        logger.info("NextJS websocket connected")
+        tts_voice = websocket.query_params.get("voice")
+        title = websocket.query_params.get("title")
+        character_prompt = websocket.query_params.get("character_prompt")
+        voice_prompt = websocket.query_params.get("voice_prompt")
+        first_message_prompt = websocket.query_params.get("first_message_prompt")
+        logger.info(
+            "NextJS websocket connected voice={} title={}",
+            tts_voice or "default",
+            title or "default",
+        )
         transport = create_browser_transport(websocket)
-        await run_bot_session(transport, "browser", False)
+        await run_bot_session(
+            transport,
+            "browser",
+            False,
+            tts_voice=tts_voice,
+            title=title,
+            character_prompt=character_prompt,
+            voice_prompt=voice_prompt,
+            first_message_prompt=first_message_prompt,
+        )
 
     @app.websocket("/ws/esp32")
     async def esp32_websocket(websocket: WebSocket):

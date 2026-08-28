@@ -9,6 +9,7 @@ interface BottomToolbarProps {
   onToggleConnection: () => void;
   isDoctor: boolean;
   personality: IPersonality;
+  usesFastAPI?: boolean;
 }
 
 function BottomToolbar({
@@ -16,6 +17,7 @@ function BottomToolbar({
   onToggleConnection,
   isDoctor,
   personality,
+  usesFastAPI = false,
 }: BottomToolbarProps) {
   const isConnected = sessionStatus === "CONNECTED";
   const isConnecting = sessionStatus === "CONNECTING";
@@ -38,7 +40,7 @@ function BottomToolbar({
     return "Doctor chat";
   }
 
-  const isDisabled = isConnecting || personality.provider === "gemini";
+  const isDisabled = isConnecting || (!usesFastAPI && personality.provider === "gemini");
 
   function getConnectionButtonClasses() {
     const baseClasses = "text-white text-base p-2 w-fit rounded-full shadow-lg flex flex-row items-center justify-center gap-2 px-4";

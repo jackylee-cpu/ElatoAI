@@ -1,18 +1,7 @@
 import { Button } from "@/components/ui/button";
-import { Home, Sparkle, ChevronDown, Dog, Bird, Hop, Plus, Blocks, Gamepad2, Link } from "lucide-react";
-import {
-    DropdownMenuSeparator,
-    DropdownMenu,
-    DropdownMenuItem,
-    DropdownMenuGroup,
-    DropdownMenuContent,
-    DropdownMenuTrigger,
-    DropdownMenuLabel,
-} from "@/components/ui/dropdown-menu";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
-
-const ICON_SIZE = 22;
+import Link from "next/link";
 
 interface LeftNavbarButtonsProps {
     user: IUser | null;
@@ -28,7 +17,6 @@ export default function LeftNavbarButtons({ user }: LeftNavbarButtonsProps) {
         firstWordOfHospital = hospitalName ? hospitalName.split(' ')[0] : '';
     }
 
-    const isRoot = pathname === "/";
     const isHome = pathname.includes("/home");
 
     const shouldShowHospital = isDoctor && firstWordOfHospital.length && isHome;
@@ -42,14 +30,12 @@ export default function LeftNavbarButtons({ user }: LeftNavbarButtonsProps) {
             aria-label="Go to Home page"
             title="Click to go to Home page"
         >
-            <a href="https://www.elatoai.com">
-                <Link size={18} className="mr-1" />
-                <span className="text-md font-normal mr-1">Main Website</span>
+            <Link href="/">
                 <p className="flex items-center font-luckiestGuy tracking-widest text-xl mt-1">
-                    <span>Elato</span>
+                    <span>{shouldShowHospital ? firstWordOfHospital : "Elato"}</span>
                 </p>
                 <Image src="/logos/elato.png" alt="Elato Logo" width={24} height={24} />
-            </a>
+            </Link>
         </Button>
     </div>
     );

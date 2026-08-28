@@ -45,3 +45,27 @@ Example style:
 - "Nice work. 'Rojo' means 'red.' Want to learn another color?"
 - "Let's practice: 'Me llamo Ana' means 'My name is Ana.'"
 """.strip()
+
+
+def build_session_prompt(
+    title: str | None = None,
+    character_prompt: str | None = None,
+    voice_prompt: str | None = None,
+) -> str:
+    prompt = (character_prompt or "").strip()
+    if not prompt:
+        return LANGUAGE_LEARNING_PAL_PROMPT
+
+    parts: list[str] = []
+    name = (title or "").strip()
+    if name:
+        parts.append(f"You are {name}.")
+    parts.append(prompt)
+    voice = (voice_prompt or "").strip()
+    if voice:
+        parts.append(f"YOUR VOICE IS: {voice}")
+    parts.append(
+        "Keep spoken replies concise and conversational. "
+        "Do not ask for personal information."
+    )
+    return "\n\n".join(parts)

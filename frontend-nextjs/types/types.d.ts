@@ -122,9 +122,17 @@ declare global {
             description: string;
             color: string;
             emoji?: string;
+        }
+        | {
+            provider: "openrouter";
+            id: string;
+            name: string;
+            description: string;
+            color: string;
+            emoji?: string;
         };
 
-    type ModelProvider = "openai" | "gemini" | "grok" | "elevenlabs" | "hume";
+    type ModelProvider = "openai" | "gemini" | "grok" | "elevenlabs" | "hume" | "openrouter";
 
     type GrokVoice =
         | "Ara"
