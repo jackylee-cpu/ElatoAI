@@ -150,6 +150,39 @@ cd /Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi
 python server.py
 ```
 
+## Deploy with GHCR
+
+Pushing `main` (or running the workflow manually) builds `server/fastapi` and publishes:
+
+```text
+ghcr.io/<github-owner>/<repo>/fastapi:latest
+ghcr.io/<github-owner>/<repo>/fastapi:<git-sha>
+```
+
+The image is private by default. After the first successful workflow run, make it public if you want unauthenticated pulls: GitHub → Packages → `fastapi` → Package settings → Change visibility.
+
+Pull and run with your existing `.env` (do not bake keys into the image):
+
+```bash
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin
+docker pull ghcr.io/OWNER/REPO/fastapi:latest
+cd server/fastapi
+FASTAPI_IMAGE=ghcr.io/OWNER/REPO/fastapi:latest docker compose up -d
+```
+
+Or without compose:
+
+```bash
+docker run --rm --env-file .env -p 7860:7860 ghcr.io/OWNER/REPO/fastapi:latest
+```
+
+Build locally instead of pulling:
+
+```bash
+cd server/fastapi
+docker compose up --build -d
+```
+
 ### 5. Point your ESP32 at the FastAPI backend
 
 Update the firmware config so your hardware connects to this server instead of the Deno or Cloudflare backend.

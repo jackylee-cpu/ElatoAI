@@ -1,0 +1,9 @@
+services:
+  fastapi:
+    image: ${FASTAPI_IMAGE:-ghcr.io/akdeb/elatoai/fastapi:latest}
+    build: .
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    restart: unless-stopped
