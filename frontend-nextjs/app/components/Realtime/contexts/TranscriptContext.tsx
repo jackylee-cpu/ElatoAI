@@ -2,12 +2,19 @@
 
 import React, { createContext, useContext, useState, FC, PropsWithChildren } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { TranscriptItem } from "@/app/components/Realtime/types";
+import { TranscriptItem, TranscriptTiming } from "@/app/components/Realtime/types";
 
 type TranscriptContextValue = {
   transcriptItems: TranscriptItem[];
   addTranscriptMessage: (itemId: string, role: "user" | "assistant", text: string, hidden?: boolean) => void;
   updateTranscriptMessage: (itemId: string, text: string, isDelta: boolean) => void;
+  upsertTranscriptMessage: (
+    itemId: string,
+    role: "user" | "assistant",
+    text: string,
+    mode?: "replace" | "append" | "placeholder",
+    extras?: TranscriptTiming
+  ) => void;
   addTranscriptBreadcrumb: (title: string, data?: Record<string, any>) => void;
   toggleTranscriptItemExpand: (itemId: string) => void;
   updateTranscriptItemStatus: (itemId: string, newStatus: "IN_PROGRESS" | "DONE") => void;
@@ -64,6 +71,64 @@ export const TranscriptProvider: FC<PropsWithChildren> = ({ children }) => {
     );
   };
 
+  const upsertTranscriptMessage: TranscriptContextValue["upsertTranscriptMessage"] = (
+    itemId,
+    role,
+    text,
+    mode = "replace",
+    extras
+  ) => {
+    setTranscriptItems((prev) => {
+      const existing = prev.find((item) => item.itemId === itemId && item.type === "MESSAGE");
+      if (!existing) {
+        return [
+          ...prev,
+          {
+            itemId,
+            type: "MESSAGE",
+            role,
+            title: text,
+            expanded: false,
+            timestamp: newTimestampPretty(),
+            createdAtMs: Date.now(),
+            status: "IN_PROGRESS",
+            isHidden: false,
+            latencyMs: extras?.latencyMs,
+            firstLatencyMs: extras?.firstLatencyMs ?? extras?.latencyMs,
+            elapsedMs: extras?.elapsedMs,
+            durationMs: extras?.durationMs,
+            words: extras?.words,
+          },
+        ];
+      }
+      if (mode === "placeholder") {
+        return prev;
+      }
+      return prev.map((item) => {
+        if (item.itemId === itemId && item.type === "MESSAGE") {
+          const current = item.title ?? "";
+          const isPlaceholder = current.startsWith("[") && current.endsWith("]");
+          const nextTitle =
+            mode === "append"
+              ? isPlaceholder
+                ? text
+                : `${current}${text}`
+              : text;
+          return {
+            ...item,
+            title: nextTitle,
+            latencyMs: extras?.latencyMs ?? item.latencyMs,
+            firstLatencyMs: item.firstLatencyMs ?? extras?.firstLatencyMs ?? extras?.latencyMs,
+            elapsedMs: extras?.elapsedMs ?? item.elapsedMs,
+            durationMs: extras?.durationMs ?? item.durationMs,
+            words: extras?.words ?? item.words,
+          };
+        }
+        return item;
+      });
+    });
+  };
+
   const addTranscriptBreadcrumb: TranscriptContextValue["addTranscriptBreadcrumb"] = (title, data) => {
     setTranscriptItems((prev) => [
       ...prev,
@@ -103,6 +168,7 @@ export const TranscriptProvider: FC<PropsWithChildren> = ({ children }) => {
         transcriptItems,
         addTranscriptMessage,
         updateTranscriptMessage,
+        upsertTranscriptMessage,
         addTranscriptBreadcrumb,
         toggleTranscriptItemExpand,
         updateTranscriptItemStatus,

@@ -24,11 +24,13 @@ To keep onboarding straightforward, the classic FastAPI route is centered around
 - `claude`
 - `gemini`
 - `grok`
+- `openrouter`
 
 ### STT
 
 - `deepgram`
 - `whisper`
+- `azure`
 
 ### TTS
 
@@ -36,6 +38,7 @@ To keep onboarding straightforward, the classic FastAPI route is centered around
 - `cartesia`
 - `deepgram`
 - `openai`
+- `minimax`
 
 The code still uses the `models/llm`, `models/stt`, and `models/tts` layout, but the active registry is intentionally trimmed so the default experience stays simple.
 
@@ -203,12 +206,15 @@ The current simple provider map is:
 - `claude` LLM: `ANTHROPIC_API_KEY`
 - `gemini` LLM: `GEMINI_API_KEY`
 - `grok` LLM: `XAI_API_KEY`
+- `openrouter` LLM: `OPENROUTER_API_KEY`
 - `deepgram` STT: `DEEPGRAM_API_KEY`
 - `whisper` STT: no external API key required
+- `azure` STT: `AZURE_SPEECH_API_KEY` and `AZURE_SPEECH_REGION`
 - `elevenlabs` TTS: `ELEVENLABS_API_KEY`
 - `cartesia` TTS: `CARTESIA_API_KEY`
 - `deepgram` TTS: `DEEPGRAM_API_KEY`
 - `openai` TTS: `OPENAI_API_KEY`
+- `minimax` TTS: `MINIMAX_API_KEY` and `MINIMAX_GROUP_ID`
 
 At startup, the server now validates the selected `CLASSIC_*_PROVIDER` values and fails early if the required keys are missing.
 
@@ -220,12 +226,15 @@ Each supported provider now has its own module file so the layout is easy to und
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/anthropic.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/gemini.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/grok.py`
+- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/openrouter.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/stt/deepgram.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/stt/whisper.py`
+- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/stt/azure.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/elevenlabs.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/cartesia.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/deepgram.py`
 - `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/openai.py`
+- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/minimax.py`
 
 Under the hood, these modules delegate to Pipecat service implementations. We keep that wiring thin on purpose so users mostly think in terms of:
 
@@ -259,6 +268,32 @@ CLASSIC_TTS_PROVIDER=cartesia
 CLASSIC_STT_PROVIDER=deepgram
 CLASSIC_LLM_PROVIDER=gemini
 CLASSIC_TTS_PROVIDER=openai
+```
+
+### OR + MX: Azure STT + OpenRouter + MiniMax
+
+This is the FastAPI stack used by OpenRouter characters in the Next.js UI. Azure Speech is the streaming STT, OpenRouter is the LLM, and MiniMax is TTS.
+
+Azure Speech needs a Speech resource key and region from the Azure portal. Default recognition language is `zh-CN`. MiniMax still needs `MINIMAX_GROUP_ID` from the same MiniMax console as the TTS key.
+
+```env
+CLASSIC_STT_PROVIDER=azure
+CLASSIC_LLM_PROVIDER=openrouter
+CLASSIC_TTS_PROVIDER=minimax
+AZURE_SPEECH_API_KEY=your_azure_speech_api_key
+AZURE_SPEECH_REGION=eastasia
+AZURE_SPEECH_LANGUAGE=zh-CN
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_PROVIDER_SORT=latency
+MINIMAX_API_KEY=your_minimax_api_key
+MINIMAX_GROUP_ID=your_minimax_group_id
+```
+
+If you do not have an Azure Speech key, you can fall back to local Whisper:
+
+```env
+CLASSIC_STT_PROVIDER=whisper
 ```
 
 ## Unified Experience Across Elato

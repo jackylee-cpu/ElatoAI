@@ -52,6 +52,14 @@ PROVIDER_SPECS: dict[ProviderCategory, dict[str, ProviderSpec]] = {
             env=("XAI_API_KEY",),
             description="xAI Grok via Pipecat.",
         ),
+        "openrouter": ProviderSpec(
+            name="openrouter",
+            category="llm",
+            module="models.llm.openrouter",
+            env=("OPENROUTER_API_KEY",),
+            aliases=("open_router",),
+            description="OpenRouter OpenAI-compatible LLM catalog.",
+        ),
     },
     "stt": {
         "deepgram": ProviderSpec(
@@ -66,6 +74,14 @@ PROVIDER_SPECS: dict[ProviderCategory, dict[str, ProviderSpec]] = {
             category="stt",
             module="models.stt.whisper",
             description="Local Whisper transcription service with no external API key.",
+        ),
+        "azure": ProviderSpec(
+            name="azure",
+            category="stt",
+            module="models.stt.azure",
+            env=("AZURE_SPEECH_API_KEY", "AZURE_SPEECH_REGION"),
+            aliases=("azure_speech", "azure_stt"),
+            description="Azure Speech real-time transcription service.",
         ),
     },
     "tts": {
@@ -96,6 +112,14 @@ PROVIDER_SPECS: dict[ProviderCategory, dict[str, ProviderSpec]] = {
             module="models.tts.openai",
             env=("OPENAI_API_KEY",),
             description="OpenAI text-to-speech service.",
+        ),
+        "minimax": ProviderSpec(
+            name="minimax",
+            category="tts",
+            module="models.tts.minimax",
+            env=("MINIMAX_API_KEY", "MINIMAX_GROUP_ID"),
+            aliases=("minimaxi",),
+            description="MiniMax T2A streaming TTS service.",
         ),
     },
 }

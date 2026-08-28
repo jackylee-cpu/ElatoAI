@@ -1,4 +1,11 @@
 export type SessionStatus = "DISCONNECTED" | "CONNECTING" | "CONNECTED";
+export type VoiceTurnStatus =
+  | "disconnected"
+  | "connecting"
+  | "listening"
+  | "user_speaking"
+  | "thinking"
+  | "speaking";
 
 export interface ToolParameterProperty {
   type: string;
@@ -39,6 +46,20 @@ export interface AgentConfig {
 
 export type AllAgentConfigsType = Record<string, AgentConfig[]>;
 
+export interface TranscriptWordTiming {
+  text: string;
+  offsetMs: number;
+  durationMs: number;
+}
+
+export interface TranscriptTiming {
+  latencyMs?: number;
+  firstLatencyMs?: number;
+  elapsedMs?: number;
+  durationMs?: number;
+  words?: TranscriptWordTiming[];
+}
+
 export interface TranscriptItem {
   itemId: string;
   type: "MESSAGE" | "BREADCRUMB";
@@ -50,6 +71,11 @@ export interface TranscriptItem {
   createdAtMs: number;
   status: "IN_PROGRESS" | "DONE";
   isHidden: boolean;
+  latencyMs?: number;
+  firstLatencyMs?: number;
+  elapsedMs?: number;
+  durationMs?: number;
+  words?: TranscriptWordTiming[];
 }
 
 export interface Log {

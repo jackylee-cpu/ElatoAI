@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import BottomToolbar from "./components/BottomToolbar";
 
 // Types
-import { AgentConfig, SessionStatus } from "@/app/components/Realtime/types";
+import { AgentConfig, SessionStatus, VoiceTurnStatus } from "@/app/components/Realtime/types";
 
 // Context providers & hooks
 import { useTranscript } from "@/app/components/Realtime/contexts/TranscriptContext";
@@ -17,6 +17,8 @@ import { useHandleServerEvent } from "./hooks/useHandleServerEvent";
 
 // Utilities
 import { createRealtimeConnection } from "./lib/realtimeConnection";
+import { FastAPIVoiceSession, FastAPIControlMessage } from "./lib/fastapiConnection";
+import { getFastAPIVoiceUrl, shouldUseFastAPIVoice } from "./lib/voiceBackend";
 import { toast } from "@/components/ui/use-toast";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import Transcript from "./components/Transcript";
@@ -33,7 +35,7 @@ interface AppProps {
 function App({ personalityIdState, isDoctor, userId }: AppProps) {
   const supabase = createClient();
 
-  const { transcriptItems, addTranscriptMessage, addTranscriptBreadcrumb } =
+  const { transcriptItems, addTranscriptMessage, upsertTranscriptMessage, updateTranscriptItemStatus } =
     useTranscript();
   const { logClientEvent, logServerEvent } = useEvent();
 
@@ -63,9 +65,15 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
   const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
+  const fastapiSessionRef = useRef<FastAPIVoiceSession | null>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const botTargetTextRef = useRef<Record<string, string>>({});
+  const botShownTextRef = useRef<Record<string, string>>({});
+  const botRevealRafRef = useRef<number | null>(null);
   const [sessionStatus, setSessionStatus] =
     useState<SessionStatus>("DISCONNECTED");
+  const [voiceStatus, setVoiceStatus] =
+    useState<VoiceTurnStatus>("disconnected");
 
   const [isEventsPaneExpanded, setIsEventsPaneExpanded] =
     useState<boolean>(true);
@@ -97,6 +105,125 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     sendClientEvent,
     setSelectedAgentName,
   });
+
+  const revealBotText = (itemId: string, flush = false) => {
+    const target = botTargetTextRef.current[itemId] ?? "";
+    const shown = botShownTextRef.current[itemId] ?? "";
+    if (flush || shown === target) {
+      botShownTextRef.current[itemId] = target;
+      if (target) {
+        upsertTranscriptMessage(itemId, "assistant", target, "replace");
+      }
+      return shown !== target;
+    }
+
+    const remaining = target.length - shown.length;
+    if (remaining <= 0) {
+      return false;
+    }
+    const nextCount = remaining > 24 ? Math.min(remaining, 4) : remaining > 8 ? 2 : 1;
+    const next = target.slice(0, shown.length + nextCount);
+    botShownTextRef.current[itemId] = next;
+    upsertTranscriptMessage(itemId, "assistant", next, "replace");
+    return next.length < target.length;
+  };
+
+  const scheduleBotReveal = () => {
+    if (botRevealRafRef.current != null) {
+      return;
+    }
+    botRevealRafRef.current = window.requestAnimationFrame(() => {
+      botRevealRafRef.current = null;
+      let needMore = false;
+      Object.keys(botTargetTextRef.current).forEach((itemId) => {
+        if (revealBotText(itemId)) {
+          needMore = true;
+        }
+      });
+      if (needMore) {
+        scheduleBotReveal();
+      }
+    });
+  };
+
+  const appendBotTranscript = (itemId: string, text: string, replace = false) => {
+    const previous = botTargetTextRef.current[itemId] ?? "";
+    botTargetTextRef.current[itemId] = replace ? text : `${previous}${text}`;
+    scheduleBotReveal();
+  };
+
+  const flushBotTranscript = (itemId?: string) => {
+    if (itemId) {
+      revealBotText(itemId, true);
+      return;
+    }
+    Object.keys(botTargetTextRef.current).forEach((id) => revealBotText(id, true));
+  };
+
+  const handleFastAPIControlRef = useRef<(message: FastAPIControlMessage) => void>(
+    () => {}
+  );
+  handleFastAPIControlRef.current = (message: FastAPIControlMessage) => {
+    logServerEvent(message, "fastapi.control");
+    const itemId = typeof message.item_id === "string" ? message.item_id : "";
+    const text = typeof message.text === "string" ? message.text : "";
+
+    switch (message.msg) {
+      case "USER.STARTED": {
+        const id = itemId || uuidv4().slice(0, 32);
+        upsertTranscriptMessage(id, "user", "[Listening...]", "placeholder");
+        setVoiceStatus("user_speaking");
+        break;
+      }
+      case "USER.TRANSCRIPT": {
+        if (!itemId || !text) break;
+        upsertTranscriptMessage(itemId, "user", text, "replace", {
+          latencyMs: typeof message.latency_ms === "number" ? message.latency_ms : undefined,
+          elapsedMs: typeof message.elapsed_ms === "number" ? message.elapsed_ms : undefined,
+          durationMs: typeof message.duration_ms === "number" ? message.duration_ms : undefined,
+        });
+        if (message.final) {
+          updateTranscriptItemStatus(itemId, "DONE");
+        }
+        setVoiceStatus(message.final ? "thinking" : "user_speaking");
+        break;
+      }
+      case "AUDIO.COMMITTED": {
+        setVoiceStatus("thinking");
+        break;
+      }
+      case "BOT.TRANSCRIPT": {
+        if (!itemId || !text) break;
+        appendBotTranscript(itemId, text, message.delta === false);
+        setVoiceStatus("speaking");
+        break;
+      }
+      case "RESPONSE.CREATED": {
+        if (itemId && !botTargetTextRef.current[itemId]) {
+          upsertTranscriptMessage(itemId, "assistant", "[Speaking...]", "placeholder");
+        }
+        setVoiceStatus("speaking");
+        break;
+      }
+      case "RESPONSE.COMPLETE": {
+        if (itemId) {
+          flushBotTranscript(itemId);
+          updateTranscriptItemStatus(itemId, "DONE");
+        } else {
+          flushBotTranscript();
+        }
+        setVoiceStatus("listening");
+        break;
+      }
+      case "RESPONSE.ERROR": {
+        setVoiceStatus("listening");
+        toast({ description: "The voice pipeline returned an error." });
+        break;
+      }
+      default:
+        break;
+    }
+  };
 
   useEffect(() => {
     if (selectedAgentName && sessionStatus === "DISCONNECTED") {
@@ -131,6 +258,52 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
   const connectToRealtime = async () => {
     if (sessionStatus !== "DISCONNECTED") return;
     setSessionStatus("CONNECTING");
+
+    if (shouldUseFastAPIVoice(personality?.provider)) {
+      setVoiceStatus("connecting");
+      const voiceUrl = getFastAPIVoiceUrl({
+        voice: personality?.oai_voice,
+        title: personality?.title,
+        characterPrompt: personality?.character_prompt,
+        voicePrompt: personality?.voice_prompt,
+        firstMessagePrompt: personality?.first_message_prompt,
+      });
+      try {
+        const session = new FastAPIVoiceSession({
+          onOpen: () => {
+            logClientEvent({ url: voiceUrl }, "fastapi.socket.open");
+            setSessionStatus("CONNECTED");
+            setVoiceStatus("listening");
+          },
+          onClose: () => {
+            logClientEvent({}, "fastapi.socket.close");
+            setSessionStatus("DISCONNECTED");
+            setVoiceStatus("disconnected");
+          },
+          onError: (error) => {
+            logClientEvent({ error: String(error.type) }, "fastapi.socket.error");
+            toast({
+              description: "Could not reach the FastAPI voice server. Is it running on port 7860?",
+            });
+            setSessionStatus("DISCONNECTED");
+            setVoiceStatus("disconnected");
+          },
+          onControlMessage: (message) => handleFastAPIControlRef.current(message),
+        });
+        fastapiSessionRef.current = session;
+        await session.connect(voiceUrl);
+      } catch (err) {
+        console.error("Error connecting to FastAPI voice:", err);
+        fastapiSessionRef.current?.disconnect();
+        fastapiSessionRef.current = null;
+        setSessionStatus("DISCONNECTED");
+        setVoiceStatus("disconnected");
+        toast({
+          description: "Microphone permission is required to talk.",
+        });
+      }
+      return;
+    }
 
     try {
       const EPHEMERAL_KEY = await fetchEphemeralKey();
@@ -171,6 +344,16 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
   };
 
   const disconnectFromRealtime = () => {
+    fastapiSessionRef.current?.disconnect();
+    fastapiSessionRef.current = null;
+
+    if (botRevealRafRef.current != null) {
+      window.cancelAnimationFrame(botRevealRafRef.current);
+      botRevealRafRef.current = null;
+    }
+    botTargetTextRef.current = {};
+    botShownTextRef.current = {};
+
     if (pcRef.current) {
       pcRef.current.getSenders().forEach((sender) => {
         if (sender.track) {
@@ -183,6 +366,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     }
     setDataChannel(null);
     setSessionStatus("DISCONNECTED");
+    setVoiceStatus("disconnected");
     setIsPTTUserSpeaking(false);
 
     logClientEvent({}, "disconnected");
@@ -217,6 +401,10 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
   }
 
   const updateSession = (shouldTriggerResponse: boolean = false) => {
+    if (shouldUseFastAPIVoice(personality?.provider)) {
+      return;
+    }
+
     sendClientEvent(
       { type: "input_audio_buffer.clear" },
       "clear audio buffer on session update"
@@ -374,6 +562,8 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     return null;
   }
 
+  const usesFastAPI = shouldUseFastAPIVoice(personality.provider);
+
   return   <Sheet open={isSheetOpen} onOpenChange={handleSheetOpenChange}>
     <div className="inline-block">
        <BottomToolbar
@@ -381,6 +571,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
         onToggleConnection={onToggleConnection}
         isDoctor={isDoctor}
         personality={personality}
+        usesFastAPI={usesFastAPI}
       />
     </div>
   <SheetContent 
@@ -395,6 +586,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
           setUserText={setUserText}
           onSendMessage={handleSendTextMessage}
           canSend={
+            !usesFastAPI &&
             sessionStatus === "CONNECTED" &&
             dcRef.current?.readyState === "open"
           }
@@ -402,6 +594,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
           userId={userId}
           isDoctor={isDoctor}
           supabase={supabase}
+          voiceStatus={usesFastAPI ? voiceStatus : undefined}
         />
       </div>
     </div>

@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { toast } from "@/components/ui/use-toast";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
-import { emotionOptions, geminiVoices, grokVoices, openaiVoices, r2UrlAudio } from "@/lib/data";
+import { emotionOptions, r2UrlAudio, voicesByProvider } from "@/lib/data";
 import EmojiComponent from "./EmojiComponent";
 import { PitchFactors } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
@@ -26,20 +26,44 @@ interface SettingsDashboardProps {
 }
 
 const formSchema = z.object({
-  provider: z.enum(["openai", "gemini", "grok"]),
-  title: z.string().min(2, "Minimum 2 characters").max(50, "Maximum 50 characters"),
-  description: z.string().min(50, "Minimum 50 characters").max(200, "Maximum 200 characters"),
-  prompt: z.string().min(100, "Minimum 100 characters").max(1000, "Maximum 1000 characters"),
-  firstMessagePrompt: z.string().min(50, "Minimum 50 characters").max(150, "Maximum 150 characters"),
+  provider: z.enum(["openai", "gemini", "grok", "openrouter"]),
+  title: z.string().min(1, "Title is required").max(50, "Maximum 50 characters"),
+  description: z.string().max(200, "Maximum 200 characters"),
+  prompt: z.string().max(1000, "Maximum 1000 characters"),
+  firstMessagePrompt: z.string().max(150, "Maximum 150 characters"),
   voice: z.string().min(1, "Voice selection is required"),
   voiceCharacteristics: z.object({
-    features: z.string().min(10, "Minimum 10 characters").max(150, "Maximum 150 characters"),
+    features: z.string().max(150, "Maximum 150 characters"),
     emotion: z.string(),
     pitchFactor: z.number().min(0.75).max(1.5),
   })
 });
 
 type FormData = z.infer<typeof formSchema>;
+type VoicePickerProvider = keyof typeof voicesByProvider;
+type FormErrorKey = keyof FormData | "features";
+
+const personalityStepSchema = formSchema.pick({
+  provider: true,
+  title: true,
+  description: true,
+  prompt: true,
+  firstMessagePrompt: true,
+  voice: true,
+});
+
+const collectFormErrors = (zodError: z.ZodError) => {
+  const errors: Partial<Record<FormErrorKey, string>> = {};
+  zodError.errors.forEach((err) => {
+    const path = err.path.join(".");
+    if (path === "voiceCharacteristics.features") {
+      errors.features = err.message;
+    } else {
+      errors[err.path[0] as keyof FormData] = err.message;
+    }
+  });
+  return errors;
+};
 
 const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   selectedUser,
@@ -66,7 +90,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof FormData | 'features', string>>>({});
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
-  const [expandedProvider, setExpandedProvider] = useState<ModelProvider | null>("openai");
+  const [expandedProvider, setExpandedProvider] = useState<VoicePickerProvider | null>("openai");
 
   const handleBlur = (field: keyof FormData | 'features') => {
     // Mark the field as touched
@@ -144,23 +168,25 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     // Set submitting state to true
     setIsSubmitting(true);
 
-    // Validate the entire form
     const result = formSchema.safeParse(formData);
-    console.log(result);
 
     if (!result.success) {
-      // Extract and set all validation errors
-      const errors: Partial<Record<keyof FormData | 'features', string>> = {};
-      result.error.errors.forEach(err => {
-        const path = err.path.join('.');
-        if (path === 'voiceCharacteristics.features') {
-          errors['features'] = err.message;
-        } else {
-          errors[err.path[0] as keyof FormData] = err.message;
-        }
-      });
+      const errors = collectFormErrors(result.error);
       setFormErrors(errors);
-      setIsSubmitting(false); // Reset submitting state
+      const personalityError = ["title", "description", "prompt", "firstMessagePrompt", "voice", "provider"]
+        .some((key) => errors[key as keyof FormData]);
+      if (personalityError) {
+        setCurrentStep("personality");
+      }
+      toast({
+        title: "Please complete the form",
+        description: personalityError
+          ? "Some character details still need to be filled in."
+          : "Please add voice characteristics before creating.",
+        variant: "destructive",
+        duration: 3000,
+      });
+      setIsSubmitting(false);
       return;
     }
 
@@ -170,7 +196,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
         title: formData.title,
         subtitle: "",
         character_prompt: formData.prompt,
-        oai_voice: formData.voice as OaiVoice,
+        oai_voice: formData.voice,
         voice_prompt: formData.voiceCharacteristics.features + "\nThe voice should be " + formData.voiceCharacteristics.emotion,
         is_doctor: false,
         is_child_voice: false,
@@ -260,6 +286,9 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     if (provider === "grok") {
       return { label: "Grok", className: "bg-slate-900 text-white" };
     }
+    if (provider === "openrouter") {
+      return { label: "OR + MX", className: "bg-amber-500 text-white" };
+    }
     return { label: provider, className: "bg-gray-600 text-white" };
   };
 
@@ -289,12 +318,16 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               <p className="text-sm text-gray-500">
                 Choose from a list of voices and model providers to create your AI character.
               </p>
+              {formErrors.voice && (
+                <p className="text-sm text-red-500">{formErrors.voice}</p>
+              )}
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {([
-                  { provider: "openai" as ModelProvider, label: "OpenAI" },
-                  { provider: "gemini" as ModelProvider, label: "Gemini" },
-                  { provider: "grok" as ModelProvider, label: "Grok" },
+                  { provider: "openai" as VoicePickerProvider, label: "OpenAI" },
+                  { provider: "gemini" as VoicePickerProvider, label: "Gemini" },
+                  { provider: "grok" as VoicePickerProvider, label: "Grok" },
+                  { provider: "openrouter" as VoicePickerProvider, label: "OR + MX" },
                 ]).map((p) => (
                   <button
                     key={p.provider}
@@ -304,24 +337,24 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                       : "border-gray-200 hover:border-gray-300"
                       }`}
                     onClick={() => {
-                      setExpandedProvider(prev => prev === p.provider ? null : p.provider);
-                      setFormData(prev => {
-                        const switchingProvider = prev.provider !== p.provider;
-                        return {
-                          ...prev,
-                          provider: p.provider,
-                          voice: switchingProvider ? "" : prev.voice,
-                        };
-                      });
+                      setExpandedProvider(p.provider);
+                      setFormData((prev) => ({
+                        ...prev,
+                        provider: p.provider,
+                        voice: prev.provider === p.provider ? prev.voice : "",
+                      }));
                     }}
                   >
                     <div className="flex flex-col gap-1">
                       <div className="flex flex-col sm:flex-row gap-2 items-center justify-between">
                         <span className="font-semibold text-gray-900">{p.label}</span>
                         <span className="text-xs text-gray-500">
-                          {p.provider === "openai" ? openaiVoices.length : p.provider === "gemini" ? geminiVoices.length : grokVoices.length} voices
+                          {voicesByProvider[p.provider].length} voices
                         </span>
                       </div>
+                      {p.provider === "openrouter" && (
+                        <span className="text-[11px] text-amber-700">Azure STT + OpenRouter + MiniMax</span>
+                      )}
                     </div>
                   </button>
                 ))}
@@ -330,10 +363,11 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               {expandedProvider && (
                 <div className="overflow-x-auto px-2">
                   <div className="flex gap-3 w-max py-2">
-                    {(expandedProvider === "openai" ? openaiVoices : expandedProvider === "gemini" ? geminiVoices : grokVoices).map((voice: VoiceType) => (
-                      <div
+                    {voicesByProvider[expandedProvider].map((voice: VoiceType) => (
+                      <button
+                        type="button"
                         key={voice.id}
-                        className={`relative rounded-xl border-2 p-4 transition-all cursor-pointer hover:scale-[1.02] hover:shadow-lg w-48 flex-shrink-0 ${formData.voice === voice.id
+                        className={`relative rounded-xl border-2 p-4 transition-all cursor-pointer hover:scale-[1.02] hover:shadow-lg w-48 flex-shrink-0 text-left ${formData.voice === voice.id
                           ? `border-blue-500 shadow-lg ${voice.color} ring-2 ring-blue-200`
                           : `border-gray-200 hover:border-gray-300 ${voice.color} hover:shadow-md`
                           }`}
@@ -343,13 +377,14 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                             provider: voice.provider as ModelProvider,
                             voice: voice.id
                           }));
+                          setFormErrors(prev => ({ ...prev, voice: undefined }));
                           previewVoice(voice);
                         }}
                       >
                         <div className="flex flex-col">
                           <div className="flex flex-col items-center gap-3">
                             <div className="text-3xl">
-                              <EmojiComponent emoji={voice.emoji} />
+                              <EmojiComponent emoji={voice.emoji || "🎙️"} />
                             </div>
                             <div className="flex flex-col text-center">
                               <span className="font-semibold text-gray-900">{voice.name}</span>
@@ -374,7 +409,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                             </div>
                           )}
                         </div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -583,7 +618,31 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
         {currentStep === 'personality' ? (
           <Button
-            onClick={() => setCurrentStep('voice')}
+            type="button"
+            onClick={() => {
+              const result = personalityStepSchema.safeParse(formData);
+              if (!result.success) {
+                setFormErrors(collectFormErrors(result.error));
+                setTouchedFields((prev) => ({
+                  ...prev,
+                  title: true,
+                  description: true,
+                  prompt: true,
+                  firstMessagePrompt: true,
+                  voice: true,
+                }));
+                toast({
+                  title: "Almost there",
+                  description: formData.voice
+                    ? "Please complete the character details before continuing."
+                    : "Please pick a voice first.",
+                  variant: "destructive",
+                  duration: 3000,
+                });
+                return;
+              }
+              setCurrentStep("voice");
+            }}
             className="ml-auto flex flex-row gap-2 items-center"
           >
             Voice Features <ArrowRight className="w-4 h-4" />
@@ -591,6 +650,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
         ) : (
           <div className="w-full flex justify-between">
             <Button
+              type="button"
               variant="outline"
               className="flex flex-row gap-2 items-center"
               onClick={() => setCurrentStep('personality')}
