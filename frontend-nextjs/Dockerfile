@@ -27,19 +27,18 @@ COPY . .
 # Learn more here: https://nextjs.org/telemetry
 # Uncomment the following line in case you want to disable telemetry during the build.
 
+# Only NEXT_PUBLIC_* values need to be present at build time — they get
+# inlined into the client bundle. Server-only secrets (OPENAI_API_KEY,
+# JWT_SECRET_KEY, GOOGLE_OAUTH, etc.) are NOT build args: they're supplied
+# to the container at runtime (env_file/environment) so they never end up
+# baked into an image layer.
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
-ARG OPENAI_API_KEY
-ARG GOOGLE_OAUTH
-ARG JWT_SECRET_KEY
 
 # ENV NEXT_TELEMETRY_DISABLED=1
 
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
-ENV OPENAI_API_KEY=$OPENAI_API_KEY
-ENV GOOGLE_OAUTH=$GOOGLE_OAUTH
-ENV JWT_SECRET_KEY=$JWT_SECRET_KEY
 
 
 RUN \
