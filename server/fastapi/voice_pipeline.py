@@ -60,9 +60,11 @@ def build_voice_pipeline(
     tts = create_tts_service(tts_provider, **tts_kwargs)
 
     # Whisper is a segmented STT: it only transcribes after VAD start/stop.
-    # Streaming STT (Azure) can finalize on a shorter silence for lower latency.
+    # Streaming STT (Azure) can finalize on a shorter silence for lower latency,
+    # but the VAD stop must stay above Azure's phrase segmentation timeout —
+    # otherwise one sentence turns into several user turns.
     stt_name = stt_provider.strip().lower()
-    stop_secs = 0.35 if stt_name in {"azure", "azure_speech", "azure_stt"} else 0.8
+    stop_secs = 0.6 if stt_name in {"azure", "azure_speech", "azure_stt"} else 0.8
     vad = VADProcessor(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
     )

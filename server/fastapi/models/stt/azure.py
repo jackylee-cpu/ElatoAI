@@ -99,13 +99,26 @@ def create_service(**kwargs):
     return _tune_low_latency(AzureSTTService(**init_kwargs))
 
 
+# Azure finalizes a phrase after this much trailing silence. Mandarin has
+# frequent sub-300ms gaps between words, so anything shorter chops a single
+# sentence into several "recognized" events (and several LLM turns).
+_DEFAULT_SILENCE_MS = 600
+_MIN_SILENCE_MS = 300
+
+
 def _silence_timeout_ms() -> str:
-    raw = os.getenv("AZURE_SPEECH_SILENCE_MS", "200")
+    raw = os.getenv("AZURE_SPEECH_SILENCE_MS", str(_DEFAULT_SILENCE_MS))
     try:
         value = int(raw)
     except ValueError:
-        value = 200
-    return str(max(100, min(value, 5000)))
+        value = _DEFAULT_SILENCE_MS
+    if value < _MIN_SILENCE_MS:
+        logger.warning(
+            "AZURE_SPEECH_SILENCE_MS={} is too low and fragments utterances; using {}",
+            value,
+            _MIN_SILENCE_MS,
+        )
+    return str(max(_MIN_SILENCE_MS, min(value, 5000)))
 
 
 def _tune_low_latency(service: AzureSTTService) -> AzureSTTService:
@@ -121,7 +134,6 @@ def _tune_low_latency(service: AzureSTTService) -> AzureSTTService:
         "Speech_SegmentationStrategy": "Time",
         "Speech_SegmentationSilenceTimeoutMs": silence_ms,
         "SpeechServiceResponse_StablePartialResultThreshold": "1",
-        "Speech_StartEventSensitivity": "high",
     }
     for name, value in properties.items():
         prop = getattr(PropertyId, name, None)

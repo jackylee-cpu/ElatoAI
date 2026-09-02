@@ -363,7 +363,11 @@ class RealtimeOutputControlProcessor(FrameProcessor):
             elif isinstance(frame, OutputAudioRawFrame) and not self._response_started:
                 self._response_started = True
                 logger.debug("Sending RESPONSE.CREATED before first audio packet")
-                await self.push_frame(STTMuteFrame(mute=True), direction)
+                # STT sits upstream of this processor, so mute/unmute has to
+                # travel UPSTREAM to reach it. Pushing it downstream made the
+                # mute a no-op and left the ESP32 end_of_speech mute latched
+                # forever, which silently killed every following turn.
+                await self.push_frame(STTMuteFrame(mute=True), FrameDirection.UPSTREAM)
                 created_message = {"type": "server", "msg": "RESPONSE.CREATED"}
                 if self._transcript_state and self._transcript_state.bot_item_id:
                     created_message["item_id"] = self._transcript_state.bot_item_id
@@ -379,7 +383,7 @@ class RealtimeOutputControlProcessor(FrameProcessor):
                     self._transcript_state.bot_item_id = None
                     self._transcript_state.emitted_llm_text = False
                 logger.debug("Sending RESPONSE.COMPLETE after TTS stop")
-                await self.push_frame(STTMuteFrame(mute=False), direction)
+                await self.push_frame(STTMuteFrame(mute=False), FrameDirection.UPSTREAM)
                 await self.push_frame(frame, direction)
                 complete_message = {"type": "server", "msg": "RESPONSE.COMPLETE"}
                 if bot_item_id:
@@ -394,7 +398,7 @@ class RealtimeOutputControlProcessor(FrameProcessor):
                 if self._transcript_state is not None:
                     self._transcript_state.bot_item_id = None
                     self._transcript_state.emitted_llm_text = False
-                await self.push_frame(STTMuteFrame(mute=False), direction)
+                await self.push_frame(STTMuteFrame(mute=False), FrameDirection.UPSTREAM)
                 await self.push_frame(
                     OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.ERROR"}),
                     direction,
