@@ -51,6 +51,8 @@ jobs:
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
             NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+            NEXT_PUBLIC_VOICE_BACKEND=${{ vars.NEXT_PUBLIC_VOICE_BACKEND }}
+            NEXT_PUBLIC_FASTAPI_WS_URL=${{ vars.NEXT_PUBLIC_FASTAPI_WS_URL }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
