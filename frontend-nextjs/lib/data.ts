@@ -440,11 +440,79 @@ export const geminiVoices: VoiceType[] = [
     },
 ];
 
-export const voicesByProvider: Record<"openai" | "gemini" | "grok" | "openrouter", VoiceType[]> = {
+export const bosonVoices: VoiceType[] = [
+    {
+        id: "chloe",
+        name: "Chloe",
+        description: "Friendly and clear",
+        color: "bg-sky-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+    {
+        id: "eleanor",
+        name: "Eleanor",
+        description: "Calm and articulate",
+        color: "bg-indigo-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+    {
+        id: "nora",
+        name: "Nora",
+        description: "Calm and clear",
+        color: "bg-violet-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+    {
+        id: "jake",
+        name: "Jake",
+        description: "Energetic male voice",
+        color: "bg-emerald-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+    {
+        id: "marcus",
+        name: "Marcus",
+        description: "Enthusiastic male voice",
+        color: "bg-amber-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+    {
+        id: "oliver",
+        name: "Oliver",
+        description: "Calm and articulate",
+        color: "bg-teal-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+    {
+        id: "yujin",
+        name: "Yujin",
+        description: "Bright Korean female voice",
+        color: "bg-rose-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+    {
+        id: "jiho",
+        name: "Jiho",
+        description: "Reassuring Korean male voice",
+        color: "bg-blue-100",
+        emoji: "🎙️",
+        provider: "boson",
+    },
+];
+
+export const voicesByProvider: Record<"openai" | "gemini" | "grok" | "openrouter" | "boson", VoiceType[]> = {
     openai: openaiVoices,
     gemini: geminiVoices,
     grok: grokVoices,
     openrouter: minimaxVoices,
+    boson: bosonVoices,
 };
 
 export const emotionOptions = [

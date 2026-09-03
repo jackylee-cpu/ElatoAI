@@ -26,7 +26,7 @@ interface SettingsDashboardProps {
 }
 
 const formSchema = z.object({
-  provider: z.enum(["openai", "gemini", "grok", "openrouter"]),
+  provider: z.enum(["openai", "gemini", "grok", "openrouter", "boson"]),
   title: z.string().min(1, "Title is required").max(50, "Maximum 50 characters"),
   description: z.string().max(200, "Maximum 200 characters"),
   prompt: z.string().max(1000, "Maximum 1000 characters"),
@@ -289,6 +289,9 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     if (provider === "openrouter") {
       return { label: "OR + MX", className: "bg-amber-500 text-white" };
     }
+    if (provider === "boson") {
+      return { label: "Boson", className: "bg-cyan-600 text-white" };
+    }
     return { label: provider, className: "bg-gray-600 text-white" };
   };
 
@@ -322,12 +325,13 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 <p className="text-sm text-red-500">{formErrors.voice}</p>
               )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 {([
                   { provider: "openai" as VoicePickerProvider, label: "OpenAI" },
                   { provider: "gemini" as VoicePickerProvider, label: "Gemini" },
                   { provider: "grok" as VoicePickerProvider, label: "Grok" },
                   { provider: "openrouter" as VoicePickerProvider, label: "OR + MX" },
+                  { provider: "boson" as VoicePickerProvider, label: "Boson" },
                 ]).map((p) => (
                   <button
                     key={p.provider}
@@ -354,6 +358,9 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                       </div>
                       {p.provider === "openrouter" && (
                         <span className="text-[11px] text-amber-700">Azure STT + OpenRouter + MiniMax</span>
+                      )}
+                      {p.provider === "boson" && (
+                        <span className="text-[11px] text-cyan-700">Boson realtime voice</span>
                       )}
                     </div>
                   </button>

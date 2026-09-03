@@ -130,9 +130,27 @@ declare global {
             description: string;
             color: string;
             emoji?: string;
+        }
+        | {
+            provider: "boson";
+            id: BosonVoice;
+            name: string;
+            description: string;
+            color: string;
+            emoji?: string;
         };
 
-    type ModelProvider = "openai" | "gemini" | "grok" | "elevenlabs" | "hume" | "openrouter";
+    type ModelProvider = "openai" | "gemini" | "grok" | "elevenlabs" | "hume" | "openrouter" | "boson";
+
+    type BosonVoice =
+        | "chloe"
+        | "eleanor"
+        | "nora"
+        | "jake"
+        | "marcus"
+        | "oliver"
+        | "yujin"
+        | "jiho";
 
     type GrokVoice =
         | "Ara"
