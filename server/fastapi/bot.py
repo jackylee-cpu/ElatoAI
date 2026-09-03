@@ -339,72 +339,122 @@ class RealtimeInputControlProcessor(FrameProcessor):
 class RealtimeOutputControlProcessor(FrameProcessor):
     """Translate pipeline state changes into the old websocket control protocol."""
 
-    def __init__(self, transcript_state: TranscriptSessionState | None = None):
+    def __init__(
+        self,
+        transcript_state: TranscriptSessionState | None = None,
+        mute_stt_while_speaking: bool = True,
+    ):
         super().__init__()
         self._response_started = False
+        self._completed_for_turn = False
+        self._bot_turn_active = False
         self._transcript_state = transcript_state
+        self._mute_stt_while_speaking = mute_stt_while_speaking
+
+    async def _finish_response(self, reason: str, urgent: bool = False):
+        """Unmute STT and emit RESPONSE.COMPLETE at most once per bot turn."""
+        if self._completed_for_turn:
+            return
+        self._completed_for_turn = True
+        self._response_started = False
+        self._bot_turn_active = False
+
+        bot_item_id = None
+        if self._transcript_state is not None:
+            bot_item_id = self._transcript_state.bot_item_id
+            self._transcript_state.bot_item_id = None
+            self._transcript_state.emitted_llm_text = False
+
+        logger.debug("Sending RESPONSE.COMPLETE ({})", reason)
+        if self._mute_stt_while_speaking:
+            await self.push_frame(STTMuteFrame(mute=False), FrameDirection.UPSTREAM)
+
+        message = {"type": "server", "msg": "RESPONSE.COMPLETE"}
+        if bot_item_id:
+            message["item_id"] = bot_item_id
+        # An interruption flushes the output transport queue, so the completion
+        # has to go out urgently or the client never learns the turn ended.
+        frame_cls = OutputTransportMessageUrgentFrame if urgent else OutputTransportMessageFrame
+        await self.push_frame(frame_cls(message=message), FrameDirection.DOWNSTREAM)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if direction is FrameDirection.DOWNSTREAM:
-            if self._transcript_state is not None:
-                await forward_transcript_frame(
-                    self,
-                    self._transcript_state,
-                    frame,
-                    direction,
-                    include_tts_text=True,
-                )
+        # base_output pushes BotStoppedSpeakingFrame UPSTREAM when an interruption
+        # kills playback, and that is the only "the bot really stopped" signal we
+        # get on that path.
+        if direction is FrameDirection.UPSTREAM:
+            await self.push_frame(frame, direction)
+            if isinstance(frame, BotStoppedSpeakingFrame) and self._bot_turn_active:
+                await self._finish_response("bot stopped speaking", urgent=True)
+            return
 
-            if isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
-                await self.push_frame(
-                    OutputTransportMessageFrame(message={"type": "server", "msg": "AUDIO.COMMITTED"}),
-                    direction,
-                )
-            elif isinstance(frame, OutputAudioRawFrame) and not self._response_started:
-                self._response_started = True
-                logger.debug("Sending RESPONSE.CREATED before first audio packet")
-                # STT sits upstream of this processor, so mute/unmute has to
-                # travel UPSTREAM to reach it. Pushing it downstream made the
-                # mute a no-op and left the ESP32 end_of_speech mute latched
-                # forever, which silently killed every following turn.
+        if self._transcript_state is not None:
+            await forward_transcript_frame(
+                self,
+                self._transcript_state,
+                frame,
+                direction,
+                include_tts_text=True,
+            )
+
+        if isinstance(frame, InterruptionFrame):
+            # Pipecat broadcasts this on every user turn start, so only treat it
+            # as a barge-in when a bot turn is actually in flight. Forward it
+            # first so TTS and the output transport flush their audio, then tell
+            # the client the turn is over: pipecat does not push a
+            # TTSStoppedFrame on interruption, so without this the STT mute
+            # below would stay latched and the turn would silently die.
+            await self.push_frame(frame, direction)
+            if self._bot_turn_active:
+                await self._finish_response("interrupted", urgent=True)
+            return
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._completed_for_turn = False
+            self._bot_turn_active = True
+        elif isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
+            # A new user turn ended, so a new bot turn is on its way: re-arm the
+            # completion even if the previous one produced no audio at all.
+            self._completed_for_turn = False
+            await self.push_frame(
+                OutputTransportMessageFrame(message={"type": "server", "msg": "AUDIO.COMMITTED"}),
+                direction,
+            )
+        elif isinstance(frame, OutputAudioRawFrame) and not self._response_started:
+            self._response_started = True
+            self._completed_for_turn = False
+            self._bot_turn_active = True
+            logger.debug("Sending RESPONSE.CREATED before first audio packet")
+            # STT sits upstream of this processor, so mute/unmute has to
+            # travel UPSTREAM to reach it. Pushing it downstream made the
+            # mute a no-op and left the ESP32 end_of_speech mute latched
+            # forever, which silently killed every following turn.
+            if self._mute_stt_while_speaking:
                 await self.push_frame(STTMuteFrame(mute=True), FrameDirection.UPSTREAM)
-                created_message = {"type": "server", "msg": "RESPONSE.CREATED"}
-                if self._transcript_state and self._transcript_state.bot_item_id:
-                    created_message["item_id"] = self._transcript_state.bot_item_id
-                await self.push_frame(
-                    OutputTransportMessageFrame(message=created_message),
-                    direction,
-                )
-            elif isinstance(frame, (TTSStoppedFrame, BotStoppedSpeakingFrame)):
-                self._response_started = False
-                bot_item_id = None
-                if self._transcript_state is not None:
-                    bot_item_id = self._transcript_state.bot_item_id
-                    self._transcript_state.bot_item_id = None
-                    self._transcript_state.emitted_llm_text = False
-                logger.debug("Sending RESPONSE.COMPLETE after TTS stop")
-                await self.push_frame(STTMuteFrame(mute=False), FrameDirection.UPSTREAM)
-                await self.push_frame(frame, direction)
-                complete_message = {"type": "server", "msg": "RESPONSE.COMPLETE"}
-                if bot_item_id:
-                    complete_message["item_id"] = bot_item_id
-                await self.push_frame(
-                    OutputTransportMessageFrame(message=complete_message),
-                    direction,
-                )
-                return
-            elif isinstance(frame, ErrorFrame):
-                self._response_started = False
-                if self._transcript_state is not None:
-                    self._transcript_state.bot_item_id = None
-                    self._transcript_state.emitted_llm_text = False
-                await self.push_frame(STTMuteFrame(mute=False), FrameDirection.UPSTREAM)
-                await self.push_frame(
-                    OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.ERROR"}),
-                    direction,
-                )
+            created_message = {"type": "server", "msg": "RESPONSE.CREATED"}
+            if self._transcript_state and self._transcript_state.bot_item_id:
+                created_message["item_id"] = self._transcript_state.bot_item_id
+            await self.push_frame(
+                OutputTransportMessageFrame(message=created_message),
+                direction,
+            )
+        elif isinstance(frame, (TTSStoppedFrame, BotStoppedSpeakingFrame)):
+            await self.push_frame(frame, direction)
+            await self._finish_response("tts stopped")
+            return
+        elif isinstance(frame, ErrorFrame):
+            self._response_started = False
+            self._completed_for_turn = True
+            self._bot_turn_active = False
+            if self._transcript_state is not None:
+                self._transcript_state.bot_item_id = None
+                self._transcript_state.emitted_llm_text = False
+            await self.push_frame(STTMuteFrame(mute=False), FrameDirection.UPSTREAM)
+            await self.push_frame(
+                OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.ERROR"}),
+                direction,
+            )
 
         await self.push_frame(frame, direction)
 
@@ -460,7 +510,16 @@ async def run_bot_session(
     processors = [transport.input(), *route_processors]
 
     if transport_kind in {"esp32", "browser"}:
-        processors.append(RealtimeOutputControlProcessor(transcript_state))
+        processors.append(
+            RealtimeOutputControlProcessor(
+                transcript_state,
+                # The browser streams the mic full-duplex with echo cancellation
+                # on, so STT has to stay live during playback for barge-in to
+                # catch the first word. The ESP32 is half-duplex and still needs
+                # the mute to clear its end_of_speech latch.
+                mute_stt_while_speaking=transport_kind == "esp32",
+            )
+        )
     processors.append(transport.output())
     processors.append(assistant_aggregator)
 
