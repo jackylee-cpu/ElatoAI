@@ -13,8 +13,8 @@
 // For ELATO_MODE, you will need to register your DIY Hardware on the Elato website
 
 // #define DEV_MODE
-// #define PROD_MODE
-#define ELATO_MODE
+#define PROD_MODE
+// #define ELATO_MODE
 
 // ---------- CHOOSE YOUR VOICE SERVER ----------
 // Keep this separate from DEV/PROD/ELATO so the deployment mode and the voice backend stay independent.
@@ -23,13 +23,22 @@
 // applies to DEV_MODE and PROD_MODE.
 
 // #define VOICE_SERVER_DENO
-#define VOICE_SERVER_CLOUDFLARE
+// #define VOICE_SERVER_CLOUDFLARE
+#define VOICE_SERVER_FASTAPI
 
 
 // ---------- CHOOSE YOUR INPUT MODE ----------
 // If you want to use the touch sensor to wake up the device, uncomment the following line
 // If you want to use the button to wake up the device, comment the following line
-#define TOUCH_MODE
+// This kit's touch pad is a TTP223 module on GPIO47, not an ESP32 native touch
+// channel, so native touchRead() cannot see it. Use button mode on GPIO0.
+// #define TOUCH_MODE
+
+// Bump when a change makes a previously stored auth token invalid. Boards that
+// booted under an older scheme wipe their token once on the next boot; without
+// that, isDeviceRegistered() short-circuits on the stale token and the device
+// never re-registers against its real account.
+#define PROVISION_VERSION 2
 
 extern Preferences preferences;
 extern bool factory_reset_status;

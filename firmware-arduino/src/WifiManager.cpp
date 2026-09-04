@@ -13,6 +13,16 @@
 #include <Preferences.h>
 #include <Config.h>
 
+// Set by POST /api/wifi/add so loop() can do the actual connect. tryConnect()
+// blocks for seconds and the handler runs on the AsyncTCP task, where blocking
+// is a known crash source.
+static volatile bool connectRequested = false;
+
+// Backoff for the "online but nobody has claimed me yet" poll.
+static uint64_t nextProvisionAttemptMillis = 0;
+static uint32_t provisionBackoffMillis = 5000;
+static const uint32_t PROVISION_BACKOFF_MAX = 30000;
+
 bool isDeviceRegistered() {
   if (!authTokenGlobal.isEmpty()) {
     return true;
@@ -33,6 +43,19 @@ bool isDeviceRegistered() {
     http.setTimeout(10000);
 
     int httpCode = http.GET();
+
+    // 202 means the backend knows this board but no account has claimed it yet.
+    // That is a normal state during onboarding, not an error -- keep quiet and
+    // let the caller retry.
+    if (httpCode == 202) {
+        Serial.println("[AUTH] Registered, waiting to be claimed by an account");
+        http.end();
+        return false;
+    }
+
+    if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("[AUTH] generate_auth_token returned %d\n", httpCode);
+    }
 
     if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
@@ -62,6 +85,25 @@ bool isDeviceRegistered() {
     // If we get here, either the request failed or no token was found
     http.end();
     return false;
+}
+
+void connectCb();
+
+// Retry acquiring the auth token while connected. Without this a board that is
+// online but unclaimed never opens the websocket and never tries again, so it
+// looks dead until it is power-cycled.
+void startSessionIfReady() {
+  if (!authTokenGlobal.isEmpty()) return;
+  if (millis() < nextProvisionAttemptMillis) return;
+
+  if (isDeviceRegistered()) {
+    provisionBackoffMillis = 5000;
+    connectCb();
+    return;
+  }
+
+  nextProvisionAttemptMillis = millis() + provisionBackoffMillis;
+  provisionBackoffMillis = min(provisionBackoffMillis * 2, PROVISION_BACKOFF_MAX);
 }
 
 void connectCb() {
@@ -373,14 +415,33 @@ uint8_t WIFIMANAGER::getApEntry() {
  * @details regulary check if the connection is up&running, try to reconnect or create a fallback AP
  */
 void WIFIMANAGER::loop() {
-  if (millis() - lastWifiCheckMillis < intervalWifiCheckMillis) return;
+  // While the device is online but still has no token it is polling to be
+  // claimed and somebody is watching the web app, so check more often.
+  const uint32_t checkInterval =
+      (WiFi.status() == WL_CONNECTED && authTokenGlobal.isEmpty())
+          ? 3000
+          : intervalWifiCheckMillis;
+  if (millis() - lastWifiCheckMillis < checkInterval) return;
   lastWifiCheckMillis = millis();
+
+  // Credentials just came in from the setup portal. Connect now instead of
+  // waiting out the SoftAP timeout -- tryConnect() and loop() both refuse to do
+  // anything while the AP is up, which otherwise leaves the user staring at a
+  // dead page for two minutes.
+  if (connectRequested) {
+    connectRequested = false;
+    logMessage("[WIFI] New credentials saved, connecting now\n");
+    if (softApRunning) stopSoftAP();
+    tryConnect();
+    return;
+  }
 
   if(WiFi.waitForConnectResult() == WL_CONNECTED) {
     // Check if we are connected to a well known SSID
     for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
       if (WiFi.SSID() == apList[i].apName) {
         logMessage(String("[WIFI][STATUS] Connected to known SSID: '") + WiFi.SSID() + "' with IP " + WiFi.localIP().toString() + "\n");
+        startSessionIfReady();
         return;
       }
     }
@@ -676,7 +737,10 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
     }
     if (!addWifi(jsonBuffer["apName"].as<String>(), jsonBuffer["apPass"].as<String>())) {
       resp->send(500, "application/json", "{\"message\":\"Unable to process data\"}");
-    } else {resp->send(200, "application/json", "{\"message\":\"New network added\"");}
+    } else {
+      connectRequested = true;
+      resp->send(200, "application/json", "{\"message\":\"New network added\"}");
+    }
   });
 
 #if ASYNC_WEBSERVER == true
@@ -1119,16 +1183,19 @@ void WIFIMANAGER::attachUI() {
         async function scanNetworks() {
             try {
                 showStatus('Scanning for networks...', 'info');
-                const response = await fetch(`${API_BASE}/wifi/scan`);
-                if (!response.ok) throw new Error('Network scan failed');
-                
-                // Wait 5 seconds for the scan to complete
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                
-                const scanResponse = await fetch(`${API_BASE}/wifi/scan/results`);
-                if (!scanResponse.ok) throw new Error('Failed to fetch scan results');
-                
-                networks = await scanResponse.json();
+                // /wifi/scan answers {"status":"scanning"} until the radio is
+                // done, then the array. There is no separate results route.
+                let scanned = null;
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    const response = await fetch(`${API_BASE}/wifi/scan`);
+                    if (!response.ok) throw new Error('Network scan failed');
+                    const payload = await response.json();
+                    if (Array.isArray(payload)) { scanned = payload; break; }
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                if (!scanned) throw new Error('Scan timed out, try again');
+
+                networks = scanned;
                 displayNetworks(networks);
                 showStatus('Networks found', 'success');
             } catch (error) {

@@ -172,6 +172,21 @@ void setupDeviceMetadata() {
 
   deviceState = IDLE;
 
+  // Tokens minted under an older provisioning scheme are still accepted by
+  // isDeviceRegistered(), which returns early on any stored token. Clear once
+  // so this board registers itself again and can be claimed by a real account.
+  preferences.begin("device", false);
+  uint32_t provisionVersion = preferences.getUInt("prov_ver", 0);
+  bool provisionChanged = provisionVersion < PROVISION_VERSION;
+  if (provisionChanged) {
+    preferences.putUInt("prov_ver", PROVISION_VERSION);
+  }
+  preferences.end();
+  if (provisionChanged) {
+    Serial.println("Provisioning scheme changed, clearing stored auth token");
+    resetAuth();
+  }
+
   getAuthTokenFromNVS();
   getOTAStatusFromNVS();
 

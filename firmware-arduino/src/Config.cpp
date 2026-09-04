@@ -43,17 +43,23 @@ volatile bool sleepRequested = false;
  */
 
 #ifdef DEV_MODE
-const char *ws_server = "192.168.1.33";
-const char *ws_path = "/";
+const char *ws_server = "10.6.1.26";
 
 #if defined(VOICE_SERVER_DENO)
 const uint16_t ws_port = 8000;
+const char *ws_path = "/";
 #elif defined(VOICE_SERVER_CLOUDFLARE)
 const uint16_t ws_port = 8787;
+const char *ws_path = "/";
+#elif defined(VOICE_SERVER_FASTAPI)
+const uint16_t ws_port = 7860;
+const char *ws_path = "/ws/esp32";
+#else
+#error "DEV_MODE requires one of VOICE_SERVER_DENO / _CLOUDFLARE / _FASTAPI in Config.h"
 #endif
 
 // Backend server details
-const char *backend_server = "192.168.1.33";
+const char *backend_server = "10.6.1.26";
 const uint16_t backend_port = 3000;
 
 #elif defined(PROD_MODE)
@@ -66,11 +72,18 @@ const char *ws_path = "/";
 const char *ws_server = "<your-cloudflare-server>.workers.dev";
 const uint16_t ws_port = 443;
 const char *ws_path = "/ws/esp32";
+#elif defined(VOICE_SERVER_FASTAPI)
+// FastAPI sits behind Cloudflare on the same host as the frontend, mounted
+// under a /fastapi path prefix, so the esp32 route is /fastapi/ws/esp32.
+const char *ws_server = "elatoai.hkqft.com";
+const uint16_t ws_port = 443;
+const char *ws_path = "/fastapi/ws/esp32";
 #else
-#error "PROD_MODE requires VOICE_SERVER_DENO or VOICE_SERVER_CLOUDFLARE in Config.h"
+#error "PROD_MODE requires VOICE_SERVER_DENO, _CLOUDFLARE or _FASTAPI in Config.h"
 #endif
-// Backend server details
-const char *backend_server = "<your-backend-server-url>"; // like www.facebook.com or facebook.vercel.app
+// Backend server details. Same host as the voice server; PROD talks https on
+// 443, so backend_port only matters to the DEV_MODE http path.
+const char *backend_server = "elatoai.hkqft.com";
 const uint16_t backend_port = 3000;
 
 #elif defined(ELATO_MODE)
@@ -103,16 +116,23 @@ const int BLUE_LED_PIN = 13;
 const int RED_LED_PIN = 9;
 const int GREEN_LED_PIN = 8;
 
-const int I2S_SD = 14;
-const int I2S_WS = 4;
-const int I2S_SCK = 1;
+// Pins follow the xiaozhi `bread-compact-wifi` wiring, which is what this kit
+// shipped with: a raw I2S mic and a MAX98357A on separate pin sets (simplex
+// I2S), so the two I2S ports above stay independent and can run at different
+// rates (mic 16kHz, speaker 48kHz).
+const int I2S_SD = 6;   // mic DIN
+const int I2S_WS = 4;   // mic WS
+const int I2S_SCK = 5;  // mic SCK
 
-const int I2S_WS_OUT = 5;
-const int I2S_BCK_OUT = 6;
-const int I2S_DATA_OUT = 7;
-const int I2S_SD_OUT = 10;
+const int I2S_WS_OUT = 16;   // amp LRCK
+const int I2S_BCK_OUT = 15;  // amp BCLK
+const int I2S_DATA_OUT = 7;  // amp DIN
+// The kit does not break out the MAX98357A SD pin, so this drives a free GPIO
+// and the amp is always enabled. Mic muting still gates the uplink.
+const int I2S_SD_OUT = 21;
 
-const gpio_num_t BUTTON_PIN = GPIO_NUM_2; // Only RTC IO are allowed - ESP32 Pin example
+// Boot button. GPIO0 is RTC IO, which esp_sleep_enable_ext0_wakeup() requires.
+const gpio_num_t BUTTON_PIN = GPIO_NUM_0;
 
 
 // ----------------- SSL Certificates -----------------
@@ -120,19 +140,82 @@ const gpio_num_t BUTTON_PIN = GPIO_NUM_2; // Only RTC IO are allowed - ESP32 Pin
 
 #ifdef PROD_MODE
 
-// add the CA cert for your backend server here `backend_server`
-const char *Vercel_CA_cert = R"EOF(
+// Both the backend and the voice websocket are the same Cloudflare-fronted
+// host, so they share one bundle:
+//   1. GTS WE1        - the current issuing intermediate (ECDSA P-256). Having
+//                       it here lets mbedTLS stop after verifying just the leaf.
+//   2. GTS Root R4    - covers a WE1 rotation.        expires Jun 22 2036
+//   3. ISRG Root X1   - Cloudflare Universal SSL can switch issuer between
+//                       Google Trust Services and Let's Encrypt, and a reflash
+//                       is expensive, so trust both. expires Jun  4 2035
+// Do NOT pin only the intermediate here the way ELATO_MODE does: Cloudflare
+// rotates edge certificates on its own schedule.
+static const char *CF_CA_bundle = R"EOF(
 -----BEGIN CERTIFICATE-----
-<YOUR VERCEL CERTIFICATE HERE>
+MIICnzCCAiWgAwIBAgIQf/MZd5csIkp2FV0TttaF4zAKBggqhkjOPQQDAzBHMQsw
+CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU
+MBIGA1UEAxMLR1RTIFJvb3QgUjQwHhcNMjMxMjEzMDkwMDAwWhcNMjkwMjIwMTQw
+MDAwWjA7MQswCQYDVQQGEwJVUzEeMBwGA1UEChMVR29vZ2xlIFRydXN0IFNlcnZp
+Y2VzMQwwCgYDVQQDEwNXRTEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARvzTr+
+Z1dHTCEDhUDCR127WEcPQMFcF4XGGTfn1XzthkubgdnXGhOlCgP4mMTG6J7/EFmP
+LCaY9eYmJbsPAvpWo4H+MIH7MA4GA1UdDwEB/wQEAwIBhjAdBgNVHSUEFjAUBggr
+BgEFBQcDAQYIKwYBBQUHAwIwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQU
+kHeSNWfE/6jMqeZ72YB5e8yT+TgwHwYDVR0jBBgwFoAUgEzW63T/STaj1dj8tT7F
+avCUHYwwNAYIKwYBBQUHAQEEKDAmMCQGCCsGAQUFBzAChhhodHRwOi8vaS5wa2ku
+Z29vZy9yNC5jcnQwKwYDVR0fBCQwIjAgoB6gHIYaaHR0cDovL2MucGtpLmdvb2cv
+ci9yNC5jcmwwEwYDVR0gBAwwCjAIBgZngQwBAgEwCgYIKoZIzj0EAwMDaAAwZQIx
+AOcCq1HW90OVznX+0RGU1cxAQXomvtgM8zItPZCuFQ8jSBJSjz5keROv9aYsAm5V
+sQIwJonMaAFi54mrfhfoFNZEfuNMSQ6/bIBiNLiyoX46FohQvKeIoJ99cx7sUkFN
+7uJW
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD
+VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG
+A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw
+WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz
+IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi
+AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi
+QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR
+HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW
+BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D
+9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8
+p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----
 )EOF";
 
-// Voice websocket CA cert for the selected voice websocket server (`ws_server`).
-const char *CA_cert = R"EOF(
------BEGIN CERTIFICATE-----
-<YOUR VOICE SERVER CERTIFICATE HERE>
------END CERTIFICATE-----
-)EOF";
+const char *Vercel_CA_cert = CF_CA_bundle;
+const char *CA_cert = CF_CA_bundle;
 
 
 #elif defined(ELATO_MODE)

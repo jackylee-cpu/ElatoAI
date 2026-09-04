@@ -375,9 +375,12 @@ void websocketSetup(const String& server_domain, int port, const String& path)
     webSocket.setExtraHeaders(headers.c_str());
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(1000);
-    webSocket.disableHeartbeat();
-
-    // webSocket.enableHeartbeat(30000, 15000, 3); // 30s ping interval, 15s timeout, 3 retries
+    // Cloudflare closes a websocket that has been idle for ~100s, and a quiet
+    // user easily exceeds that between turns, so keep pinging.
+    // Generous timeouts: a 15s pong window was missed while the device was busy
+    // decoding audio, and three of those in a row would drop a healthy session.
+    // 45s ping interval, 30s pong timeout, drop after 5 missed.
+    webSocket.enableHeartbeat(45000, 30000, 5);
 
     #ifdef DEV_MODE
     webSocket.begin(server_domain.c_str(), port, path.c_str());
