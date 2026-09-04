@@ -367,8 +367,12 @@ def create_app() -> FastAPI:
         """
         if not INTERNAL_API_TOKEN:
             raise HTTPException(status_code=503, detail="internal API disabled")
+        # Compare as bytes: compare_digest raises TypeError on a str holding
+        # non-ASCII, and headers arrive latin-1 decoded, so a header with any
+        # non-ASCII byte would 500 instead of cleanly failing auth.
         if not x_internal_token or not hmac.compare_digest(
-            x_internal_token, INTERNAL_API_TOKEN
+            x_internal_token.encode("utf-8", "surrogateescape"),
+            INTERNAL_API_TOKEN.encode("utf-8"),
         ):
             raise HTTPException(status_code=401, detail="bad internal token")
 
