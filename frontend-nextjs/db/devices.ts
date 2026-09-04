@@ -43,14 +43,78 @@ export const addUserToDevice = async (
         .select("*")
         .maybeSingle();
 
+    if (error || !data) {
+        return false;
+    }
+
+    await updateUser(supabase, { device_id: data.device_id }, userId);
+
+    return true;
+};
+
+/**
+ * Devices that have called home recently but nobody owns yet.
+ *
+ * A board registers itself the first time it reaches generate_auth_token, so
+ * this is what the owner picks from instead of typing a code. The time window
+ * keeps boards that were unplugged weeks ago out of the list.
+ */
+export const getUnclaimedDevices = async (
+    supabase: SupabaseClient,
+    sinceMinutes = 10,
+) => {
+    const since = new Date(Date.now() - sinceMinutes * 60_000).toISOString();
+    const { data, error } = await supabase
+        .from("devices")
+        .select("device_id, mac_address, user_code, last_seen_at")
+        .is("user_id", null)
+        .gte("last_seen_at", since)
+        .order("last_seen_at", { ascending: false });
+
+    if (error) {
+        throw error;
+    }
+    return data ?? [];
+};
+
+export const claimDevice = async (
+    supabase: SupabaseClient,
+    deviceId: string,
+    userId: string,
+) => {
+    // Only claim a device nobody else grabbed in the meantime.
+    const { data, error } = await supabase
+        .from("devices")
+        .update({ user_id: userId, claimed_at: new Date().toISOString() })
+        .eq("device_id", deviceId)
+        .is("user_id", null)
+        .select("device_id")
+        .maybeSingle();
+
+    if (error || !data) {
+        return false;
+    }
+
+    await updateUser(supabase, { device_id: data.device_id }, userId);
+    return true;
+};
+
+export const unbindDevice = async (
+    supabase: SupabaseClient,
+    deviceId: string,
+    userId: string,
+) => {
+    const { error } = await supabase
+        .from("devices")
+        .update({ user_id: null, claimed_at: null })
+        .eq("device_id", deviceId)
+        .eq("user_id", userId);
+
     if (error) {
         return false;
     }
 
-    if (data) {
-        await updateUser(supabase, { device_id: data.device_id }, userId);
-    }
-
+    await updateUser(supabase, { device_id: null }, userId);
     return true;
 };
 

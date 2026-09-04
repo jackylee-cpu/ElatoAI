@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { updateUser } from "@/db/users";
+import { refreshDeviceSession } from "@/app/actions";
 import _ from "lodash";
 import HomePageSubtitles from "../HomePageSubtitles";
 import PersonalityFilters from "./PersonalityFilters";
@@ -44,6 +45,11 @@ const Playground: React.FC<PlaygroundProps> = ({
             },
             currentUser.user_id
         );
+        // The device reads its character when a session starts, so drop the
+        // current one -- it reconnects about a second later as the new
+        // character. Best effort: if this fails the change still lands the next
+        // time the device connects.
+        void refreshDeviceSession();
     };
 
     return (

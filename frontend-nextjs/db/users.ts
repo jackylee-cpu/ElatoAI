@@ -51,7 +51,7 @@ export const getUserById = async (supabase: SupabaseClient, id: string) => {
     const { data, error } = await supabase
         .from("users")
         .select(
-            `*, personality:personality_id(*), device:devices!users_device_id_fkey(device_id, volume)`,
+            `*, personality:personality_id(*), device:devices!users_device_id_fkey(device_id, volume, mac_address, user_code)`,
         )
         .eq("user_id", id)
         .single();

@@ -4,7 +4,13 @@ import { encodedRedirect } from "@/utils/utils";
 import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { addUserToDevice, dbCheckUserCode } from "@/db/devices";
+import {
+    addUserToDevice,
+    claimDevice,
+    dbCheckUserCode,
+    getUnclaimedDevices,
+    unbindDevice,
+} from "@/db/devices";
 import { getSimpleUserById } from "@/db/users";
 
 export async function deleteUserApiKey(userId: string) {
@@ -125,18 +131,101 @@ export const connectUserToDevice = async (
 ) => {
     const supabase = createClient();
 
-    const isCodeValid = await dbCheckUserCode(supabase, userDeviceCode.trim());
+    // Codes get copied off a screen, so normalise once and use the same value
+    // for both the check and the write -- these used to disagree, which let a
+    // code with stray whitespace validate and then silently match no rows.
+    const code = userDeviceCode.trim().toUpperCase();
+
+    const isCodeValid = await dbCheckUserCode(supabase, code);
     if (!isCodeValid) {
         return false;
     }
 
-    // if user code is valid, add user to device
-    const successfullyAdded = await addUserToDevice(
-        supabase,
-        userDeviceCode,
-        userId,
-    );
-    return successfullyAdded;
+    return await addUserToDevice(supabase, code, userId);
+};
+
+/** Devices that are online but unowned, for the claim list in Settings. */
+export const listUnclaimedDevices = async () => {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return [];
+    }
+    return await getUnclaimedDevices(supabase);
+};
+
+/**
+ * Bind a device to the signed-in account. The user id comes from the session,
+ * never from the caller.
+ */
+export const claimDeviceAction = async (deviceId: string) => {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return false;
+    }
+    return await claimDevice(supabase, deviceId, user.id);
+};
+
+export const unbindDeviceAction = async (deviceId: string) => {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return false;
+    }
+    return await unbindDevice(supabase, deviceId, user.id);
+};
+
+/**
+ * Ask the voice server to drop this account's device session.
+ *
+ * The character is baked into the LLM system prompt when the pipeline is built,
+ * so it can only change on a fresh connection. The firmware reconnects about a
+ * second after any drop and the server re-reads the personality then, which is
+ * what makes a character switch land on the device almost immediately.
+ *
+ * Best effort: if the voice server is unreachable the character still applies
+ * the next time the device connects, so never let this failure surface as a
+ * failed save.
+ */
+export const refreshDeviceSession = async () => {
+    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    if (!internalUrl || !internalToken) {
+        return false;
+    }
+
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return false;
+    }
+
+    const { data } = await supabase
+        .from("devices")
+        .select("mac_address")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+    if (!data?.mac_address) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(`${internalUrl}/internal/device_refresh`, {
+            method: "POST",
+            cache: "no-store",
+            signal: AbortSignal.timeout(3000),
+            headers: {
+                "Content-Type": "application/json",
+                "X-Internal-Token": internalToken,
+            },
+            body: JSON.stringify({ mac: data.mac_address }),
+        });
+        return response.ok;
+    } catch {
+        return false;
+    }
 };
 
 export const fetchGithubStars = async (repo: string) => {

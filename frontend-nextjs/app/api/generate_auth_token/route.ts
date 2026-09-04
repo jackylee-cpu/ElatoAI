@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { createClient } from "@/utils/supabase/server";
+import { createServiceClient } from "@/utils/supabase/service";
 
 const ALGORITHM = "HS256";
 const skipDeviceRegistration =
     process.env.NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION === "True";
+
+// No 0/O/1/I/L: these codes get read off a screen and typed by hand.
+const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const CODE_LENGTH = 6;
+const CODE_COLLISION_RETRIES = 5;
 
 interface TokenPayload {
     [key: string]: any;
@@ -36,15 +42,92 @@ const createSupabaseToken = (
     return encodedJwt;
 };
 
-const getUserByMacAddress = async (macAddress: string) => {
-    const supabase = createClient();
-    const { data, error } = await supabase.from("devices").select(
-        "*, user:user_id(*)",
-    ).eq("mac_address", macAddress).single();
+const generateUserCode = () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(CODE_LENGTH));
+    return Array.from(bytes)
+        .map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length])
+        .join("");
+};
+
+/**
+ * Find the device row for this MAC, creating it if this is the first time we
+ * have heard from the board, and stamp `last_seen_at` either way.
+ *
+ * A freshly created row has a null `user_id`: the board is online but nobody
+ * owns it yet, which is what puts it in the web app's claim list.
+ */
+const registerDevice = async (macAddress: string) => {
+    const supabase = createServiceClient();
+    const mac = macAddress.trim().toUpperCase();
+
+    const { data: existing, error: selectError } = await supabase
+        .from("devices")
+        .select("device_id, user_code, user_id")
+        .eq("mac_address", mac)
+        .maybeSingle();
+
+    if (selectError) {
+        throw new Error(selectError.message);
+    }
+
+    if (existing) {
+        // Best effort -- a failed heartbeat must not stop a claimed device from
+        // getting its token.
+        await supabase
+            .from("devices")
+            .update({ last_seen_at: new Date().toISOString() })
+            .eq("device_id", existing.device_id);
+        return existing;
+    }
+
+    // `user_code` is UNIQUE, so retry a few times on a collision rather than
+    // trusting 32^6 to never repeat.
+    for (let attempt = 0; attempt < CODE_COLLISION_RETRIES; attempt++) {
+        const { data, error } = await supabase
+            .from("devices")
+            .insert({
+                mac_address: mac,
+                user_code: generateUserCode(),
+                last_seen_at: new Date().toISOString(),
+            })
+            .select("device_id, user_code, user_id")
+            .single();
+
+        if (!error) {
+            return data;
+        }
+
+        // 23505 = unique_violation. On mac_address it means another request for
+        // the same board raced us, so re-read instead of retrying the insert.
+        if (error.code !== "23505") {
+            throw new Error(error.message);
+        }
+        if (error.message.includes("mac_address")) {
+            const { data: raced } = await supabase
+                .from("devices")
+                .select("device_id, user_code, user_id")
+                .eq("mac_address", mac)
+                .maybeSingle();
+            if (raced) {
+                return raced;
+            }
+        }
+    }
+
+    throw new Error("Could not allocate a device code");
+};
+
+const getUserById = async (userId: string) => {
+    const supabase = createServiceClient();
+    const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle();
     if (error) {
         throw new Error(error.message);
     }
-    return data.user;
+    return data;
 };
 
 const getDevUser = async () => {
@@ -73,18 +156,24 @@ export async function GET(req: Request) {
 
         /**
          * If `NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION` is true, we use the default dev user.
-         * Otherwise, we use the user by given by the mac address.
-         *
-         * Steps to register your device:
-         * 1: Register the device `mac_address` and `user_code` in the `devices` tables.
-         * 2: Make sure the user adds the `user_code` to their account in Settings to link the device to their `user_id`.
-         * 3: When `NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION` is false, we then fetch the user by `mac_address`.
+         * Otherwise the device is resolved from its own row, which it creates on
+         * first contact. Until somebody claims that row in the web app the device
+         * has no owner, and we say so with a 202 rather than an error -- the
+         * firmware polls this endpoint and needs to tell "not yours yet" apart
+         * from "the server is broken".
          */
         let user;
         if (skipDeviceRegistration) {
             user = await getDevUser();
         } else {
-            user = await getUserByMacAddress(macAddress);
+            const device = await registerDevice(macAddress);
+            if (!device.user_id) {
+                return NextResponse.json(
+                    { status: "unclaimed", user_code: device.user_code },
+                    { status: 202 },
+                );
+            }
+            user = await getUserById(device.user_id);
         }
 
         if (!user) {
