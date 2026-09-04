@@ -459,10 +459,17 @@ class RealtimeOutputControlProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-def create_esp32_auth_message() -> dict:
+def create_esp32_auth_message(volume: int | None = None) -> dict:
+    """Build the auth frame the device gets on connect.
+
+    `volume` comes from the device's own row when it resolved, so a device can
+    be turned up or down from the web app; None keeps the env-level default.
+    """
     return {
         "type": "auth",
-        "volume_control": int(os.getenv("ESP32_DEFAULT_VOLUME", "100")),
+        "volume_control": (
+            volume if volume is not None else int(os.getenv("ESP32_DEFAULT_VOLUME", "100"))
+        ),
         "pitch_factor": float(os.getenv("ESP32_DEFAULT_PITCH_FACTOR", "1.0")),
         "is_ota": False,
         "is_reset": False,

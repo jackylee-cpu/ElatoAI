@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 import json
 import os
+from collections import defaultdict
 
 import uvicorn
-from fastapi import FastAPI, WebSocket
+from fastapi import Body, FastAPI, Header, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 from bot import create_esp32_auth_message, run_bot_session
+from device_registry import fetch_device_personality
 from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
 from models.providers import get_provider_catalog, validate_classic_provider_stack
 
@@ -21,6 +25,15 @@ PORT = int(os.getenv("PORT", "7860"))
 BROWSER_INPUT_SAMPLE_RATE = int(os.getenv("BROWSER_INPUT_SAMPLE_RATE", "16000"))
 ESP32_INPUT_SAMPLE_RATE = int(os.getenv("ESP32_INPUT_SAMPLE_RATE", "16000"))
 AUDIO_OUTPUT_SAMPLE_RATE = int(os.getenv("AUDIO_OUTPUT_SAMPLE_RATE", "24000"))
+# Shared secret for /internal/*. Unset means the endpoint refuses everything --
+# it must fail closed, since it can disconnect any device.
+INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+# Live ESP32 sessions, keyed by uppercased MAC. A device can briefly appear
+# twice when a stale socket has not been reaped yet, hence the set.
+_esp32_sessions: dict[str, set[WebSocket]] = defaultdict(set)
+_sessions_lock = asyncio.Lock()
+
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
@@ -302,15 +315,82 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/esp32")
     async def esp32_websocket(websocket: WebSocket):
         await websocket.accept()
+        mac_address = websocket.headers.get("x-device-mac")
         logger.info(
             "ESP32 websocket connected: mac={} rssi={} auth={}",
-            websocket.headers.get("x-device-mac", "unknown"),
+            mac_address or "unknown",
             websocket.headers.get("x-wifi-rssi", "unknown"),
             "yes" if websocket.headers.get("authorization") else "no",
         )
-        await websocket.send_text(json.dumps(create_esp32_auth_message()))
+        # The device has no query string to carry a character on, so resolve the
+        # one assigned to it in Supabase. This fails open to the defaults.
+        personality = await fetch_device_personality(mac_address)
+        await websocket.send_text(
+            json.dumps(create_esp32_auth_message(volume=personality.volume))
+        )
         transport = create_esp32_transport(websocket)
-        await run_bot_session(transport, "esp32", False)
+
+        session_key = (mac_address or "").strip().upper()
+        if session_key:
+            async with _sessions_lock:
+                _esp32_sessions[session_key].add(websocket)
+        try:
+            await run_bot_session(
+                transport,
+                "esp32",
+                False,
+                tts_voice=personality.tts_voice,
+                title=personality.title,
+                character_prompt=personality.character_prompt,
+                voice_prompt=personality.voice_prompt,
+            )
+        finally:
+            if session_key:
+                async with _sessions_lock:
+                    _esp32_sessions[session_key].discard(websocket)
+                    if not _esp32_sessions[session_key]:
+                        del _esp32_sessions[session_key]
+
+    @app.post("/internal/device_refresh")
+    async def device_refresh(
+        payload: dict = Body(...),
+        x_internal_token: str | None = Header(default=None),
+    ):
+        """Drop a device's session so it reconnects with fresh settings.
+
+        The character and volume are only read when a session starts, so this
+        close is the mechanism that makes a change in the web app show up on the
+        device -- the firmware reconnects about a second later.
+
+        Not being connected is a success, not an error: the device picks up the
+        new character whenever it next wakes.
+        """
+        if not INTERNAL_API_TOKEN:
+            raise HTTPException(status_code=503, detail="internal API disabled")
+        if not x_internal_token or not hmac.compare_digest(
+            x_internal_token, INTERNAL_API_TOKEN
+        ):
+            raise HTTPException(status_code=401, detail="bad internal token")
+
+        mac = str(payload.get("mac", "")).strip().upper()
+        if not mac:
+            raise HTTPException(status_code=400, detail="mac is required")
+
+        async with _sessions_lock:
+            sockets = list(_esp32_sessions.get(mac, ()))
+
+        # Close outside the lock: each close unwinds run_bot_session, whose
+        # finally block takes the same lock to deregister.
+        closed = 0
+        for socket in sockets:
+            try:
+                await socket.close(code=4001)
+                closed += 1
+            except Exception as exc:  # noqa: BLE001 - already-dead sockets are fine
+                logger.warning("Failed to close session for {}: {}", mac, exc)
+
+        logger.info("Device refresh for {} closed {} session(s)", mac, closed)
+        return {"ok": True, "closed": closed}
 
     return app
 

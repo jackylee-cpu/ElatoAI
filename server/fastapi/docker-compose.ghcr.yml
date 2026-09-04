@@ -6,3 +6,15 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # `default` is kept so this stays on the compose-created network too;
+    # listing only the shared one would detach it.
+    networks:
+      - default
+      - aibuddy-internal
+
+# Lets the frontend reach the voice server and the voice server reach Supabase.
+# Created once, outside compose, and shared by all three stacks:
+#   docker network create aibuddy-internal
+networks:
+  aibuddy-internal:
+    external: true
