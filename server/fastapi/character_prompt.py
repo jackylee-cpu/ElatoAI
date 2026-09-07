@@ -47,14 +47,51 @@ Example style:
 """.strip()
 
 
+def build_child_block(
+    child_name: str | None = None,
+    child_age: int | None = None,
+    child_persona: str | None = None,
+) -> str:
+    """Describe who the toy is talking to.
+
+    Wording follows the Deno route's UserPromptTemplate (server/deno/supabase.ts:96)
+    so a child meets the same character on either transport.
+    """
+    name = (child_name or "").strip()
+    persona = (child_persona or "").strip()
+    if not name and child_age is None and not persona:
+        return ""
+
+    described = "YOU ARE TALKING TO someone"
+    if name:
+        described += f" whose name is: {name}"
+    if child_age is not None:
+        described += f" and age is: {child_age}"
+    if persona:
+        described += f" with a personality described as: {persona}"
+    return described + "."
+
+
 def build_session_prompt(
     title: str | None = None,
     character_prompt: str | None = None,
     voice_prompt: str | None = None,
+    child_name: str | None = None,
+    child_age: int | None = None,
+    child_persona: str | None = None,
+    memory_preamble: str | None = None,
 ) -> str:
     prompt = (character_prompt or "").strip()
+    child_block = build_child_block(child_name, child_age, child_persona)
+    preamble = (memory_preamble or "").strip()
+
     if not prompt:
-        return LANGUAGE_LEARNING_PAL_PROMPT
+        parts = [LANGUAGE_LEARNING_PAL_PROMPT]
+        if child_block:
+            parts.append(child_block)
+        if preamble:
+            parts.append(preamble)
+        return "\n\n".join(parts)
 
     parts: list[str] = []
     name = (title or "").strip()
@@ -64,8 +101,18 @@ def build_session_prompt(
     voice = (voice_prompt or "").strip()
     if voice:
         parts.append(f"YOUR VOICE IS: {voice}")
+    if child_block:
+        parts.append(child_block)
+    if preamble:
+        parts.append(preamble)
+    # The old wording was a flat "Do not ask for personal information", which
+    # reads as "never retain anything about this child" once the toy has a
+    # memory. The line it needs is the narrower one: do not go fishing, but do
+    # use what the child volunteered.
     parts.append(
         "Keep spoken replies concise and conversational. "
-        "Do not ask for personal information."
+        "Never ask the child for personal information, and never ask for "
+        "anything that identifies them or their family. Things the child "
+        "tells you on their own are fine to remember and refer back to."
     )
     return "\n\n".join(parts)

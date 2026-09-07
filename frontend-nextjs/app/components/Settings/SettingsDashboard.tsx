@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import HomePageSubtitles from "../HomePageSubtitles";
 import AppSettings from "./AppSettings";
+import MemorySection from "./MemorySection";
 import { updateUser } from "@/db/users";
 import { createClient } from "@/utils/supabase/client";
 import PickLanguage from "../Playground/PickLanguage";
@@ -86,6 +87,12 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 heading={<Heading />}
                 selectedUser={selectedUser}
             />
+            {/* Long-term memory is on by default, so the place to inspect and
+                delete it sits alongside the child's profile -- the one screen
+                where a parent already manages what the toy knows. */}
+            <div className="mt-8 border-t pt-6">
+                <MemorySection selectedUser={selectedUser} />
+            </div>
         </div>
     );
 };

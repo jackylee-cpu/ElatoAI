@@ -27,14 +27,21 @@ def build_voice_pipeline(
     voice_prompt: str | None = None,
     extra_after_stt=None,
     extra_after_llm=None,
+    memory=None,
+    child=None,
 ):
     stt_provider = os.getenv("CLASSIC_STT_PROVIDER", "deepgram")
     llm_provider = os.getenv("CLASSIC_LLM_PROVIDER", "openai")
     tts_provider = os.getenv("CLASSIC_TTS_PROVIDER", "elevenlabs")
+    child = child or {}
     system_instruction = build_session_prompt(
         title=title,
         character_prompt=character_prompt,
         voice_prompt=voice_prompt,
+        child_name=child.get("name"),
+        child_age=child.get("age"),
+        child_persona=child.get("persona"),
+        memory_preamble=child.get("memory_preamble"),
     )
 
     logger.info(
@@ -73,7 +80,37 @@ def build_voice_pipeline(
     processors = [input_processor, vad, stt]
     if extra_after_stt is not None:
         processors.append(extra_after_stt)
-    processors.extend([user_aggregator, llm])
+
+    # Long-term memory sits between STT and the aggregator so it sees interim
+    # transcripts (to start the lookup while the child is still talking) and
+    # the final one (to inject before the LLM runs). Neither processor ever
+    # holds a frame -- see memory/processors.py.
+    if memory is not None:
+        from memory.processors import AssistantTurnCaptureProcessor, MemoryProcessor
+
+        # Memory retrieval is started by the first interim transcript, while the
+        # child is still talking, because a lookup takes long enough (~850ms
+        # measured locally) that starting it at the end of the turn would mean
+        # either waiting or missing. A segmented STT emits no interim frames at
+        # all, so there is nothing to trigger on and memory would silently never
+        # be injected -- say so rather than shipping a feature that quietly does
+        # nothing.
+        if stt_name in {"whisper", "mlx-whisper", "mlx_whisper"}:
+            logger.warning(
+                "STT provider {} produces no interim transcripts, so long-term "
+                "memory will rarely be retrieved in time. Use a streaming STT "
+                "(deepgram, azure) or raise VOICEMEM_SEARCH_BLOCK_MS.",
+                stt_name,
+            )
+
+        processors.append(MemoryProcessor(memory, context))
+        processors.extend([user_aggregator, llm])
+        processors.append(
+            AssistantTurnCaptureProcessor(memory, child.get("personality_key"))
+        )
+    else:
+        processors.extend([user_aggregator, llm])
+
     if extra_after_llm is not None:
         processors.append(extra_after_llm)
     processors.append(tts)

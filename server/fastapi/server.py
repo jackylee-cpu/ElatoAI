@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import os
+import uuid
 from collections import defaultdict
 
 import uvicorn
@@ -18,6 +19,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from bot import create_esp32_auth_message, run_bot_session
 from device_registry import fetch_device_personality
 from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
+from memory import session as memory_session
 from models.providers import get_provider_catalog, validate_classic_provider_stack
 
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -279,6 +281,9 @@ def create_app() -> FastAPI:
             selected["llm"],
             selected["tts"],
         )
+        # Loading the embedding model lazily would put roughly two seconds on
+        # the first child's first sentence, which is the worst place for it.
+        await memory_session.warmup()
 
     @app.websocket("/ws/browser")
     async def browser_websocket(websocket: WebSocket):
@@ -330,6 +335,21 @@ def create_app() -> FastAPI:
         )
         transport = create_esp32_transport(websocket)
 
+        # Memory is keyed by the account the device is claimed by, not by the
+        # device or the character: it is the same child either way. An
+        # unclaimed device resolves to no user and simply runs without memory.
+        memory = await memory_session.acquire(
+            personality.user_id, personality.language_code
+        )
+        if memory is not None:
+            memory.chat_group_id = str(uuid.uuid4())
+        child = {
+            "name": personality.child_name,
+            "age": personality.child_age,
+            "persona": personality.child_persona,
+            "personality_key": personality.personality_key,
+        }
+
         session_key = (mac_address or "").strip().upper()
         if session_key:
             async with _sessions_lock:
@@ -343,8 +363,20 @@ def create_app() -> FastAPI:
                 title=personality.title,
                 character_prompt=personality.character_prompt,
                 voice_prompt=personality.voice_prompt,
+                memory=memory,
+                child=child,
             )
         finally:
+            # Draining pending writes, running the session-boundary batch and
+            # uploading the snapshot all hang off this. It has to be in the
+            # finally: a device that drops off wifi never produces a clean
+            # disconnect event, and that last turn is usually the one worth
+            # keeping.
+            if memory is not None:
+                try:
+                    await memory.release()
+                except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                    logger.warning("Could not persist memory for {}: {}", mac_address, exc)
             if session_key:
                 async with _sessions_lock:
                     _esp32_sessions[session_key].discard(websocket)

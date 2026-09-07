@@ -485,9 +485,21 @@ async def run_bot_session(
     character_prompt: str | None = None,
     voice_prompt: str | None = None,
     first_message_prompt: str | None = None,
+    memory=None,
+    child=None,
 ):
     voice_route = CURRENT_VOICE_ROUTE
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
+
+    # gem_live and grok are speech-to-speech: our STT never emits a
+    # TranscriptionFrame on those routes and their instructions are fixed when
+    # the route is built, so memory would be inert. Better to say so than to
+    # wire up something that silently does nothing.
+    if memory is not None and voice_route != "classic":
+        logger.warning(
+            "Long-term memory is only wired into the classic route, not {}", voice_route
+        )
+        memory = None
 
     context = LLMContext()
     input_processor = RealtimeInputControlProcessor(voice_route)
@@ -512,6 +524,8 @@ async def run_bot_session(
             voice_prompt=voice_prompt,
             extra_after_stt=extra_after_stt,
             extra_after_llm=extra_after_llm,
+            memory=memory,
+            child=child,
         )
 
     processors = [transport.input(), *route_processors]
@@ -574,6 +588,8 @@ async def run_bot_session(
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info(f"{transport_kind} client disconnected")
+        # Memory is released by whoever acquired it, in a finally block, so it
+        # still happens when a socket dies without this handler ever firing.
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=handle_sigint)

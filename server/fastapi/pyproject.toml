@@ -6,6 +6,9 @@ requires-python = ">=3.10"
 dependencies = [
     "pipecat-ai[webrtc,websocket,silero,deepgram,openai,cartesia,google,grok,runner,openrouter,minimax,whisper,mlx-whisper,azure]>=1.7.0",
     "pipecat-ai-cli",
+    # Long-term memory. Pulls torch through sentence-transformers; the Docker
+    # build installs the CPU-only wheel first so it does not drag in CUDA.
+    "voicemem>=0.2.3",
 ]
 
 [dependency-groups]
