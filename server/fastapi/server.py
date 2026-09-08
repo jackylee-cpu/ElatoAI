@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import os
+import uuid
 from collections import defaultdict
 
 import uvicorn
@@ -16,8 +17,9 @@ from loguru import logger
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 from bot import create_esp32_auth_message, run_bot_session
-from device_registry import fetch_device_personality
+from device_registry import fetch_device_personality, fetch_user_personality
 from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
+from memory import session as memory_session
 from models.providers import get_provider_catalog, validate_classic_provider_stack
 
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -279,6 +281,9 @@ def create_app() -> FastAPI:
             selected["llm"],
             selected["tts"],
         )
+        # Loading the embedding model lazily would put roughly two seconds on
+        # the first child's first sentence, which is the worst place for it.
+        await memory_session.warmup()
 
     @app.websocket("/ws/browser")
     async def browser_websocket(websocket: WebSocket):
@@ -295,22 +300,67 @@ def create_app() -> FastAPI:
         character_prompt = websocket.query_params.get("character_prompt")
         voice_prompt = websocket.query_params.get("voice_prompt")
         first_message_prompt = websocket.query_params.get("first_message_prompt")
+        user_id = websocket.query_params.get("user_id")
+        personality_key = websocket.query_params.get("personality_key")
         logger.info(
-            "NextJS websocket connected voice={} title={}",
+            "NextJS websocket connected voice={} title={} user={}",
             tts_voice or "default",
             title or "default",
+            user_id or "anonymous",
         )
         transport = create_browser_transport(websocket)
-        await run_bot_session(
-            transport,
-            "browser",
-            False,
-            tts_voice=tts_voice,
-            title=title,
-            character_prompt=character_prompt,
-            voice_prompt=voice_prompt,
-            first_message_prompt=first_message_prompt,
+
+        # Same store the toy uses: memory is keyed by the account, not by the
+        # client or the character, so what a child tells the web app is there
+        # the next time they pick up the toy. `user_id` is whatever the web app
+        # put on the query string; no session without one, just no memory.
+        #
+        # NOTE: this trusts the query string. On localhost that is the same
+        # trust boundary as the rest of the dev setup, but before this is
+        # exposed publicly the id has to arrive as something the browser cannot
+        # forge -- a short-lived token signed by the Next.js server -- or
+        # anyone who learns a user_id can read that child's memories.
+        profile = await fetch_user_personality(user_id)
+        memory = await memory_session.acquire(
+            profile.user_id, profile.language_code
         )
+        if memory is not None:
+            memory.chat_group_id = str(uuid.uuid4())
+        child = {
+            "name": profile.child_name,
+            "age": profile.child_age,
+            "persona": profile.child_persona,
+            # The character arrives on the query string here, not from the
+            # account row, so take the key from the same place the prompt came
+            # from rather than from `profile` (which never carries one).
+            "personality_key": personality_key,
+        }
+
+        try:
+            await run_bot_session(
+                transport,
+                "browser",
+                False,
+                tts_voice=tts_voice,
+                title=title,
+                character_prompt=character_prompt,
+                voice_prompt=voice_prompt,
+                first_message_prompt=first_message_prompt,
+                memory=memory,
+                child=child,
+            )
+        finally:
+            # Draining pending writes and uploading the snapshot hang off this,
+            # and a browser tab closing is exactly the disconnect that would
+            # otherwise lose the last turn -- the same reason the esp32 route
+            # releases in a finally.
+            if memory is not None:
+                try:
+                    await memory.release()
+                except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                    logger.warning(
+                        "Could not persist memory for {}: {}", user_id, exc
+                    )
 
     @app.websocket("/ws/esp32")
     async def esp32_websocket(websocket: WebSocket):
@@ -330,6 +380,21 @@ def create_app() -> FastAPI:
         )
         transport = create_esp32_transport(websocket)
 
+        # Memory is keyed by the account the device is claimed by, not by the
+        # device or the character: it is the same child either way. An
+        # unclaimed device resolves to no user and simply runs without memory.
+        memory = await memory_session.acquire(
+            personality.user_id, personality.language_code
+        )
+        if memory is not None:
+            memory.chat_group_id = str(uuid.uuid4())
+        child = {
+            "name": personality.child_name,
+            "age": personality.child_age,
+            "persona": personality.child_persona,
+            "personality_key": personality.personality_key,
+        }
+
         session_key = (mac_address or "").strip().upper()
         if session_key:
             async with _sessions_lock:
@@ -343,8 +408,20 @@ def create_app() -> FastAPI:
                 title=personality.title,
                 character_prompt=personality.character_prompt,
                 voice_prompt=personality.voice_prompt,
+                memory=memory,
+                child=child,
             )
         finally:
+            # Draining pending writes, running the session-boundary batch and
+            # uploading the snapshot all hang off this. It has to be in the
+            # finally: a device that drops off wifi never produces a clean
+            # disconnect event, and that last turn is usually the one worth
+            # keeping.
+            if memory is not None:
+                try:
+                    await memory.release()
+                except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                    logger.warning("Could not persist memory for {}: {}", mac_address, exc)
             if session_key:
                 async with _sessions_lock:
                     _esp32_sessions[session_key].discard(websocket)

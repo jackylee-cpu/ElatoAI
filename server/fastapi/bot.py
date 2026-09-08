@@ -198,6 +198,13 @@ async def forward_transcript_frame(
         return
 
     if isinstance(frame, VADUserStartedSpeakingFrame):
+        if state.user_turn_open:
+            # VAD re-fires whenever someone pauses mid-sentence, and the button
+            # is still held, so this is the same utterance. Minting a new item
+            # id here started a second bubble in the web app -- one sentence
+            # arriving as three, each restarting the first-word timer -- even
+            # though the recognizer and the LLM correctly saw one turn.
+            return
         state.user_item_id = _new_item_id("user")
         state.user_turn_open = True
         state.mark_user_speech_start()
@@ -304,17 +311,23 @@ class TranscriptForwardProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-# A push-to-talk client stops sending audio the instant the button comes up, and
-# Azure's endpointer counts its phrase timeout (silence_ms=600) in *received*
-# audio, not wall clock. With nothing arriving the timer never advances, the
-# recognizer sits on the phrase, and the final transcript never lands: measured
-# on hardware, one utterance stayed unfinalized for thirteen seconds until an
-# interrupt happened to shake it loose. Feeding it the trailing silence the
-# client stopped sending is what closes the phrase.
+# Silence pushed into STT when a push-to-talk client commits its turn.
 #
-# It costs nothing to send: the endpointer runs on stream time, so these zeros
-# go in as fast as the queue takes them -- 1500ms of audio in about 1ms of wall
-# clock -- and the phrase finalizes immediately.
+# Streaming recognizers end a phrase on trailing silence *in the audio stream*,
+# not on wall-clock time -- and a push-to-talk client stops sending the instant
+# the button comes up, so that silence never arrives and the final transcript
+# never comes. Measured with Azure on hardware: one utterance stayed
+# unfinalized for thirteen seconds until an interrupt happened to shake it
+# loose. Feeding it the trailing silence the client stopped sending is what
+# closes the phrase.
+#
+# It costs nothing to send: the recognizer's endpointer runs on stream time, so
+# these zeros go in as fast as the queue takes them -- 1500ms of audio in about
+# 1ms of wall clock -- and the phrase finalizes immediately.
+#
+# How much is a property of the recognizer, so the STT provider declares it
+# (models/stt/flush_silence_ms) and the pipeline hands the number over. This is
+# only the fallback for a session built without one, and the override knob.
 STT_FLUSH_SILENCE_MS = int(os.getenv("STT_FLUSH_SILENCE_MS", "1500"))
 _FLUSH_CHUNK_MS = 20
 
@@ -326,15 +339,22 @@ class RealtimeInputControlProcessor(FrameProcessor):
         super().__init__()
         self._voice_route = voice_route
         self._audio_in_sample_rate: int | None = None
+        self._flush_silence_ms = STT_FLUSH_SILENCE_MS
+
+    def set_flush_silence_ms(self, milliseconds: int) -> None:
+        """Told by the pipeline what this session's recognizer needs."""
+        if os.getenv("STT_FLUSH_SILENCE_MS"):
+            return  # an explicit override wins over the provider's own number
+        self._flush_silence_ms = max(0, int(milliseconds))
 
     async def _flush_stt_with_silence(self):
         """Give the recognizer the trailing silence the client stopped sending."""
         rate = self._audio_in_sample_rate
-        if not rate or STT_FLUSH_SILENCE_MS <= 0:
+        if not rate or self._flush_silence_ms <= 0:
             return
         samples = int(rate * _FLUSH_CHUNK_MS / 1000)
         chunk = b"\x00" * (samples * 2)  # 16-bit mono
-        for _ in range(STT_FLUSH_SILENCE_MS // _FLUSH_CHUNK_MS):
+        for _ in range(self._flush_silence_ms // _FLUSH_CHUNK_MS):
             await self.push_frame(
                 InputAudioRawFrame(audio=chunk, sample_rate=rate, num_channels=1),
                 FrameDirection.DOWNSTREAM,
@@ -356,7 +376,7 @@ class RealtimeInputControlProcessor(FrameProcessor):
                     await self.push_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
                 else:
                     # Pipecat 1.7 removed EmulateUserStoppedSpeakingFrame; the
-                    # ESP32 end-of-speech signal now maps to UserStoppedSpeakingFrame.
+                    # end-of-speech signal now maps to UserStoppedSpeakingFrame.
                     #
                     # No STTMuteFrame(mute=True) follows it. Muting here raced
                     # the recognizer: Azure emits its final transcript a beat
@@ -369,10 +389,13 @@ class RealtimeInputControlProcessor(FrameProcessor):
                     # 2026-09-08: three of four turns died this way.
                     #
                     # Nothing is lost by dropping it. The mute existed to stop
-                    # trailing audio reopening the turn, but only the ESP32
-                    # sends end_of_speech and it closes its own mic on release,
-                    # so no trailing audio arrives; the browser client never
-                    # sends it at all.
+                    # trailing audio reopening the turn, but a push-to-talk
+                    # client closes its own mic on release, so no trailing audio
+                    # arrives. What the mute did instead, on a turn that
+                    # produced no transcript, was latch: the only unmute runs
+                    # when a bot turn actually starts, so every later turn died
+                    # silently. Both clients now commit the instant the button
+                    # comes up instead of holding the mic open for the VAD.
                     #
                     # Order matters: the silence has to reach STT before the
                     # frame that closes the turn, or the aggregator finishes a
@@ -402,6 +425,7 @@ class RealtimeOutputControlProcessor(FrameProcessor):
         self._response_started = False
         self._completed_for_turn = False
         self._bot_turn_active = False
+        self._user_turn_committed = False
         self._transcript_state = transcript_state
         self._mute_stt_while_speaking = mute_stt_while_speaking
 
@@ -467,14 +491,43 @@ class RealtimeOutputControlProcessor(FrameProcessor):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._completed_for_turn = False
             self._bot_turn_active = True
+        elif isinstance(frame, (UserStartedSpeakingFrame, VADUserStartedSpeakingFrame)):
+            self._user_turn_committed = False
         elif isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
-            # A new user turn ended, so a new bot turn is on its way: re-arm the
-            # completion even if the previous one produced no audio at all.
-            self._completed_for_turn = False
-            await self.push_frame(
-                OutputTransportMessageFrame(message={"type": "server", "msg": "AUDIO.COMMITTED"}),
-                direction,
-            )
+            # A push-to-talk client shuts its mic the instant it sends
+            # end_of_speech, and pipecat's VAD forces a stop of its own 1s after
+            # audio stops arriving (vad_controller audio_idle_timeout). So every
+            # explicit commit is followed by a VAD stop for the same user turn,
+            # usually after the answer has already started playing. Emitting a
+            # second AUDIO.COMMITTED there drops the ESP32 out of SPEAKING and
+            # truncates that answer, so only the first stop of a user turn
+            # counts. An explicit commit always counts: a speaker quiet enough
+            # that VAD never fired has no started-frame to re-arm on.
+            if isinstance(frame, VADUserStoppedSpeakingFrame) and self._user_turn_committed:
+                logger.debug("Ignoring VAD stop for a turn the client already committed")
+            else:
+                self._user_turn_committed = True
+                # A new user turn ended, so a new bot turn is on its way: re-arm
+                # the completion even if the previous one produced no audio.
+                self._completed_for_turn = False
+                # Close the display turn on the client's own commit, never on
+                # a VAD stop: VAD stops at every mid-sentence pause, and closing
+                # there is what made one sentence arrive as three bubbles. The
+                # explicit commit covers the press that produced no transcript,
+                # which the final-transcript path cannot.
+                #
+                # Hands-free sends no commit, so there the final transcript is
+                # what closes the turn, as before.
+                if self._transcript_state is not None and not isinstance(
+                    frame, VADUserStoppedSpeakingFrame
+                ):
+                    self._transcript_state.user_turn_open = False
+                await self.push_frame(
+                    OutputTransportMessageFrame(
+                        message={"type": "server", "msg": "AUDIO.COMMITTED"}
+                    ),
+                    direction,
+                )
         elif isinstance(frame, OutputAudioRawFrame) and not self._response_started:
             self._response_started = True
             self._completed_for_turn = False
@@ -539,9 +592,21 @@ async def run_bot_session(
     character_prompt: str | None = None,
     voice_prompt: str | None = None,
     first_message_prompt: str | None = None,
+    memory=None,
+    child=None,
 ):
     voice_route = CURRENT_VOICE_ROUTE
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
+
+    # gem_live and grok are speech-to-speech: our STT never emits a
+    # TranscriptionFrame on those routes and their instructions are fixed when
+    # the route is built, so memory would be inert. Better to say so than to
+    # wire up something that silently does nothing.
+    if memory is not None and voice_route != "classic":
+        logger.warning(
+            "Long-term memory is only wired into the classic route, not {}", voice_route
+        )
+        memory = None
 
     context = LLMContext()
     input_processor = RealtimeInputControlProcessor(voice_route)
@@ -566,6 +631,8 @@ async def run_bot_session(
             voice_prompt=voice_prompt,
             extra_after_stt=extra_after_stt,
             extra_after_llm=extra_after_llm,
+            memory=memory,
+            child=child,
         )
 
     processors = [transport.input(), *route_processors]
@@ -628,6 +695,8 @@ async def run_bot_session(
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info(f"{transport_kind} client disconnected")
+        # Memory is released by whoever acquired it, in a finally block, so it
+        # still happens when a socket dies without this handler ever firing.
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=handle_sigint)

@@ -4,9 +4,23 @@ version = "0.1.0"
 description = "Quickstart example for building voice AI bots with Pipecat"
 requires-python = ">=3.10"
 dependencies = [
-    "pipecat-ai[webrtc,websocket,silero,deepgram,openai,cartesia,google,grok,runner,openrouter,minimax,whisper,mlx-whisper,azure]>=1.7.0",
+    # Capped below 1.8: it renames the TaskManager API this code builds
+    # pipelines against, and every test in tests/ errors out on it. Lift the cap
+    # in the same change that ports the pipeline, not before.
+    "pipecat-ai[webrtc,websocket,silero,deepgram,openai,cartesia,google,grok,runner,openrouter,minimax,whisper,mlx-whisper,azure]>=1.7.0,<1.8",
     "pipecat-ai-cli",
+    # Long-term memory. Pulls torch through sentence-transformers; the Docker
+    # build installs the CPU-only wheel first so it does not drag in CUDA.
+    "voicemem>=0.2.3",
 ]
+
+# This is an application, not a library, but the README installs it with
+# `pip install -e .` so the local venv gets the dependencies above. Once
+# `memory/` joined `models/` as a top-level package, setuptools' flat-layout
+# autodiscovery refused to guess between them and the install failed outright.
+# Naming them is what keeps that command working.
+[tool.setuptools.packages.find]
+include = ["memory*", "models*"]
 
 [dependency-groups]
 dev = [

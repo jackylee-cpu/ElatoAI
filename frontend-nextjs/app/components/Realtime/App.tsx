@@ -19,12 +19,32 @@ import { useHandleServerEvent } from "./hooks/useHandleServerEvent";
 import { createRealtimeConnection } from "./lib/realtimeConnection";
 import { FastAPIVoiceSession, FastAPIControlMessage } from "./lib/fastapiConnection";
 import { getFastAPIVoiceUrl, shouldUseFastAPIVoice } from "./lib/voiceBackend";
+import { MicMode, MIC_MODE_STORAGE_KEY, parseMicMode } from "./lib/micMode";
 import { toast } from "@/components/ui/use-toast";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import Transcript from "./components/Transcript";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { getPersonalityById } from "@/db/personalities";
 import { createClient } from "@/utils/supabase/client";
+
+// Push-to-talk timings, mirrored from the firmware (firmware-arduino/src/Audio.cpp)
+// so the toy and the web app take turns the same way.
+
+// A press shorter than this was a barge-in, not an utterance.
+const PTT_MIN_CAPTURE_MS = 250;
+
+// Mean |sample| below which a press captured nothing worth transcribing, so
+// there is no point starting a turn with it. Deliberately low: letting a quiet
+// turn through is far better than dropping real speech, and browser AGC lifts
+// room noise well above what the ESP32 mic reports.
+const MIC_SILENCE_LEVEL = 120;
+
+// Hands-free only: how long after a turn ends before the mic reopens. The
+// server calls the turn over when TTS stops, but the last packets are still
+// playing out of the speakers, and reopening into them is how the answer used
+// to interrupt itself. The firmware waits the same 1s (Audio.cpp,
+// scheduledTime = millis() + 1000).
+const HANDS_FREE_REOPEN_DELAY_MS = 1000;
 
 interface AppProps {
   personalityIdState: string;
@@ -74,6 +94,22 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     useState<SessionStatus>("DISCONNECTED");
   const [voiceStatus, setVoiceStatus] =
     useState<VoiceTurnStatus>("disconnected");
+  const voiceStatusRef = useRef<VoiceTurnStatus>("disconnected");
+  const updateVoiceStatus = (next: VoiceTurnStatus) => {
+    voiceStatusRef.current = next;
+    setVoiceStatus(next);
+  };
+
+  const [micMode, setMicMode] = useState<MicMode>("ptt");
+  const micModeRef = useRef<MicMode>("ptt");
+  const [isTalking, setIsTalking] = useState<boolean>(false);
+  // True from pointer-down until pointer-up. Server-driven state changes check
+  // it: a RESPONSE.CREATED arriving mid-press must not close the mic out from
+  // under someone who is still talking.
+  const pttHeldRef = useRef<boolean>(false);
+  const pttStartedAtRef = useRef<number>(0);
+  const handsFreeReopenTimerRef = useRef<number | null>(null);
+  const pendingRestartRef = useRef<boolean>(false);
 
   const [isEventsPaneExpanded, setIsEventsPaneExpanded] =
     useState<boolean>(true);
@@ -160,6 +196,123 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     Object.keys(botTargetTextRef.current).forEach((id) => revealBotText(id, true));
   };
 
+  const clearHandsFreeReopen = () => {
+    if (handsFreeReopenTimerRef.current != null) {
+      window.clearTimeout(handsFreeReopenTimerRef.current);
+      handsFreeReopenTimerRef.current = null;
+    }
+  };
+
+  // True while the button is down -- i.e. while the user, not the server, owns
+  // the mic. Server-driven state changes check this: a turn the server
+  // considers finished must never cut off a recording the user is in the
+  // middle of making.
+  const micOwnedByUser = () => pttHeldRef.current;
+
+  const startTalking = () => {
+    const session = fastapiSessionRef.current;
+    if (!session || pttHeldRef.current) return;
+
+    pttHeldRef.current = true;
+    pttStartedAtRef.current = Date.now();
+    setIsTalking(true);
+    clearHandsFreeReopen();
+
+    // Pressing while the bot holds the floor is a barge-in: drop the turn it is
+    // streaming, and throw away the audio already queued here, or the old
+    // answer keeps talking over the new question.
+    if (voiceStatusRef.current === "speaking" || voiceStatusRef.current === "thinking") {
+      session.sendInterrupt();
+      session.clearPlayback();
+      logClientEvent({ reason: "ptt-barge-in" }, "fastapi.interrupt");
+    }
+
+    session.openMic();
+    updateVoiceStatus("user_speaking");
+  };
+
+  const stopTalking = () => {
+    const session = fastapiSessionRef.current;
+    if (!pttHeldRef.current) return;
+    pttHeldRef.current = false;
+    setIsTalking(false);
+    if (!session) return;
+
+    const heldMs = Date.now() - pttStartedAtRef.current;
+    const { average, peak } = session.micLevel();
+
+    if (heldMs < PTT_MIN_CAPTURE_MS) {
+      // The press was there to barge in, not to say something. settleAfterTurn
+      // rather than a plain close, or a tap like this would leave hands-free
+      // mode with the mic shut and no way back.
+      logClientEvent({ heldMs }, "fastapi.ptt.tap_ignored");
+      settleAfterTurn();
+      return;
+    }
+
+    if (average < MIC_SILENCE_LEVEL) {
+      // Nothing worth transcribing, so close the mic without a tail: the
+      // server's VAD never sees a turn and stays quiet, instead of answering
+      // something the user never said.
+      logClientEvent({ heldMs, average, peak }, "fastapi.ptt.silence_discarded");
+      settleAfterTurn();
+      return;
+    }
+
+    // Close the mic first, then commit: no audio can reach the server after the
+    // instruction that says the turn is over. The server no longer mutes STT on
+    // end_of_speech (bot.py), so this costs nothing and saves the second or so
+    // the VAD needs to infer the same thing from a tail of silence.
+    logClientEvent({ heldMs, average, peak }, "fastapi.ptt.captured");
+    session.closeMic();
+    session.sendEndOfSpeech();
+    updateVoiceStatus("thinking");
+  };
+
+  // Where the mic rests between turns: closed under push-to-talk, reopened in
+  // hands-free so the next sentence starts a turn on its own.
+  const settleAfterTurn = () => {
+    const session = fastapiSessionRef.current;
+    if (!session || micOwnedByUser()) return;
+    clearHandsFreeReopen();
+    session.closeMic();
+    if (micModeRef.current !== "hands_free") {
+      updateVoiceStatus("idle");
+      return;
+    }
+    updateVoiceStatus("listening");
+    const delay = Math.max(HANDS_FREE_REOPEN_DELAY_MS, session.queuedPlaybackMs() + 300);
+    handsFreeReopenTimerRef.current = window.setTimeout(() => {
+      handsFreeReopenTimerRef.current = null;
+      if (fastapiSessionRef.current !== session || micOwnedByUser()) return;
+      if (voiceStatusRef.current !== "listening") return;
+      session.openMic();
+    }, delay);
+  };
+
+  const applyMicMode = (mode: MicMode) => {
+    micModeRef.current = mode;
+    setMicMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(MIC_MODE_STORAGE_KEY, mode);
+    }
+    const session = fastapiSessionRef.current;
+    if (!session || micOwnedByUser()) return;
+    clearHandsFreeReopen();
+    // Only the resting state changes; a mode switch mid-answer must not open
+    // the mic into the bot's own audio.
+    if (voiceStatusRef.current !== "idle" && voiceStatusRef.current !== "listening") {
+      return;
+    }
+    if (mode === "hands_free") {
+      session.openMic();
+      updateVoiceStatus("listening");
+    } else {
+      session.closeMic();
+      updateVoiceStatus("idle");
+    }
+  };
+
   const handleFastAPIControlRef = useRef<(message: FastAPIControlMessage) => void>(
     () => {}
   );
@@ -172,7 +325,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
       case "USER.STARTED": {
         const id = itemId || uuidv4().slice(0, 32);
         upsertTranscriptMessage(id, "user", "[Listening...]", "placeholder");
-        setVoiceStatus("user_speaking");
+        updateVoiceStatus("user_speaking");
         break;
       }
       case "USER.TRANSCRIPT": {
@@ -185,24 +338,39 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
         if (message.final) {
           updateTranscriptItemStatus(itemId, "DONE");
         }
-        setVoiceStatus(message.final ? "thinking" : "user_speaking");
+        updateVoiceStatus(message.final ? "thinking" : "user_speaking");
         break;
       }
       case "AUDIO.COMMITTED": {
-        setVoiceStatus("thinking");
+        // The turn is closed. Keeping the mic open past this only risks the VAD
+        // hearing a noise and interrupting the answer we are waiting for --
+        // under push-to-talk it is already shut, this covers hands-free.
+        if (!pttHeldRef.current) {
+          clearHandsFreeReopen();
+          fastapiSessionRef.current?.closeMic();
+        }
+        updateVoiceStatus("thinking");
         break;
       }
       case "BOT.TRANSCRIPT": {
         if (!itemId || !text) break;
         appendBotTranscript(itemId, text, message.delta === false);
-        setVoiceStatus("speaking");
+        updateVoiceStatus("speaking");
         break;
       }
       case "RESPONSE.CREATED": {
         if (itemId && !botTargetTextRef.current[itemId]) {
           upsertTranscriptMessage(itemId, "assistant", "[Speaking...]", "placeholder");
         }
-        setVoiceStatus("speaking");
+        // Half-duplex, like the toy: the mic is shut while the bot talks, in
+        // both mic modes. Echo cancellation was not enough -- the answer
+        // leaking back in is what kept killing the greeting a second after it
+        // started. Barge-in is the talk button, which reopens the mic itself.
+        if (!micOwnedByUser()) {
+          clearHandsFreeReopen();
+          fastapiSessionRef.current?.closeMic();
+          updateVoiceStatus("speaking");
+        }
         break;
       }
       case "RESPONSE.COMPLETE": {
@@ -212,11 +380,11 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
         } else {
           flushBotTranscript();
         }
-        setVoiceStatus("listening");
+        settleAfterTurn();
         break;
       }
       case "RESPONSE.ERROR": {
-        setVoiceStatus("listening");
+        settleAfterTurn();
         toast({ description: "The voice pipeline returned an error." });
         break;
       }
@@ -230,6 +398,59 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
       connectToRealtime();
     }
   }, [selectedAgentName]);
+
+  // The server builds a fresh LLMContext per websocket session (bot.py
+  // run_bot_session), so dropping the socket and coming back is what starts a
+  // new conversation -- the same thing the toy's touch pad does. Reconnecting
+  // from this effect rather than inline means connectToRealtime() runs with
+  // sessionStatus already DISCONNECTED and passes its own guard.
+  useEffect(() => {
+    if (pendingRestartRef.current && sessionStatus === "DISCONNECTED") {
+      pendingRestartRef.current = false;
+      connectToRealtime();
+    }
+  }, [sessionStatus]);
+
+  const restartConversation = () => {
+    if (!shouldUseFastAPIVoice(personality?.provider)) return;
+    logClientEvent({}, "fastapi.conversation.restart");
+    pendingRestartRef.current = true;
+    disconnectFromRealtime();
+  };
+
+  // Hold space to talk, matching the on-screen button. Ignored while typing so
+  // it cannot swallow a space in a text field.
+  useEffect(() => {
+    if (sessionStatus !== "CONNECTED" || !shouldUseFastAPIVoice(personality?.provider)) {
+      return;
+    }
+    const isTypingTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.repeat || isTypingTarget(event.target)) return;
+      event.preventDefault();
+      startTalking();
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || isTypingTarget(event.target)) return;
+      event.preventDefault();
+      stopTalking();
+    };
+    // A release that lands outside the tab would otherwise leave the mic open.
+    const onBlur = () => stopTalking();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [sessionStatus, personality?.provider]);
 
   useEffect(() => {
     if (sessionStatus === "CONNECTED") {
@@ -260,35 +481,53 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     setSessionStatus("CONNECTING");
 
     if (shouldUseFastAPIVoice(personality?.provider)) {
-      setVoiceStatus("connecting");
+      updateVoiceStatus("connecting");
       const voiceUrl = getFastAPIVoiceUrl({
         voice: personality?.oai_voice,
         title: personality?.title,
         characterPrompt: personality?.character_prompt,
         voicePrompt: personality?.voice_prompt,
         firstMessagePrompt: personality?.first_message_prompt,
+        userId,
+        personalityKey: personality?.key,
       });
       try {
-        const session = new FastAPIVoiceSession({
+        // A restart closes the old socket and opens a new one immediately, so
+        // the old socket's close event can land after the new one is already
+        // connecting. Every handler checks it still owns the ref before it
+        // touches any state.
+        let session: FastAPIVoiceSession | null = null;
+        const isCurrentSession = () => fastapiSessionRef.current === session;
+        session = new FastAPIVoiceSession({
           onOpen: () => {
+            if (!isCurrentSession()) return;
             logClientEvent({ url: voiceUrl }, "fastapi.socket.open");
             setSessionStatus("CONNECTED");
-            setVoiceStatus("listening");
+            // The mic stays shut here in both modes. The server greets as soon
+            // as the socket opens, and an open mic at that moment is what made
+            // the greeting interrupt itself before it was audible. Hands-free
+            // opens it in settleAfterTurn(), once the greeting is done.
+            updateVoiceStatus("idle");
           },
           onClose: () => {
+            if (!isCurrentSession()) return;
             logClientEvent({}, "fastapi.socket.close");
             setSessionStatus("DISCONNECTED");
-            setVoiceStatus("disconnected");
+            updateVoiceStatus("disconnected");
           },
           onError: (error) => {
+            if (!isCurrentSession()) return;
             logClientEvent({ error: String(error.type) }, "fastapi.socket.error");
             toast({
               description: "Could not reach the FastAPI voice server. Is it running on port 7860?",
             });
             setSessionStatus("DISCONNECTED");
-            setVoiceStatus("disconnected");
+            updateVoiceStatus("disconnected");
           },
-          onControlMessage: (message) => handleFastAPIControlRef.current(message),
+          onControlMessage: (message) => {
+            if (!isCurrentSession()) return;
+            handleFastAPIControlRef.current(message);
+          },
         });
         fastapiSessionRef.current = session;
         await session.connect(voiceUrl);
@@ -297,7 +536,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
         fastapiSessionRef.current?.disconnect();
         fastapiSessionRef.current = null;
         setSessionStatus("DISCONNECTED");
-        setVoiceStatus("disconnected");
+        updateVoiceStatus("disconnected");
         toast({
           description: "Microphone permission is required to talk.",
         });
@@ -344,6 +583,9 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
   };
 
   const disconnectFromRealtime = () => {
+    clearHandsFreeReopen();
+    pttHeldRef.current = false;
+    setIsTalking(false);
     fastapiSessionRef.current?.disconnect();
     fastapiSessionRef.current = null;
 
@@ -366,7 +608,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     }
     setDataChannel(null);
     setSessionStatus("DISCONNECTED");
-    setVoiceStatus("disconnected");
+    updateVoiceStatus("disconnected");
     setIsPTTUserSpeaking(false);
 
     logClientEvent({}, "disconnected");
@@ -505,6 +747,12 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
   };
 
   useEffect(() => {
+    const storedMicMode = parseMicMode(localStorage.getItem(MIC_MODE_STORAGE_KEY));
+    micModeRef.current = storedMicMode;
+    setMicMode(storedMicMode);
+  }, []);
+
+  useEffect(() => {
     const storedPushToTalkUI = localStorage.getItem("pushToTalkUI");
     if (storedPushToTalkUI) {
       setIsPTTActive(storedPushToTalkUI === "true");
@@ -595,6 +843,16 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
           isDoctor={isDoctor}
           supabase={supabase}
           voiceStatus={usesFastAPI ? voiceStatus : undefined}
+          micMode={usesFastAPI ? micMode : undefined}
+          isTalking={isTalking}
+          onTalkStart={usesFastAPI ? startTalking : undefined}
+          onTalkEnd={usesFastAPI ? stopTalking : undefined}
+          onToggleMicMode={
+            usesFastAPI
+              ? () => applyMicMode(micModeRef.current === "ptt" ? "hands_free" : "ptt")
+              : undefined
+          }
+          onRestartConversation={usesFastAPI ? restartConversation : undefined}
         />
       </div>
     </div>

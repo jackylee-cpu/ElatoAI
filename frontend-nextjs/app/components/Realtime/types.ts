@@ -2,6 +2,9 @@ export type SessionStatus = "DISCONNECTED" | "CONNECTING" | "CONNECTED";
 export type VoiceTurnStatus =
   | "disconnected"
   | "connecting"
+  // Connected with the mic closed: under push-to-talk this is the resting
+  // state between turns, not an error.
+  | "idle"
   | "listening"
   | "user_speaking"
   | "thinking"

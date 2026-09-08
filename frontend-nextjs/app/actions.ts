@@ -228,6 +228,47 @@ export const refreshDeviceSession = async () => {
     }
 };
 
+/**
+ * Make a memory deletion take effect on a device that is talking right now.
+ *
+ * Deleting the row is only half of it. The voice server keeps a working copy of
+ * the child's memory on its own disk and a snapshot in storage, and neither
+ * notices a row disappearing. Bumping `memories_revision` is the signal it
+ * checks at session start: a changed value means throw both caches away and
+ * rebuild from what is left in `memories`.
+ *
+ * Dropping the device session then forces that session start to happen within
+ * about a second, instead of whenever the toy next wakes up. Reuses the same
+ * mechanism a character switch already goes through.
+ */
+export const invalidateMemories = async () => {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return false;
+    }
+
+    // Read-then-write rather than an RPC: this runs once, on a human clicking
+    // delete, so a lost race would at worst repeat a rebuild.
+    const { data: row } = await supabase
+        .from("users")
+        .select("memories_revision")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+    const { error } = await supabase
+        .from("users")
+        .update({ memories_revision: (row?.memories_revision ?? 0) + 1 })
+        .eq("user_id", user.id);
+
+    if (error) {
+        return false;
+    }
+
+    await refreshDeviceSession();
+    return true;
+};
+
 export const fetchGithubStars = async (repo: string) => {
     try {
         const response = await fetch(`https://api.github.com/repos/${repo}`, {

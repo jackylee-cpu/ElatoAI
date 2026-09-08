@@ -8,6 +8,15 @@ static int16_t* buf_ = buf2;
 static unsigned long readAddress = 0;
 static unsigned long writeAddress = 0;
 
+void resetPitchShift() {
+  memset(buf1, 0, sizeof(buf1));
+  memset(buf2, 0, sizeof(buf2));
+  buf = buf1;
+  buf_ = buf2;
+  readAddress = 0;
+  writeAddress = 0;
+}
+
 bool PitchShiftFixedOutput::begin(PitchShiftInfo info) {
   TRACED();
   cfg = info;

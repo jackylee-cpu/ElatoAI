@@ -16,3 +16,6 @@ venv/
 .pytype/
 .idea/
 .vscode/
+
+# Local VoiceMem stores. Working cache only -- Supabase is the source of truth.
+voicemem_spaces/

@@ -198,6 +198,74 @@ For browser or Next.js testing, the server also exposes:
 - `/ws/browser`
 - `/ws/nextjs`
 
+## Local Development With A Board That Is Already Paired
+
+A board claimed by an account in the deployed setup does not need to be
+re-paired to talk to a server on your laptop. Two things make that work:
+
+- The device's auth token lives in the board's NVS, and `isDeviceRegistered()`
+  returns early whenever one is stored, so nothing re-registers.
+- Pairing itself lives in Supabase, not in this process: `device_registry.py`
+  resolves `devices.mac_address -> user -> personality` on every connection. Point
+  your local `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` at the **same project the
+  deployment uses** and the board resolves the same character, volume and
+  long-term memory it does in production. (Point them at a local Supabase instead
+  and the MAC is simply unknown: the session still runs, on the default
+  character.)
+
+So only the voice websocket has to move.
+
+**1. Check the server is reachable from the LAN.** `HOST` already defaults to
+`0.0.0.0`, so usually there is nothing to change -- but the board cannot reach
+`127.0.0.1`, so make sure your `.env` has not pinned `HOST` to loopback, and let
+macOS through its firewall prompt the first time. Verify from another machine (or
+your phone) before blaming the firmware:
+
+```bash
+curl -sS http://$(ipconfig getifaddr en0):7860/ -o /dev/null -w '%{http_code}\n'
+```
+
+**2. Flash the local-websocket build.** `firmware-arduino/platformio.ini` has a
+second environment for this. It overrides only the websocket host, so the auth
+token, OTA and factory reset still go to the deployed backend:
+
+```bash
+export AIBUDDY_DEV_WS_HOST=$(ipconfig getifaddr en0)   # macOS; your LAN IP
+cd firmware-arduino && pio run -e esp32-s3-devkitc-1-localws -t upload
+```
+
+The serial log prints what it is connecting to on every attempt, so you can see
+which server the board is on:
+
+```text
+[WS] connecting to ws://10.6.1.26:7860/ws/esp32
+```
+
+Flash `-e esp32-s3-devkitc-1` to put it back on the deployed server.
+
+### Faster still: skip the board
+
+Most server-side work does not need the hardware. The Next.js app speaks the same
+protocol over `/ws/nextjs`, so point it at your local server and iterate in a
+browser tab:
+
+```bash
+NEXT_PUBLIC_VOICE_BACKEND=fastapi NEXT_PUBLIC_FASTAPI_WS_URL=ws://127.0.0.1:7860/ws/nextjs npm run dev
+```
+
+The web client's push-to-talk button drives the same `INTERRUPT` / `end_of_speech`
+instructions the firmware sends, so turn-taking bugs reproduce there. Keep the
+board for what only it can show: audio quality, buffer starvation, buttons, sleep.
+
+### Known gaps while on a local server
+
+- **Changing character from the web app does not reach the board.** The web app
+  tells the *deployed* server to drop the device's session
+  (`/internal/device_refresh`), and your board's session is held by your laptop.
+  Restart the local server, or tap the touch pad, to pick up the change.
+- **Plain `ws://`.** The local build does not use TLS, so anything on the network
+  can read the audio. Fine for a home LAN, not for a shared one.
+
 ## How Provider Selection Works
 
 The classic route reads three env vars:

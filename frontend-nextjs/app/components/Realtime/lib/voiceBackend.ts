@@ -10,6 +10,13 @@ export type FastAPISessionParams = {
   characterPrompt?: string | null;
   voicePrompt?: string | null;
   firstMessagePrompt?: string | null;
+  // Who is talking. The voice server keys long-term memory on this, so a
+  // session without it simply runs with no memory rather than borrowing
+  // someone else's.
+  userId?: string | null;
+  // Which character said it, recorded on each stored memory for display. The
+  // memory itself is shared across characters -- it is the same child.
+  personalityKey?: string | null;
 };
 
 export function shouldUseFastAPIVoice(provider?: string | null) {
@@ -25,6 +32,8 @@ export function getFastAPIVoiceUrl(params?: FastAPISessionParams) {
   if (params?.firstMessagePrompt) {
     search.set("first_message_prompt", params.firstMessagePrompt);
   }
+  if (params?.userId) search.set("user_id", params.userId);
+  if (params?.personalityKey) search.set("personality_key", params.personalityKey);
   const qs = search.toString();
   if (!qs) {
     return FASTAPI_WS_URL;

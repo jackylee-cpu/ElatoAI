@@ -13,11 +13,7 @@ import {
     Luckiest_Guy,
 } from "next/font/google";
 import "./globals.css";
-import { createClient } from "@/utils/supabase/server";
 import { Toaster } from "@/components/ui/toaster";
-import { Analytics } from "@vercel/analytics/react";
-import Footer from "./components/Footer";
-import { fetchGithubStars } from "./actions";
 import { Metadata, Viewport } from "next";
 import NextTopLoader from "nextjs-toploader";
 import { GoogleAnalytics } from "@next/third-parties/google";
@@ -30,8 +26,6 @@ const karla = Karla({
 
 
 import Script from "next/script";
-import { Navbar } from "./components/Nav/Navbar";
-import { getUserById } from "@/db/users";
 
 const inter = Inter({
     subsets: ["latin"],
@@ -308,20 +302,6 @@ export default async function RootLayout({
 }: {
     children: React.ReactNode;
 }) {
-    const supabase = createClient();
-
-    const { stars } = await fetchGithubStars("akdeb/ElatoAI");
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-
-    let dbUser: IUser | undefined;
-    if (user) {
-        dbUser = await getUserById(supabase, user.id);
-    }
-
-
     return (
         <html
             lang="en"
@@ -340,21 +320,10 @@ export default async function RootLayout({
             </head>
             <body className="bg-background text-foreground flex flex-col min-h-screen bg-gray-50 font-karla">
                 <NextTopLoader showSpinner={false} color="#facc15" />
-
-                {/* <ThemeProvider
-                    attribute="class"
-                    defaultTheme="system"
-                    enableSystem
-                    disableTransitionOnChange
-                > */}
                 <main className="flex-grow mx-auto w-full flex flex-col">
-                    <Navbar user={dbUser ?? null} stars={stars} />
                     {children}
-                    <Footer />
                 </main>
-                {/* <Analytics /> */}
                 <Toaster />
-                {/* </ThemeProvider> */}
             </body>
             <GoogleAnalytics gaId="G-CR07NVH6CN" />
         </html>

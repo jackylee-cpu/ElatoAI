@@ -32,6 +32,12 @@ export const userFormAgeDescription =
     "Users under 13 years old must have a parent or guardian to setup Elato.";
 export const userFormNameLabel = "Your Name";
 
+export const memorySectionTitle = "What your toy remembers";
+export const memorySectionSubtitle =
+    "Things said out loud that the toy kept, so it can pick up where you left off. Memories are shared across every character. Delete any of them and it forgets for good.";
+export const memorySectionEmpty =
+    "Nothing remembered yet. After a few conversations, what your child tells the toy will show up here.";
+
 export const INITIAL_CREDITS = 50;
 export const SECONDS_PER_CREDIT = (30 * 60) / INITIAL_CREDITS; // 30 minutes equals 50 credits
 

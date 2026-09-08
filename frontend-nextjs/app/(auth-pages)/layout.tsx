@@ -12,8 +12,8 @@ export default async function Layout({
     children: React.ReactNode;
 }) {
     return (
-        <div className="flex flex-1 flex-col mx-auto w-full max-w-[1440px] min-h-screen items-center mt-16">
-        <div className="w-full flex justify-center">{children}</div>
-    </div>
+        <div className="flex min-h-dvh w-full flex-1 flex-col items-stretch bg-[#F2F4F7] md:items-center md:justify-center md:p-6 lg:p-10">
+            {children}
+        </div>
     );
 }

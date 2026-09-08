@@ -8,6 +8,7 @@ import { defaultPersonalityId, defaultToyId } from "@/lib/data";
 interface GoogleLoginButtonProps {
     toy_id?: string;
     personality_id?: string;
+    className?: string;
 }
 
 export const loginWithGoogle = async (
@@ -33,11 +34,12 @@ export const loginWithGoogle = async (
 export default function GoogleLoginButton({
     toy_id,
     personality_id,
+    className,
 }: GoogleLoginButtonProps) {
-    // console.log("1324355345435", toy_id);
     return (
         <Button
-            variant="default"
+            variant="outline"
+            className={className}
             onClick={() =>
                 loginWithGoogle(
                     toy_id ?? defaultToyId,
@@ -45,7 +47,7 @@ export default function GoogleLoginButton({
                 )
             }
         >
-            <FaGoogle className="w-4 h-4 mr-4" />
+            <FaGoogle className="mr-3 h-4 w-4" />
             <span>Continue with Google</span>
         </Button>
     );

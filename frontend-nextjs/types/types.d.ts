@@ -56,6 +56,12 @@ declare global {
         // device
         device?: IDevice;
         device_id: string | null;
+
+        // Bumped whenever a memory is deleted. The voice server compares it at
+        // session start and rebuilds the toy's memory when it has changed, so
+        // a deletion takes effect on a live device rather than at some later
+        // unspecified point.
+        memories_revision?: number;
     }
 
     type UserInfo =
@@ -85,6 +91,22 @@ declare global {
     interface IUserMetadata {}
 
     type Role = "user" | "assistant" | "doctor";
+
+    /**
+     * One thing the toy remembers, and what it answered at the time.
+     *
+     * Memory is deliberately not scoped per character: it is the same child
+     * whichever character they talk to. `source_personality_key` records where
+     * a memory came from, for display only.
+     */
+    interface IMemory {
+        memory_id: string;
+        content: string;
+        agent_reply: string | null;
+        kind: "fact" | "affect";
+        source_personality_key: string | null;
+        created_at: string;
+    }
 
     interface IConversation {
         conversation_id?: string;

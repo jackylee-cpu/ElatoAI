@@ -102,10 +102,11 @@ String authTokenGlobal;
 volatile DeviceState deviceState = IDLE;
 
 // I2S and Audio parameters
-// Output pipeline rate: Opus decodes any incoming stream to this rate, so the
-// server's encode rate (24kHz on the Deno/Cloudflare/FastAPI servers) doesn't
-// need to match. 48kHz drives the DAC/amp at its best-sounding rate.
-const uint32_t SAMPLE_RATE = 48000;
+// Output pipeline rate. Opus will decode to whatever rate we ask for, but the
+// servers encode at 24kHz, so asking for 48kHz is pure upsampling: no fidelity
+// to gain, and twice the bytes through the ring buffer and the I2S DMA. That
+// is what starved both of them and made every frame underrun.
+const uint32_t SAMPLE_RATE = 24000;
 const uint32_t MIC_SAMPLE_RATE = 16000;
 
 // ----------------- Pin Definitions -----------------
@@ -133,6 +134,20 @@ const int I2S_SD_OUT = 21;
 
 // Boot button. GPIO0 is RTC IO, which esp_sleep_enable_ext0_wakeup() requires.
 const gpio_num_t BUTTON_PIN = GPIO_NUM_0;
+
+// Volume rocker. Neither pin is RTC IO, so unlike BUTTON_PIN these cannot wake
+// the device from deep sleep -- they only work while it is awake.
+const gpio_num_t VOLUME_UP_PIN = GPIO_NUM_40;
+const gpio_num_t VOLUME_DOWN_PIN = GPIO_NUM_39;
+
+// TTP223 capacitive pad. It drives the line high on touch, so this one is
+// active-high, unlike the buttons above. Not RTC IO either, so it can put the
+// device to sleep but cannot wake it -- BUTTON_PIN does that.
+const gpio_num_t TOUCH_PAD_PIN = GPIO_NUM_47;
+
+// Status display. Nothing else on this board claims these two.
+const int I2C_SDA_PIN = 41;
+const int I2C_SCL_PIN = 42;
 
 
 // ----------------- SSL Certificates -----------------

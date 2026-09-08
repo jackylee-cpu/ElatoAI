@@ -1,20 +1,7 @@
-import Link from "next/link";
 import { headers } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
-import { SubmitButton } from "./submit-button";
-import { Separator } from "@/components/ui/separator";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Sparkles } from "lucide-react";
-import { Label } from "@/components/ui/label";
-import GoogleLoginButton from "../../components/GoogleLoginButton";
-import Image from "next/image";
+import LoginForm from "./LoginForm";
 
 interface LoginProps {
   searchParams?: { [key: string]: string | string[] | undefined };
@@ -24,15 +11,10 @@ export default async function Login({ searchParams }: LoginProps) {
   const toy_id = searchParams?.toy_id as string | undefined;
   const personality_id = searchParams?.personality_id as string | undefined;
   const isGoogleOAuthEnabled = process.env.GOOGLE_OAUTH === "True";
-  // const supabase = createClient();
-
-  // const {
-  //     data: { user },
-  // } = await supabase.auth.getUser();
-
-  // if (user) {
-  //     return redirect("/home");
-  // }
+  const message =
+    typeof searchParams?.message === "string"
+      ? searchParams.message
+      : undefined;
 
   const signInOrSignUp = async (formData: FormData) => {
     "use server";
@@ -41,18 +23,15 @@ export default async function Login({ searchParams }: LoginProps) {
     const password = formData.get("password") as string;
     const supabase = createClient();
 
-    // Try to sign in first
     const { error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    // If sign in succeeds, redirect to home
     if (!signInError) {
       return redirect("/home");
     }
 
-    // If sign in fails, try to sign up
     const origin = headers().get("origin");
     const { error: signUpError } = await supabase.auth.signUp({
       email,
@@ -70,84 +49,53 @@ export default async function Login({ searchParams }: LoginProps) {
       return redirect(`/login?message=${signUpError.message}`);
     }
 
-    // if (process.env.NEXT_PUBLIC_ENV === "local") {
-    //   return redirect("/login?message=Sussessfully signed up");
-    // } else {
-    //   return redirect("/login?message=Check email to continue sign in process");
-    // }
-
     return redirect("/login?message=Check email to continue sign in process");
   };
 
   return (
-    <div className="flex-1 flex flex-col w-full px-8 sm:max-w-md justify-center gap-2">
-      <Card className="shadow-md sm:bg-white bg-transparent shadow-none">
-        <CardHeader>
-          <CardTitle className="flex flex-row gap-1 items-center">
-            Login to Elato
-            <Sparkles size={20} fill="black" />
-          </CardTitle>
-          <CardDescription>
-            Login or sign up your account to continue
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          {/* <ToyPreview /> */}
+    <article className="flex min-h-dvh w-full flex-col overflow-hidden bg-white md:min-h-[560px] md:w-full md:max-w-[960px] md:flex-row md:rounded-[2rem] md:shadow-[0_24px_60px_rgba(107,103,255,0.12)]">
+      <header className="relative shrink-0 md:w-[46%] md:min-h-[560px]">
+        <div
+          aria-hidden
+          className="absolute inset-0 bg-gradient-to-b from-[#EEF0FF] via-[#F3F5FC] to-white md:bg-gradient-to-br md:from-[#E8EAFF] md:via-[#F4F6FB] md:to-[#EEF7FF]"
+        />
+        <div
+          aria-hidden
+          className="absolute inset-0 bg-[url('/brand/login-hero.png')] bg-[length:130%_auto] bg-[center_bottom] bg-no-repeat md:bg-cover md:bg-[right_center]"
+        />
+        <div
+          aria-hidden
+          className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-white to-transparent md:hidden"
+        />
 
-          {isGoogleOAuthEnabled && (
-            <GoogleLoginButton
-              toy_id={toy_id}
-              personality_id={personality_id}
-            />
-          )}
+        <div className="relative z-10 px-6 pb-2 pt-10 md:px-10 md:pt-10">
+          <h1 className="text-[1.875rem] font-bold leading-none tracking-tight md:text-[2.125rem]">
+            <span className="relative inline-block bg-gradient-to-r from-[#6B67FF] to-[#4DA6FF] bg-clip-text pr-2 text-transparent">
+              Ai
+              <span
+                aria-hidden
+                className="absolute -right-0.5 -top-1 text-[10px] text-[#6B67FF]"
+              >
+                ✦
+              </span>
+            </span>
+            <span className="text-[#1A1C2B]">Buddy</span>
+          </h1>
+          <p className="mt-2 max-w-[240px] text-[13px] leading-5 text-[#8B90A0] md:max-w-[280px] md:text-sm md:leading-6">
+            Your AI toy companion, always here to learn and play with you.
+          </p>
+        </div>
 
-           <Separator className="mt-2" />
-           <span className="text-sm text-gray-500">If you've got your DB running locally, you can login with: <br/><span className="font-bold">Email</span> admin@elatoai.com<br /><span className="font-bold">Password</span> admin</span>
-         
-          <form className="flex-1 flex flex-col w-full justify-center gap-4">
-            <Label className="text-md" htmlFor="email">
-              Email
-            </Label>
-            <input
-              className="rounded-md px-4 py-2 bg-inherit border"
-              name="email"
-              placeholder="you@example.com"
-              required
-            />
-            <Label className="text-md" htmlFor="email">
-              Password
-            </Label>
+        <div className="relative h-40 w-full sm:h-48 md:hidden" />
+      </header>
 
-            <input
-              className="rounded-md px-4 py-2 bg-inherit border"
-              type="password"
-              name="password"
-              placeholder="••••••••"
-              required
-            />
-
-            <Link
-              className="text-xs text-foreground underline"
-              href="/forgot-password"
-            >
-              Forgot Password?
-            </Link>
-
-            <SubmitButton
-              formAction={signInOrSignUp}
-              className="text-sm font-medium bg-gray-100 hover:bg-gray-50 dark:text-stone-900 border-[0.1px] rounded-md px-4 py-2 text-foreground my-2"
-              pendingText="Signing In..."
-            >
-              Continue with Email
-            </SubmitButton>
-            {searchParams?.message && (
-              <p className="p-4 rounded-md border bg-green-50 border-green-400 text-gray-900 text-center text-sm">
-                {searchParams.message}
-              </p>
-            )}
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+      <LoginForm
+        formAction={signInOrSignUp}
+        message={message}
+        toy_id={toy_id}
+        personality_id={personality_id}
+        isGoogleOAuthEnabled={isGoogleOAuthEnabled}
+      />
+    </article>
   );
 }
