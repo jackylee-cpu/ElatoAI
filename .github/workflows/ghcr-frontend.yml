@@ -21,7 +21,11 @@ jobs:
   # The image is only worth publishing once the schema it expects is live.
   migrate:
     uses: ./.github/workflows/supabase-migrate.yml
-    secrets: inherit
+    secrets:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
 
   build-and-push:
     needs: migrate
