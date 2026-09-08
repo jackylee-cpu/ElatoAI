@@ -27,6 +27,7 @@ from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     ErrorFrame,
     Frame,
+    InputAudioRawFrame,
     InputTransportMessageFrame,
     InterruptionFrame,
     InterimTranscriptionFrame,
@@ -37,6 +38,7 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     OutputTransportMessageFrame,
     OutputTransportMessageUrgentFrame,
+    StartFrame,
     STTMuteFrame,
     TranscriptionFrame,
     TTSStoppedFrame,
@@ -302,15 +304,47 @@ class TranscriptForwardProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+# A push-to-talk client stops sending audio the instant the button comes up, and
+# Azure's endpointer counts its phrase timeout (silence_ms=600) in *received*
+# audio, not wall clock. With nothing arriving the timer never advances, the
+# recognizer sits on the phrase, and the final transcript never lands: measured
+# on hardware, one utterance stayed unfinalized for thirteen seconds until an
+# interrupt happened to shake it loose. Feeding it the trailing silence the
+# client stopped sending is what closes the phrase.
+#
+# It costs nothing to send: the endpointer runs on stream time, so these zeros
+# go in as fast as the queue takes them -- 1500ms of audio in about 1ms of wall
+# clock -- and the phrase finalizes immediately.
+STT_FLUSH_SILENCE_MS = int(os.getenv("STT_FLUSH_SILENCE_MS", "1500"))
+_FLUSH_CHUNK_MS = 20
+
+
 class RealtimeInputControlProcessor(FrameProcessor):
     """Bridge incoming websocket control messages into Pipecat frames."""
 
     def __init__(self, voice_route: str):
         super().__init__()
         self._voice_route = voice_route
+        self._audio_in_sample_rate: int | None = None
+
+    async def _flush_stt_with_silence(self):
+        """Give the recognizer the trailing silence the client stopped sending."""
+        rate = self._audio_in_sample_rate
+        if not rate or STT_FLUSH_SILENCE_MS <= 0:
+            return
+        samples = int(rate * _FLUSH_CHUNK_MS / 1000)
+        chunk = b"\x00" * (samples * 2)  # 16-bit mono
+        for _ in range(STT_FLUSH_SILENCE_MS // _FLUSH_CHUNK_MS):
+            await self.push_frame(
+                InputAudioRawFrame(audio=chunk, sample_rate=rate, num_channels=1),
+                FrameDirection.DOWNSTREAM,
+            )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+
+        if isinstance(frame, StartFrame):
+            self._audio_in_sample_rate = frame.audio_in_sample_rate
 
         if isinstance(frame, InputTransportMessageFrame):
             message = frame.message if isinstance(frame.message, dict) else {}
@@ -337,10 +371,13 @@ class RealtimeInputControlProcessor(FrameProcessor):
                     # Nothing is lost by dropping it. The mute existed to stop
                     # trailing audio reopening the turn, but only the ESP32
                     # sends end_of_speech and it closes its own mic on release,
-                    # so no trailing audio arrives. Turn closure is unaffected:
-                    # this aggregator has no ExternalUserTurnStopStrategy, so
-                    # the frame above never closed the turn anyway -- the VAD's
-                    # audio_idle_timeout does, about a second later.
+                    # so no trailing audio arrives; the browser client never
+                    # sends it at all.
+                    #
+                    # Order matters: the silence has to reach STT before the
+                    # frame that closes the turn, or the aggregator finishes a
+                    # turn whose transcript has not been emitted yet.
+                    await self._flush_stt_with_silence()
                     await self.push_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
                 return
 

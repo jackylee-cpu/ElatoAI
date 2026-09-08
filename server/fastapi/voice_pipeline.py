@@ -14,8 +14,38 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.turns.user_stop import ExternalUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import (
+    UserTurnStrategies,
+    default_user_turn_start_strategies,
+    default_user_turn_stop_strategies,
+)
+
+
+def build_user_turn_strategies() -> UserTurnStrategies:
+    """Turn strategies for a pipeline serving both push-to-talk and open-mic clients."""
+    # A push-to-talk client closes its own turn: the button comes up, the client
+    # sends `end_of_speech`, and bot.py turns that into a
+    # UserStoppedSpeakingFrame. Pipecat's default stop strategy is the smart-turn
+    # analyzer, which decides the turn is over by looking at the audio that
+    # *follows* the speech -- audio a push-to-talk client stops sending the
+    # instant it commits. It therefore never closes a PTT turn on its own: it
+    # reports EndOfTurnState.INCOMPLETE and the turn limps shut on a five second
+    # timeout instead, or not at all. ExternalUserTurnStopStrategy is the
+    # strategy that listens for that explicit frame.
+    #
+    # The default is kept alongside it so an open-mic client (the web app's
+    # hands-free mode) still gets its turns closed for it; strategies are
+    # evaluated in order and this one always returns CONTINUE, so the analyzer
+    # keeps seeing every frame. Turn *start* is left on VAD, which works for
+    # both kinds of client.
+    return UserTurnStrategies(
+        start=default_user_turn_start_strategies(),
+        stop=[ExternalUserTurnStopStrategy(), *default_user_turn_stop_strategies()],
+    )
 
 
 def build_voice_pipeline(
@@ -68,7 +98,10 @@ def build_voice_pipeline(
     vad = VADProcessor(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
     )
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(user_turn_strategies=build_user_turn_strategies()),
+    )
 
     processors = [input_processor, vad, stt]
     if extra_after_stt is not None:
