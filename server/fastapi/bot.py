@@ -323,8 +323,25 @@ class RealtimeInputControlProcessor(FrameProcessor):
                 else:
                     # Pipecat 1.7 removed EmulateUserStoppedSpeakingFrame; the
                     # ESP32 end-of-speech signal now maps to UserStoppedSpeakingFrame.
+                    #
+                    # No STTMuteFrame(mute=True) follows it. Muting here raced
+                    # the recognizer: Azure emits its final transcript a beat
+                    # after the audio stops, and a mute that lands first drops
+                    # it. The turn then has no transcript, the aggregator never
+                    # runs the LLM, and the device sits in PROCESSING until
+                    # something else unmutes STT -- which in practice meant the
+                    # user pressing interrupt, at which point the answer they
+                    # had given up on finally played. Measured on hardware
+                    # 2026-09-08: three of four turns died this way.
+                    #
+                    # Nothing is lost by dropping it. The mute existed to stop
+                    # trailing audio reopening the turn, but only the ESP32
+                    # sends end_of_speech and it closes its own mic on release,
+                    # so no trailing audio arrives. Turn closure is unaffected:
+                    # this aggregator has no ExternalUserTurnStopStrategy, so
+                    # the frame above never closed the turn anyway -- the VAD's
+                    # audio_idle_timeout does, about a second later.
                     await self.push_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
-                    await self.push_frame(STTMuteFrame(mute=True), FrameDirection.DOWNSTREAM)
                 return
 
             if msg_type == "instruction" and msg == "INTERRUPT":
