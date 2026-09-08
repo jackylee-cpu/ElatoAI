@@ -38,7 +38,7 @@
 // booted under an older scheme wipe their token once on the next boot; without
 // that, isDeviceRegistered() short-circuits on the stale token and the device
 // never re-registers against its real account.
-#define PROVISION_VERSION 2
+#define PROVISION_VERSION 3
 
 extern Preferences preferences;
 extern bool factory_reset_status;
@@ -96,6 +96,14 @@ extern const int RED_LED_PIN;
 extern const int GREEN_LED_PIN;
 
 extern const gpio_num_t BUTTON_PIN;
+extern const gpio_num_t VOLUME_UP_PIN;
+extern const gpio_num_t VOLUME_DOWN_PIN;
+extern const gpio_num_t TOUCH_PAD_PIN;
+
+// I2C for the status display. Free on this kit and the pair the xiaozhi
+// bread-compact-wifi design uses for its OLED.
+extern const int I2C_SDA_PIN;
+extern const int I2C_SCL_PIN;
 
 // I2S Microphone pins
 extern const int I2S_SD;

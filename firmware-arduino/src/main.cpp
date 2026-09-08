@@ -1,9 +1,16 @@
+#include "AudioSelfTest.h"
 #include "Button.h"
+#include "Display.h"
 #include "FactoryReset.h"
 #include "LEDHandler.h"
 #include "OTA.h"
 #include "WifiManager.h"
+#include <driver/rtc_io.h>
 #include <driver/touch_sensor.h>
+#include <esp_heap_caps.h>
+#include <esp_sleep.h>
+#include <esp_system.h>
+#include <esp_wifi.h>
 
 #define TOUCH_THRESHOLD 28000
 #define REQUIRED_RELEASE_CHECKS                                                \
@@ -20,17 +27,27 @@ esp_err_t getErr = ESP_OK;
 // Main Thread -> loop() (inactivity timeout) -> enterSleep()
 void enterSleep() {
   Serial.println("Going to sleep...");
+  displaySleep();
 
   // First, change device state to prevent any new data processing
   deviceState = SLEEP;
-  scheduleListeningRestart = false;
+  scheduleIdleAfterTurn = false;
   i2sOutputFlushScheduled = true;
   i2sInputFlushScheduled = true;
-  vTaskDelay(10); // let all tasks accept state
+
+  // audioStreamTask answers i2sOutputFlushScheduled by fading the output down
+  // and writing that fade to I2S. Tearing the driver out from under a task that
+  // is inside i2s_write() is a crash, so wait for the fade to report itself
+  // done, then stop the two tasks that can touch I2S at all.
+  for (int i = 0; i < 40 && i2sOutputFlushScheduled; i++) {
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+  vTaskDelay(pdMS_TO_TICKS(20));
+  if (speakerTaskHandle != NULL) vTaskSuspend(speakerTaskHandle);
+  if (micTaskHandle != NULL) vTaskSuspend(micTaskHandle);
 
   xSemaphoreTake(wsMutex, portMAX_DELAY);
 
-  // Stop audio tasks first
   i2s_stop(I2S_PORT_IN);
   i2s_stop(I2S_PORT_OUT);
 
@@ -46,8 +63,40 @@ void enterSleep() {
   i2s_driver_uninstall(I2S_PORT_IN);
   i2s_driver_uninstall(I2S_PORT_OUT);
 
+  // The amp has no usable SD pin on this kit (Config.cpp), so drive the spare
+  // line and the LEDs low rather than leaving them wherever the last state put
+  // them: a pin left driven is current drawn for the whole sleep.
+  digitalWrite(I2S_SD_OUT, LOW);
+  digitalWrite(BLUE_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(GREEN_LED_PIN, LOW);
+
+  // Stop the radio properly. esp_deep_sleep_start() does not do this for us,
+  // and a running station leaves the RF and its clocks up until the very last
+  // moment.
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  esp_wifi_stop();
+
+  // ext0 moves BUTTON_PIN onto the RTC mux, and the pull-up that pinMode() set
+  // in the digital domain does not come with it. Without this the pad floats
+  // through deep sleep, reads as the LOW we are waking on, and the device wakes
+  // roughly a second after it went down -- which is the two-minute "restart"
+  // followed by an unasked-for greeting.
+  rtc_gpio_pullup_en(BUTTON_PIN);
+  rtc_gpio_pulldown_dis(BUTTON_PIN);
+
+  // And a press still being held would satisfy ext0 the instant we sleep.
+  for (int i = 0; i < 100 && gpio_get_level(BUTTON_PIN) == 0; i++) {
+    delay(50);
+  }
+
+  Serial.printf("Sleeping. Wake on GPIO%d going low. Button reads %d (expect 1)\n",
+                (int)BUTTON_PIN, gpio_get_level(BUTTON_PIN));
+
   // Flush any remaining serial output
   Serial.flush();
+  delay(50);
 
 #ifdef TOUCH_MODE
   touch_pad_intr_disable(TOUCH_PAD_INTR_MASK_ALL);
@@ -60,6 +109,24 @@ void enterSleep() {
 
   esp_deep_sleep_start();
   delay(1000);
+}
+
+// Idle long enough and the device sleeps. Only from the two states that mean
+// "nobody is doing anything": SOFT_AP has someone half way through wifi setup,
+// OTA is mid-update, and SPEAKING/LISTENING are self-evidently in use.
+// PROCESSING counts because a turn the server never answers would otherwise
+// keep the device awake forever.
+static const unsigned long IDLE_SLEEP_MS = 2 * 60 * 1000;
+
+static void checkIdleTimeout() {
+  if (deviceState != IDLE && deviceState != PROCESSING) {
+    return;
+  }
+  if (millis() - lastActivityAt < IDLE_SLEEP_MS) {
+    return;
+  }
+  Serial.printf("Idle for %lus, going to sleep\n", IDLE_SLEEP_MS / 1000);
+  sleepRequested = true;
 }
 
 void processSleepRequest() {
@@ -88,16 +155,56 @@ void printOutESP32Error(esp_err_t err) {
   }
 }
 
-static void onButtonLongPressUpEventCb(void *button_handle, void *usr_data) {
-  Serial.println("Button long press end");
-  delay(10);
+// Push-to-talk on the boot button: hold to speak, release to send. These only
+// raise flags -- networkTask owns wsMutex and does the sending.
+static void onPttDownCb(void *button_handle, void *usr_data) {
+  pttHeld = true;
+  pttPressRequested = true;
+  noteActivity();
+}
+
+static void onPttUpCb(void *button_handle, void *usr_data) {
+  pttHeld = false;
+  pttReleaseRequested = true;
+  noteActivity();
+}
+
+// Touch pad: tap starts a fresh conversation, holding it puts the device to
+// sleep. Sleep lives here rather than on the boot button so it can never be
+// triggered by a mis-timed push-to-talk press.
+static void onTouchTapCb(void *button_handle, void *usr_data) {
+  conversationResetRequested = true;
+  noteActivity();
+}
+
+static void onTouchLongPressCb(void *button_handle, void *usr_data) {
+  Serial.println("Touch held, going to sleep");
   sleepRequested = true;
 }
 
-static void onButtonDoubleClickCb(void *button_handle, void *usr_data) {
-  Serial.println("Button double click");
-  delay(10);
-  sleepRequested = true;
+static const int VOLUME_STEP = 10;
+
+static void onVolumeUpCb(void *button_handle, void *usr_data) {
+  nudgeVolume(VOLUME_STEP);
+  noteActivity();
+}
+
+static void onVolumeDownCb(void *button_handle, void *usr_data) {
+  nudgeVolume(-VOLUME_STEP);
+  noteActivity();
+}
+
+// Button(pin, false) selects active-low, which is what a button wired to GND
+// needs, but it also enables an internal pulldown that would hold the line
+// active forever. GPIO0 gets away with it because the board pulls it up
+// externally; these two need the pull-up forced on.
+static Button *attachVolumeButton(gpio_num_t pin, callbackFunction cb) {
+  Button *button = new Button(pin, false);
+  gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
+  button->attachSingleClickEventCb(cb, NULL);
+  // Repeats while held, so holding ramps the volume instead of needing taps.
+  button->attachLongPressHoldEventCb(cb, NULL);
+  return button;
 }
 
 void getAuthTokenFromNVS() {
@@ -172,6 +279,8 @@ void setupDeviceMetadata() {
 
   deviceState = IDLE;
 
+  loadStoredVolume();
+
   // Tokens minted under an older provisioning scheme are still accepted by
   // isDeviceRegistered(), which returns early on any stored token. Clear once
   // so this board registers itself again and can be claimed by a real account.
@@ -198,9 +307,63 @@ void setupDeviceMetadata() {
   }
 }
 
+// The panic handler prints to UART0, which this board does not break out, so a
+// crash reaches the USB console only as a re-enumeration with no message. The
+// reset reason recorded for the next boot is the one thing that survives it.
+static const char *wakeCauseName(esp_sleep_wakeup_cause_t cause) {
+  switch (cause) {
+  case ESP_SLEEP_WAKEUP_UNDEFINED: return "not a sleep wake";
+  case ESP_SLEEP_WAKEUP_EXT0: return "EXT0 (button)";
+  case ESP_SLEEP_WAKEUP_EXT1: return "EXT1";
+  case ESP_SLEEP_WAKEUP_TIMER: return "timer";
+  case ESP_SLEEP_WAKEUP_TOUCHPAD: return "touchpad";
+  case ESP_SLEEP_WAKEUP_ULP: return "ULP";
+  case ESP_SLEEP_WAKEUP_GPIO: return "GPIO";
+  case ESP_SLEEP_WAKEUP_UART: return "UART";
+  default: return "other";
+  }
+}
+
+static const char *resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+  case ESP_RST_POWERON: return "power-on";
+  case ESP_RST_SW: return "software";
+  case ESP_RST_PANIC: return "PANIC (exception)";
+  case ESP_RST_INT_WDT: return "interrupt watchdog";
+  case ESP_RST_TASK_WDT: return "task watchdog";
+  case ESP_RST_WDT: return "other watchdog";
+  case ESP_RST_DEEPSLEEP: return "deep sleep wake";
+  case ESP_RST_BROWNOUT: return "BROWNOUT (supply dipped)";
+  case ESP_RST_EXT: return "external reset";
+  default: return "unknown";
+  }
+}
+
+// TinyUSB CDC only starts carrying bytes once the host has enumerated the
+// device, which takes about a second -- longer than it takes setup() to print.
+// Every boot line, the reset reason included, was being written into a port
+// nobody had opened yet. Keep the banner and print it a second time once the
+// host has had a chance to attach.
+static char bootBanner[192] = "";
+static bool bootBannerReprinted = false;
+
 void setup() {
   Serial.begin(115200);
   delay(500);
+
+  snprintf(bootBanner, sizeof(bootBanner),
+           "=== Boot: %s | wake: %s | heap %u | largest block %u | psram %u ===",
+           resetReasonName(esp_reset_reason()),
+           wakeCauseName(esp_sleep_get_wakeup_cause()), ESP.getFreeHeap(),
+           heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+           heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+  Serial.printf("\n%s\n", bootBanner);
+
+#ifdef AUDIO_SELFTEST
+  // The `-audiotest` environment stops here: nothing else in setup() runs, so
+  // no radio, no websocket and no decoder can contribute to what you hear.
+  runAudioSelfTest();  // never returns
+#endif
 
   // SETUP
   setupDeviceMetadata();
@@ -214,10 +377,26 @@ void setup() {
   getErr = esp_sleep_enable_ext0_wakeup(BUTTON_PIN, LOW);
   printOutESP32Error(getErr);
   Button *btn = new Button(BUTTON_PIN, false);
-  btn->attachLongPressUpEventCb(&onButtonLongPressUpEventCb, NULL);
-  btn->attachDoubleClickEventCb(&onButtonDoubleClickCb, NULL);
-  btn->detachSingleClickEvent();
+  btn->attachPressDownEventCb(&onPttDownCb, NULL);
+  btn->attachPressUpEventCb(&onPttUpCb, NULL);
 #endif
+
+  attachVolumeButton(VOLUME_UP_PIN, &onVolumeUpCb);
+  attachVolumeButton(VOLUME_DOWN_PIN, &onVolumeDownCb);
+
+  // The TTP223 drives its output high on touch, so this one is active-high.
+  // Force a pulldown afterwards: if the pad is not actually wired, the line
+  // then reads idle instead of looking permanently touched, which would
+  // otherwise reset the conversation in a loop.
+  Button *touchPad = new Button(TOUCH_PAD_PIN, true);
+  gpio_set_pull_mode(TOUCH_PAD_PIN, GPIO_PULLDOWN_ONLY);
+  touchPad->attachSingleClickEventCb(&onTouchTapCb, NULL);
+  touchPad->attachLongPressStartEventCb(&onTouchLongPressCb, NULL);
+  Serial.printf("Touch pad GPIO%d idle level: %d (expect 0)\n", (int)TOUCH_PAD_PIN,
+                gpio_get_level(TOUCH_PAD_PIN));
+
+  displaySetup();
+  noteActivity();
 
   // Pin audio tasks to Core 1 (application core)
   xTaskCreatePinnedToCore(ledTask,    // Function
@@ -233,9 +412,9 @@ void setup() {
                           "Speaker Task",  // Name
                           4096,            // Stack size
                           NULL,            // Parameters
-                          3,               // Priority
-                          NULL,            // Handle
-                          1                // Core 1 (application core)
+                          3,                   // Priority
+                          &speakerTaskHandle,  // Handle
+                          1                    // Core 1 (application core)
   );
 
   xTaskCreatePinnedToCore(micTask,           // Function
@@ -243,8 +422,19 @@ void setup() {
                           4096,              // Stack size
                           NULL,              // Parameters
                           4,                 // Priority
-                          NULL,              // Handle
+                          &micTaskHandle,    // Handle
                           1                  // Core 1 (application core)
+  );
+
+  // Lowest priority on the application core: the audio tasks above must always
+  // win, and a dropped redraw costs nothing.
+  xTaskCreatePinnedToCore(displayTask,    // Function
+                          "Display Task", // Name
+                          4096,           // Stack size
+                          NULL,           // Parameters
+                          1,              // Priority
+                          NULL,           // Handle
+                          1               // Core 1 (application core)
   );
 
   // Pin network task to Core 0 (protocol core)
@@ -262,6 +452,11 @@ void setup() {
 }
 
 void loop() {
+  if (!bootBannerReprinted && millis() > 4000) {
+    bootBannerReprinted = true;
+    Serial.printf("(replay) %s\n", bootBanner);
+  }
+  checkIdleTimeout();
   processSleepRequest();
   if (otaState == OTA_IN_PROGRESS) {
     loopOTA();

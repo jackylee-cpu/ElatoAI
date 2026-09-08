@@ -3,6 +3,12 @@
 
 #include "AudioTools.h"
 
+// The grain buffers below are file-static and survive a turn, so without this
+// the first 1024 samples of every response are replayed from the answer before
+// it -- a burst of garbage at the start of each turn. Called on every entry to
+// and exit from SPEAKING.
+void resetPitchShift();
+
 //pitch shift effect with interpolaion fixed to 1.5 frequency factor, fixed delay, int16_t, 1 channel
 class PitchShiftFixedOutput : public AudioOutput {
 public:
