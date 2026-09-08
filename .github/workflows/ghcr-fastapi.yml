@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - "server/fastapi/**"
+      - "supabase/migrations/**"
       - ".github/workflows/ghcr-fastapi.yml"
+      - ".github/workflows/supabase-migrate.yml"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +18,13 @@ env:
   IMAGE_NAME: fastapi
 
 jobs:
+  # The image is only worth publishing once the schema it expects is live.
+  migrate:
+    uses: ./.github/workflows/supabase-migrate.yml
+    secrets: inherit
+
   build-and-push:
+    needs: migrate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

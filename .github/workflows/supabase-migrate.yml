@@ -1,0 +1,50 @@
+name: Apply Supabase migrations
+
+# Schema first, image second. Both build workflows call this and gate on it, so
+# a migration that fails means no new image gets published -- the alternative is
+# the failure mode this repo already hit twice: new code on main, old columns in
+# the database, and a 42703 in production.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+# A commit touching both frontend and server triggers both build workflows, and
+# each calls this one. `db push` writes the migration history table, so two at
+# once can interleave. Serialise instead of cancelling: a cancelled push can
+# leave that history half written, which is worse than waiting.
+concurrency:
+  group: supabase-migrate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project
+        run: supabase link --yes --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
+      # Printed before and after so a failed run shows which migration stopped
+      # it, and a successful one leaves a record of what actually got applied.
+      - name: Pending migrations
+        run: supabase migration list --linked
+
+      - name: Push migrations
+        run: supabase db push --linked --yes
+
+      - name: Resulting state
+        if: always()
+        run: supabase migration list --linked
