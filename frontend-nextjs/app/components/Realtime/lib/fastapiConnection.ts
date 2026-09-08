@@ -104,6 +104,14 @@ export class FastAPIVoiceSession {
   private outputNode: ScriptProcessorNode | null = null;
   private outputQueue: Float32Array[] = [];
   private handlers: FastAPIVoiceHandlers;
+  // The mic starts closed and only the caller opens it. Streaming from the
+  // moment the socket comes up is what let the greeting interrupt itself: the
+  // server's VAD hears the room (or the answer leaking back through the
+  // speakers) and closes a user turn nobody took.
+  private micOpen = false;
+  private levelSum = 0;
+  private levelCount = 0;
+  private levelPeak = 0;
 
   constructor(handlers: FastAPIVoiceHandlers) {
     this.handlers = handlers;
@@ -148,7 +156,65 @@ export class FastAPIVoiceSession {
     }
   }
 
+  /** Start streaming the mic, and reset the level meter for this press. */
+  openMic() {
+    this.levelSum = 0;
+    this.levelCount = 0;
+    this.levelPeak = 0;
+    this.micOpen = true;
+  }
+
+  closeMic() {
+    this.micOpen = false;
+  }
+
+  get isMicOpen() {
+    return this.micOpen;
+  }
+
+  /**
+   * Mean and peak |sample| (0-32767) since the last openMic(). Mean rather
+   * than peak alone: one keyboard click or a knock on the desk lifts the peak
+   * without there being any speech to transcribe.
+   */
+  micLevel() {
+    return {
+      average: this.levelCount === 0 ? 0 : this.levelSum / this.levelCount,
+      peak: this.levelPeak,
+    };
+  }
+
+  /** Barge-in: the server maps this to an InterruptionFrame. */
+  sendInterrupt() {
+    this.sendJson({ type: "instruction", msg: "INTERRUPT" });
+  }
+
+  /**
+   * Close the user turn now. The server maps this to a
+   * UserStoppedSpeakingFrame (bot.py RealtimeInputControlProcessor), which is
+   * what the VAD would otherwise have to infer from a tail of silence.
+   */
+  sendEndOfSpeech() {
+    this.sendJson({ type: "instruction", msg: "end_of_speech" });
+  }
+
+  /** Drop TTS audio already queued locally, so a barge-in goes quiet at once. */
+  clearPlayback() {
+    this.outputQueue = [];
+  }
+
+  /**
+   * How much decoded audio is still waiting to be played, in ms. The server
+   * declares the turn over when TTS stops, which is a few hundred ms before
+   * the last packet actually leaves the speakers.
+   */
+  queuedPlaybackMs() {
+    const samples = this.outputQueue.reduce((total, chunk) => total + chunk.length, 0);
+    return (samples / OUTPUT_SAMPLE_RATE) * 1000;
+  }
+
   disconnect() {
+    this.micOpen = false;
     this.ws?.close();
     this.captureNode?.disconnect();
     this.sourceNode?.disconnect();
@@ -165,9 +231,27 @@ export class FastAPIVoiceSession {
   }
 
   private sendPcm(buffer: ArrayBuffer) {
+    // The capture graph runs for the whole session; whether its samples reach
+    // the server is decided here, by whoever owns the mic.
+    if (!this.micOpen) return;
+    this.accumulateLevel(buffer);
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(buffer);
     }
+  }
+
+  private accumulateLevel(buffer: ArrayBuffer) {
+    const samples = new Int16Array(buffer);
+    let sum = 0;
+    let peak = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const magnitude = Math.abs(samples[i]);
+      sum += magnitude;
+      if (magnitude > peak) peak = magnitude;
+    }
+    this.levelSum += sum;
+    this.levelCount += samples.length;
+    if (peak > this.levelPeak) this.levelPeak = peak;
   }
 
   private async createCaptureNode(ctx: AudioContext) {

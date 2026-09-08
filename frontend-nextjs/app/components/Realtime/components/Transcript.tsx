@@ -2,10 +2,11 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { TranscriptItem, VoiceTurnStatus } from "@/app/components/Realtime/types";
+import { MicMode } from "@/app/components/Realtime/lib/micMode";
 import Image from "next/image";
 import { useTranscript } from "@/app/components/Realtime/contexts/TranscriptContext";
 import { getPersonalityImageSrc } from "@/lib/utils";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Mic, RotateCcw } from "lucide-react";
 import { dbInsertTranscriptItem } from "@/db/conversations";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { EmojiComponent } from "../../Playground/EmojiImage";
@@ -20,11 +21,18 @@ export interface TranscriptProps {
   isDoctor: boolean;
   supabase: SupabaseClient;
   voiceStatus?: VoiceTurnStatus;
+  micMode?: MicMode;
+  isTalking?: boolean;
+  onTalkStart?: () => void;
+  onTalkEnd?: () => void;
+  onToggleMicMode?: () => void;
+  onRestartConversation?: () => void;
 }
 
 const VOICE_STATUS_LABELS: Record<VoiceTurnStatus, string> = {
   disconnected: "",
   connecting: "Connecting…",
+  idle: "Hold to talk",
   listening: "Listening",
   user_speaking: "Hearing you…",
   thinking: "Thinking…",
@@ -57,6 +65,12 @@ function Transcript({
   isDoctor,
   supabase,
   voiceStatus,
+  micMode,
+  isTalking = false,
+  onTalkStart,
+  onTalkEnd,
+  onToggleMicMode,
+  onRestartConversation,
 }: TranscriptProps) {
   const { transcriptItems, toggleTranscriptItemExpand } = useTranscript();
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -239,19 +253,81 @@ function Transcript({
         </div>
       )}
       {voiceStatus && voiceStatus !== "disconnected" && (
-        <div className="sticky bottom-0 px-4 py-3 border-t border-gray-200 bg-gray-50 text-sm text-gray-600 flex items-center gap-2">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              voiceStatus === "speaking" || voiceStatus === "user_speaking"
-                ? "bg-green-500"
-                : voiceStatus === "thinking" || voiceStatus === "connecting"
-                  ? "bg-amber-500"
-                  : "bg-blue-500"
-            }`}
-          />
-          {VOICE_STATUS_LABELS[voiceStatus]}
-          {liveElapsed && voiceStatus === "user_speaking" && (
-            <span className="ml-auto font-mono text-xs text-gray-500">{liveElapsed}</span>
+        <div className="sticky bottom-0 px-4 py-3 border-t border-gray-200 bg-gray-50 flex flex-col gap-3">
+          <div className="text-sm text-gray-600 flex items-center gap-2">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                voiceStatus === "speaking" || voiceStatus === "user_speaking"
+                  ? "bg-green-500"
+                  : voiceStatus === "thinking" || voiceStatus === "connecting"
+                    ? "bg-amber-500"
+                    : "bg-blue-500"
+              }`}
+            />
+            {VOICE_STATUS_LABELS[voiceStatus]}
+            {liveElapsed && voiceStatus === "user_speaking" && (
+              <span className="ml-auto font-mono text-xs text-gray-500">{liveElapsed}</span>
+            )}
+          </div>
+
+          {onTalkStart && onTalkEnd && (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                // Pointer capture keeps the release on this button even if the
+                // finger slides off it mid-sentence, so the mic cannot be left
+                // open by a sloppy drag.
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  onTalkStart();
+                }}
+                onPointerUp={(e) => {
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                  onTalkEnd();
+                }}
+                onPointerCancel={() => onTalkEnd()}
+                onContextMenu={(e) => e.preventDefault()}
+                disabled={voiceStatus === "connecting"}
+                className={`flex-1 select-none touch-none rounded-full px-4 py-3 text-base font-medium shadow-sm flex items-center justify-center gap-2 transition-colors ${
+                  isTalking
+                    ? "bg-red-600 text-white"
+                    : "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400"
+                }`}
+              >
+                <Mic size={18} />
+                {isTalking ? "Release to send" : "Hold to talk"}
+              </button>
+              {onRestartConversation && (
+                <button
+                  type="button"
+                  onClick={onRestartConversation}
+                  title="Start a new conversation"
+                  className="rounded-full p-3 bg-gray-200 text-gray-700 hover:bg-gray-300"
+                >
+                  <RotateCcw size={18} />
+                </button>
+              )}
+            </div>
+          )}
+
+          {micMode && onToggleMicMode && (
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <span>
+                {micMode === "ptt"
+                  ? "Push-to-talk (hold the button or the space bar)"
+                  : "Hands-free: the mic reopens after each answer"}
+              </span>
+              <button
+                type="button"
+                onClick={onToggleMicMode}
+                className="underline underline-offset-2 hover:text-gray-700"
+              >
+                {micMode === "ptt" ? "Switch to hands-free" : "Switch to push-to-talk"}
+              </button>
+            </div>
           )}
         </div>
       )}
