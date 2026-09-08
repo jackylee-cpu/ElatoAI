@@ -52,6 +52,36 @@ from memory.session import SEARCH_BLOCK_MS, MemorySession, PendingTurn
 _MEMORY_MARKER = "<<voicemem>>"
 
 
+class UserTurnRelay:
+    """Carries the child's line across the aggregator that swallows it.
+
+    `LLMUserAggregator` consumes TranscriptionFrame and deliberately does not
+    push it downstream (pipecat/processors/aggregators/llm_response_universal.py:
+    "not pushed downstream, same as final TranscriptionFrame"). Everything after
+    the LLM therefore never learns what the child said -- which silently emptied
+    every memory write, because AssistantTurnCaptureProcessor sits there to wait
+    for the reply and found no user text to pair it with.
+
+    MemoryProcessor runs before the aggregator and does see that frame, so it
+    hands the line over here rather than the capture processor guessing.
+    """
+
+    def __init__(self):
+        self.text = ""
+        self.observed_at = ""
+
+    def set(self, text: str) -> None:
+        self.text = text
+        self.observed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    def take(self) -> tuple[str, str]:
+        """Read the pending line and clear it, so no turn is stored twice."""
+        text, observed_at = self.text, self.observed_at
+        self.text = ""
+        self.observed_at = ""
+        return text, observed_at
+
+
 def _memory_message(block: str) -> dict:
     return {"role": "developer", "content": f"{_MEMORY_MARKER}\n{block}"}
 
@@ -66,14 +96,21 @@ def _is_memory_message(message: object) -> bool:
 class MemoryProcessor(FrameProcessor):
     """Prefetch on interim transcripts, inject on the final one, never wait."""
 
-    def __init__(self, memory: MemorySession, context: LLMContext):
+    def __init__(
+        self,
+        memory: MemorySession,
+        context: LLMContext,
+        relay: "UserTurnRelay | None" = None,
+    ):
         super().__init__()
         self._memory = memory
         self._context = context
+        self._relay = relay
         self._pending: asyncio.Task | None = None
         self._pending_turn = 0
         self._turn = 0
         self._prefetched_for = ""
+        self._started_at = 0.0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -92,6 +129,10 @@ class MemoryProcessor(FrameProcessor):
             text = (frame.text or "").strip()
             if text:
                 await self._inject(text)
+                # Hand the line to the capture processor downstream: the
+                # aggregator between us is about to consume this frame.
+                if self._relay is not None:
+                    self._relay.set(text)
             self._turn += 1
 
         await self.push_frame(frame, direction)
@@ -109,7 +150,9 @@ class MemoryProcessor(FrameProcessor):
             return
         self._prefetched_for = text
         self._pending_turn = self._turn
+        self._started_at = time.monotonic()
         self._pending = asyncio.create_task(self._memory.search(text))
+        logger.debug("Memory lookup started on turn {} for {!r}", self._turn, text)
 
     def _cancel_pending(self) -> None:
         if self._pending is not None and not self._pending.done():
@@ -130,9 +173,24 @@ class MemoryProcessor(FrameProcessor):
         task = self._pending
         self._pending = None
         if task is None or self._pending_turn != self._turn:
-            # Nothing in flight, or it belongs to an interrupted turn.
+            # Nothing in flight, or it belongs to an interrupted turn. Both mean
+            # this turn answers with no memory, which is invisible from the
+            # outside -- the toy just sounds forgetful -- so say which it was.
             if task is not None:
                 task.cancel()
+                logger.info(
+                    "No memory this turn: the lookup belonged to turn {}, we are "
+                    "on turn {} (an interruption came between them)",
+                    self._pending_turn,
+                    self._turn,
+                )
+            else:
+                logger.info(
+                    "No memory this turn: no lookup was ever started for {!r} "
+                    "(the recognizer emitted no interim transcript long enough "
+                    "to search on)",
+                    text,
+                )
             return ""
 
         if task.done():
@@ -141,6 +199,14 @@ class MemoryProcessor(FrameProcessor):
         if SEARCH_BLOCK_MS <= 0:
             # The default. Let it finish in the background so the store still
             # warms, but do not make the child wait for it.
+            waited = (time.monotonic() - self._started_at) * 1000
+            logger.info(
+                "No memory this turn: the lookup for {!r} has run {:.0f}ms and is "
+                "not done, and VOICEMEM_SEARCH_BLOCK_MS is 0 so nothing waits "
+                "for it. Raise it to about 800 if turns keep missing.",
+                self._prefetched_for,
+                waited,
+            )
             self._discard(task)
             return ""
 
@@ -186,7 +252,14 @@ class MemoryProcessor(FrameProcessor):
         if exc is not None:
             logger.warning("Memory lookup failed: {}", exc)
             return ""
-        return task.result() or ""
+        block = task.result() or ""
+        # A store with nothing relevant in it looks exactly like a lookup that
+        # never ran, from the outside. Only the log can tell them apart.
+        logger.info(
+            "Memory lookup ready: {}",
+            f"{len(block)} chars injected" if block else "no relevant memories",
+        )
+        return block
 
     def _replace_memory_message(self, block: str) -> None:
         """Drop the previous memory message and put a fresh one at the end.
@@ -231,10 +304,16 @@ class AssistantTurnCaptureProcessor(FrameProcessor):
     transcript, rather than inventing a second shape for the same thing.
     """
 
-    def __init__(self, memory: MemorySession, personality_key: str | None = None):
+    def __init__(
+        self,
+        memory: MemorySession,
+        personality_key: str | None = None,
+        relay: "UserTurnRelay | None" = None,
+    ):
         super().__init__()
         self._memory = memory
         self._personality_key = personality_key
+        self._relay = relay
         self._user_text = ""
         self._reply_parts: list[str] = []
         self._observed_at = ""
@@ -263,7 +342,11 @@ class AssistantTurnCaptureProcessor(FrameProcessor):
             self._commit()
 
         elif isinstance(frame, InterruptionFrame):
-            # Half a sentence the child never heard is not a memory.
+            # Half a sentence the child never heard is not a memory. Only the
+            # reply is dropped: the child's own line still deserves to be
+            # remembered, and the aggregator broadcasts an interruption while
+            # handling the very transcript that produced it -- clearing the
+            # relay here threw away every turn.
             self._reply_parts = []
 
         await self.push_frame(frame, direction)
@@ -271,8 +354,14 @@ class AssistantTurnCaptureProcessor(FrameProcessor):
     def _commit(self) -> None:
         reply = "".join(self._reply_parts).strip()
         user_text = self._user_text.strip()
+        observed_at = self._observed_at
         self._reply_parts = []
         self._user_text = ""
+        if not user_text and self._relay is not None:
+            # In the real pipeline this is the only source: the aggregator
+            # upstream consumes TranscriptionFrame, so one never reaches us.
+            user_text, relayed_at = self._relay.take()
+            observed_at = relayed_at or observed_at
         if not user_text:
             return
         self._memory.enqueue(
@@ -280,6 +369,6 @@ class AssistantTurnCaptureProcessor(FrameProcessor):
                 user_text=user_text,
                 agent_reply=reply,
                 personality_key=self._personality_key,
-                observed_at=self._observed_at,
+                observed_at=observed_at,
             )
         )

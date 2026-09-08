@@ -38,8 +38,24 @@ READ_TIMEOUT_SECONDS = float(os.getenv("VOICEMEM_READ_TIMEOUT", "3"))
 WRITE_TIMEOUT_SECONDS = float(os.getenv("VOICEMEM_WRITE_TIMEOUT", "15"))
 
 
+def _is_placeholder(value: str) -> bool:
+    """Is this still the `your_...` line copied out of env.example?
+
+    A placeholder is a non-empty string, so a plain truth test calls it
+    configured and every request then 401s. That failure is invisible in a voice
+    session -- the lookup fails open, memory turns itself off, and the toy just
+    quietly stops remembering -- so an unedited placeholder has to count as
+    unset, not as a value.
+    """
+    return value.strip().lower().startswith("your_")
+
+
 def configured() -> bool:
-    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+    return bool(
+        SUPABASE_URL
+        and SUPABASE_SERVICE_ROLE_KEY
+        and not _is_placeholder(SUPABASE_SERVICE_ROLE_KEY)
+    )
 
 
 def _headers(extra: dict[str, str] | None = None) -> dict[str, str]:

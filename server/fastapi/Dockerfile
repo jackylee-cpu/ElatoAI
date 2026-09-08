@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir \
 
 # mlx-whisper is macOS-only; install the Linux extras including Azure Speech.
 RUN pip install --no-cache-dir \
-    "pipecat-ai[webrtc,websocket,silero,deepgram,openai,cartesia,google,grok,runner,openrouter,minimax,whisper,azure]>=1.7.0" \
+    "pipecat-ai[webrtc,websocket,silero,deepgram,openai,cartesia,google,grok,runner,openrouter,minimax,whisper,azure]>=1.7.0,<1.8" \
     "pipecat-ai-cli" \
     "voicemem>=0.2.3"
 

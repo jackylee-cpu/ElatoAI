@@ -22,6 +22,7 @@ import asyncio
 import io
 import os
 import shutil
+import sqlite3
 import tarfile
 import time
 from collections import OrderedDict
@@ -126,6 +127,20 @@ class MemorySession:
 
         self._revision = remote_revision
 
+        if self.root.exists() and not self._has_schema():
+            # A directory with a schema-less sqlite in it. This is what deleting
+            # a live store leaves behind: the running process still holds the
+            # open file, sqlite recreates an empty one at the same path, and
+            # VoiceMem only builds its schema at construction -- so every search
+            # and every ingest afterwards fails with "no such table" forever.
+            # Rebuilding is the only way out, and it has to be automatic:
+            # nothing about the symptom points at the directory.
+            logger.warning(
+                "Memory store for {} has no schema, discarding and rebuilding it",
+                self.user_id,
+            )
+            await asyncio.to_thread(shutil.rmtree, self.root, True)
+
         if not self.root.exists():
             restored = await self._restore_snapshot()
             if not restored:
@@ -133,6 +148,36 @@ class MemorySession:
 
         self._vm = await asyncio.to_thread(self._construct)
         logger.info("Memory ready for {} at {}", self.user_id, self.root)
+
+    # Tables VoiceMem builds late, so a half-created store has the early ones
+    # and not these. Both names come from the errors a broken store actually
+    # produced -- "no such table: touched_refs" on every search and "no such
+    # table: memory_tags" on every ingest (2026-09-08). A store missing them is
+    # unusable in both directions, and no amount of running fixes it.
+    _SCHEMA_SENTINELS = ("touched_refs", "memory_tags")
+
+    def _has_schema(self) -> bool:
+        """Does the store on disk actually hold VoiceMem's schema?
+
+        Existence of the directory is not enough -- see the caller.
+        """
+        databases = list(self.root.glob("*.sqlite"))
+        if not databases:
+            return False
+        for database in databases:
+            try:
+                with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as conn:
+                    present = {
+                        row[0]
+                        for row in conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    }
+            except sqlite3.Error:
+                return False
+            if not present.issuperset(self._SCHEMA_SENTINELS):
+                return False
+        return True
 
     @staticmethod
     def _local_slot_classifier():
@@ -144,10 +189,33 @@ class MemorySession:
 
         return LocalQueryClassifier(model=shared_e5())
 
+    @staticmethod
+    def _configure_llm_model() -> None:
+        """Point VoiceMem's internal LLM at a model our key is allowed to use.
+
+        VoiceMem hardcodes `gpt-4o-mini` for the left brain's fact extraction,
+        and reads the override from the process-global `OPENAI_MODEL` -- there
+        is no per-instance setting, even through its own config layer, which
+        just assigns that env var (voicemem/config.py:215). Setting it here is
+        therefore a process-wide choice; nothing else in this server reads that
+        name, so it is ours to set.
+
+        Without it the write path fails silently on an OpenRouter key that does
+        not carry OpenAI models: measured 2026-09-08, every OpenAI model id on
+        ours returns HTTP 403 "violation of provider Terms Of Service", and
+        VoiceMem swallows it as `[ingest] 抽取失败 ... 无原文，跳过` -- no
+        traceback, no memory, no clue. Default to the model the pipeline already
+        talks to, so one working key is enough to make memory work too.
+        """
+        model = os.getenv("VOICEMEM_LLM_MODEL") or os.getenv("OPENROUTER_MODEL")
+        if model and os.getenv("OPENROUTER_API_KEY"):
+            os.environ["OPENAI_MODEL"] = model
+
     def _construct(self):
         from voicemem import VoiceMem
         from voicemem.leftbrain.local_e5_embedder import LocalE5Embedder
 
+        self._configure_llm_model()
         self.root.mkdir(parents=True, exist_ok=True)
         return VoiceMem(
             mode="text_mode",
@@ -294,7 +362,25 @@ class MemorySession:
         try:
             return await asyncio.to_thread(self._search_sync, text)
         except Exception as exc:  # noqa: BLE001 - never let a lookup break a turn
-            logger.warning("Memory search for {} failed: {}", self.user_id, exc)
+            # The store's vector index is a local Qdrant folder, and Qdrant
+            # allows exactly one process per folder. A second server on the same
+            # disk -- two containers sharing a volume, or a dev server started
+            # alongside the real one -- therefore reads nothing at all while
+            # still writing happily, which looks from the outside like a toy
+            # that has simply stopped remembering. Name it, because the library's
+            # own wording buries the cause.
+            if "already accessed by another instance" in str(exc):
+                logger.error(
+                    "Memory search for {} failed: another process already holds "
+                    "{}. Only one server may use a store at a time -- this one "
+                    "will write memories but never recall any until that process "
+                    "stops. Give each instance its own VOICEMEM_BASE_DIR, or run "
+                    "a single server.",
+                    self.user_id,
+                    self.root,
+                )
+            else:
+                logger.warning("Memory search for {} failed: {}", self.user_id, exc)
             return ""
 
     def _search_sync(self, text: str) -> str:
@@ -377,8 +463,29 @@ _registry_lock = asyncio.Lock()
 
 
 async def acquire(user_id: str, language_code: str | None = None) -> MemorySession | None:
-    """Get this child's memory, loading it if needed. None when unavailable."""
-    if not enabled() or not user_id or not store.configured():
+    """Get this child's memory, loading it if needed. None when unavailable.
+
+    Every `None` here is a session that will not remember anything, and that is
+    invisible from the outside: the toy talks normally and simply never recalls.
+    So each reason says so out loud rather than returning a quiet None.
+    """
+    if not enabled():
+        logger.info("VOICEMEM_ENABLED is off, running without memory")
+        return None
+    if not store.configured():
+        logger.warning(
+            "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are unset or still the "
+            "env.example placeholder, so this session cannot load or save "
+            "memory. `supabase status` prints the local service role key."
+        )
+        return None
+    if not user_id:
+        logger.warning(
+            "No user id for this session, running without memory. The browser "
+            "sends one on the websocket query string and a device resolves one "
+            "from its claimed account -- an empty one usually means the "
+            "Supabase lookup failed, so check the warning above it."
+        )
         return None
     try:
         from voicemem import VoiceMem  # noqa: F401 - import check only

@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # only imports voicemem inside functions, so there is nothing to fake.
 
 from pipecat.frames.frames import (  # noqa: F401
+    LLMContextFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
@@ -23,11 +24,16 @@ from pipecat.frames.frames import (  # noqa: F401
     LLMTextFrame,
     TranscriptionFrame,
 )
+from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.tests.utils import run_test
 
-from memory.processors import AssistantTurnCaptureProcessor, MemoryProcessor
+from memory.processors import (
+    AssistantTurnCaptureProcessor,
+    MemoryProcessor,
+    UserTurnRelay,
+)
 from memory.session import PendingTurn
 
 
@@ -222,6 +228,61 @@ async def test_interrupted_reply_is_not_remembered():
     print("  ok: an interrupted reply is stored without the partial answer")
 
 
+async def test_capture_survives_the_aggregator_swallowing_the_transcript():
+    """The whole chain, with the real aggregator in the middle.
+
+    Every other test here drives the capture processor directly, which is what
+    hid the bug this test exists for: `LLMUserAggregator` consumes
+    TranscriptionFrame and never pushes it downstream, so the capture processor
+    saw no user line and silently stored nothing -- memory recorded nothing at
+    all, on both transports.
+
+    The shape matters as much as the assertion. The reply frames have to be
+    produced *between* the aggregator and the capture processor, because that is
+    where the LLM service sits; sending them from the top of the pipeline
+    instead makes the aggregator swallow them too and tests nothing real.
+    """
+    from pipecat.processors.aggregators.llm_response_universal import (
+        LLMUserAggregator,
+    )
+
+    class FakeLLM(FrameProcessor):
+        """Stands in for the LLM service: answers whatever the aggregator ran."""
+
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
+            if isinstance(frame, LLMContextFrame):
+                await self.push_frame(LLMFullResponseStartFrame(), direction)
+                await self.push_frame(LLMTextFrame("蓝鲸好棒！"), direction)
+                await self.push_frame(LLMFullResponseEndFrame(), direction)
+
+    memory = FakeMemory()
+    context = LLMContext()
+    relay = UserTurnRelay()
+
+    await run_test(
+        Pipeline([
+            MemoryProcessor(memory, context, relay),
+            LLMUserAggregator(context),
+            FakeLLM(),
+            AssistantTurnCaptureProcessor(memory, "default", relay),
+        ]),
+        frames_to_send=[TranscriptionFrame("我最喜欢的动物是蓝鲸", "user", time.time())],
+        expected_down_frames=None,
+        send_end_frame=True,
+    )
+
+    assert len(memory.enqueued) == 1, (
+        f"expected one stored turn, got {memory.enqueued} -- the transcript did "
+        "not survive the aggregator"
+    )
+    stored = memory.enqueued[0]
+    assert stored.user_text == "我最喜欢的动物是蓝鲸", stored.user_text
+    assert stored.agent_reply == "蓝鲸好棒！", stored.agent_reply
+    print("  ok: the exchange is captured across the real aggregator")
+
+
 async def main():
     tests = [
         test_final_transcript_is_never_delayed,
@@ -230,6 +291,7 @@ async def main():
         test_interruption_drops_the_in_flight_lookup,
         test_exchange_is_captured_as_a_pair,
         test_interrupted_reply_is_not_remembered,
+        test_capture_survives_the_aggregator_swallowing_the_transcript,
     ]
     failed = 0
     for test in tests:

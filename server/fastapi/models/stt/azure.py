@@ -102,7 +102,19 @@ def create_service(**kwargs):
 # Azure finalizes a phrase after this much trailing silence. Mandarin has
 # frequent sub-300ms gaps between words, so anything shorter chops a single
 # sentence into several "recognized" events (and several LLM turns).
-_DEFAULT_SILENCE_MS = 600
+#
+# 2000, not the 600 this started at: both clients are push-to-talk and say
+# explicitly when a turn is over, so Azure's own endpointing only ever needs to
+# be slow enough to stay out of the way. At 600 a child pausing mid-sentence to
+# think of a word ("hello hello 我叫 ... GIXIE") had the sentence cut in two,
+# answered twice, and the second half treated as a new turn -- reproduced with a
+# 700ms pause. Nothing is lost by waiting: RealtimeInputControlProcessor flushes
+# the recognizer the moment the button comes up.
+#
+# The cost lands on hands-free mode, where no commit arrives and this timeout is
+# what ends a phrase, so a reply there now waits ~1.4s longer. Push-to-talk is
+# the default on both clients, so that is the right way round.
+_DEFAULT_SILENCE_MS = 2000
 _MIN_SILENCE_MS = 300
 
 
@@ -119,6 +131,20 @@ def _silence_timeout_ms() -> str:
             _MIN_SILENCE_MS,
         )
     return str(max(_MIN_SILENCE_MS, min(value, 5000)))
+
+
+# How much further past its own timeout Azure has to be pushed before it will
+# emit a final result. Measured 2026-09-08 with the timeout at 600ms: 800ms of
+# trailing silence produced nothing and 1200ms produced the final, so the
+# property is not honoured to the millisecond. The margin is free -- the flush is
+# written to the stream as fast as the queue takes it -- and being under the
+# real threshold costs the whole turn.
+_FLUSH_MARGIN_MS = 900
+
+
+def flush_silence_ms() -> int:
+    """Trailing silence that reliably ends a phrase, for push-to-talk commits."""
+    return int(_silence_timeout_ms()) + _FLUSH_MARGIN_MS
 
 
 def _tune_low_latency(service: AzureSTTService) -> AzureSTTService:
