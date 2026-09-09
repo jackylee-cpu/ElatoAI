@@ -1,5 +1,6 @@
 #include "OTA.h"
 #include "Audio.h"
+#include "Chime.h"
 #include "PitchShift.h"
 #include <esp_heap_caps.h>
 
@@ -421,6 +422,14 @@ void audioStreamTask(void *parameter) {
     Serial.printf("Opus %s | heap %u | largest block %u\n",
                   decoderStarted ? "ready" : "FAILED", ESP.getFreeHeap(),
                   heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
+    // Here and not in setup(): this task owns the output port, so this is the
+    // only place the boot sound can install its own I2S without racing anyone,
+    // and it is late enough that the decoder already has its scratch block.
+    // setup() has not finished yet -- it resumes while this blocks on DMA and
+    // brings the radio up, so the sound plays over the association instead of
+    // delaying it.
+    playBootChime();
 
     audioBuffer.setReadMaxWait(0);
     
