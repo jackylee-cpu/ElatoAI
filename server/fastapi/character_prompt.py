@@ -47,6 +47,35 @@ Example style:
 """.strip()
 
 
+# Everything the model writes is spoken aloud by a TTS service and never seen,
+# so anything meant for a screen is read out literally. Observed on 2026-09-09
+# with MiniMax: it dutifully pronounced "# 🌟 AI HULK GREETING 🌟", then
+# "** 🔨✨" as its own five-character request, and a conversation row from that
+# morning opens with "*gentle smile*".
+#
+# Character prompts make this worse rather than better -- AI Hulk's own prompt
+# says to shout HULK SMASH when excited, which is exactly the kind of line a
+# model decorates with asterisks. So the rule has to live here, next to the
+# other constraints that apply whatever character is loaded, and it has to be
+# specific: "be conversational" is not a formatting instruction and models do
+# not read it as one.
+#
+# There is a cost angle too. TTS aggregates by sentence, so a stray "** 🔨✨"
+# becomes its own request and its own round trip.
+SPOKEN_OUTPUT_RULES = """\
+Everything you say is read aloud by a speech synthesiser. The child hears you; \
+they never see any text. Write only words that make sense spoken:
+
+- No markdown. No headings, no bold or italics, no asterisks, no bullet points, \
+no numbered lists, no code blocks.
+- No emoji, emoticons or symbols. They get pronounced or read out as their name.
+- No stage directions or sound effects in asterisks, such as *laughs* or \
+*gentle smile*. If you want to sound excited, say something excited.
+- Spell things out the way you would say them. Write "and" rather than "&", and \
+say a number the way it is spoken.
+- Plain sentences, one after another, the way you would actually talk."""
+
+
 def build_child_block(
     child_name: str | None = None,
     child_age: int | None = None,
@@ -91,6 +120,10 @@ def build_session_prompt(
             parts.append(child_block)
         if preamble:
             parts.append(preamble)
+        # Appended here too. The rules used to hang off the custom-character
+        # branch only, so the built-in pal was the one character with no
+        # instruction not to speak markdown.
+        parts.append(SPOKEN_OUTPUT_RULES)
         return "\n\n".join(parts)
 
     parts: list[str] = []
@@ -115,4 +148,6 @@ def build_session_prompt(
         "anything that identifies them or their family. Things the child "
         "tells you on their own are fine to remember and refer back to."
     )
+    # Last, so it is the most recent instruction before the conversation starts.
+    parts.append(SPOKEN_OUTPUT_RULES)
     return "\n\n".join(parts)
