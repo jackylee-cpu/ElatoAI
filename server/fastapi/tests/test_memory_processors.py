@@ -40,12 +40,17 @@ from memory.session import PendingTurn
 class FakeMemory:
     """A store whose search takes as long as we say it does."""
 
-    def __init__(self, delay=0.0, result="MEMORY CONTEXT:\n- likes blue"):
+    def __init__(self, delay=0.0, result="MEMORY CONTEXT:\n- likes blue", running=""):
         self.delay = delay
         self.result = result
+        self.running = running
         self.searches = []
         self.enqueued = []
         self.chat_group_id = "session-1"
+
+    def session_block(self):
+        """The free half of a memory block: what this session already covered."""
+        return self.running
 
     async def search(self, text):
         self.searches.append(text)

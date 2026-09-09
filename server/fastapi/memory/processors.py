@@ -29,6 +29,7 @@ turn is the correct trade: a toy that pauses is worse than a toy that forgets.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 from loguru import logger
@@ -45,6 +46,16 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from memory.session import SEARCH_BLOCK_MS, MemorySession, PendingTurn
+
+# How many completed exchanges stay in the prompt verbatim. Pipecat's context
+# otherwise grows for the whole session, and on a toy that is left connected
+# that is both the cost and the reason late turns start drifting: the character
+# instructions end up a long way behind an hour of chatter.
+#
+# Trimming is only safe because MemorySession.session_block() covers what falls
+# out -- the two are one mechanism and changing this without reading that is how
+# the window becomes a memory hole. 0 disables trimming.
+MAX_HISTORY_TURNS = max(0, min(int(os.getenv("MEMORY_MAX_HISTORY_TURNS", "8")), 40))
 
 # The one context message memory ever writes. Kept as a marker so each turn
 # rewrites the same message instead of appending a new one -- appending would
@@ -86,6 +97,17 @@ def _memory_message(block: str) -> dict:
     return {"role": "developer", "content": f"{_MEMORY_MARKER}\n{block}"}
 
 
+def _role_of(message: object) -> str | None:
+    """The role of a context message, whatever shape the aggregator used.
+
+    Pipecat's universal context stores plain dicts today, but the trim below
+    must degrade to "leave it alone" rather than to "drop everything" if that
+    ever changes.
+    """
+    role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+    return role if isinstance(role, str) else None
+
+
 def _is_memory_message(message: object) -> bool:
     if not isinstance(message, dict):
         return False
@@ -101,11 +123,13 @@ class MemoryProcessor(FrameProcessor):
         memory: MemorySession,
         context: LLMContext,
         relay: "UserTurnRelay | None" = None,
+        max_history_turns: int = MAX_HISTORY_TURNS,
     ):
         super().__init__()
         self._memory = memory
         self._context = context
         self._relay = relay
+        self._max_history_turns = max_history_turns
         self._pending: asyncio.Task | None = None
         self._pending_turn = 0
         self._turn = 0
@@ -163,30 +187,46 @@ class MemoryProcessor(FrameProcessor):
     # ── injection ────────────────────────────────────────────────────────────
 
     async def _inject(self, text: str) -> None:
-        block = await self._collect(text)
-        if not block:
-            return
-        self._replace_memory_message(block)
+        """Assemble this turn's memory block and rewrite the context.
+
+        Two sources, in the order they are useful:
+
+          * `session_block()` -- the running summary of this conversation. Free
+            and always present, and the reason the history window below is a
+            window rather than a hole.
+          * the prefetched search -- what this child said in *other* sessions,
+            if the lookup happened to finish. Often it did not, which is why it
+            is second and why nothing waits for it.
+
+        The context is rewritten even when both are empty: the trim has to run
+        on every turn, not only on the turns that had something to remember.
+        """
+        running = self._memory.session_block()
+        retrieved = await self._collect(text)
+        self._rewrite_context("\n\n".join(part for part in (running, retrieved) if part))
 
     async def _collect(self, text: str) -> str:
         """The prefetched block, if it is ready. Waits only if told to."""
         task = self._pending
         self._pending = None
         if task is None or self._pending_turn != self._turn:
-            # Nothing in flight, or it belongs to an interrupted turn. Both mean
-            # this turn answers with no memory, which is invisible from the
-            # outside -- the toy just sounds forgetful -- so say which it was.
+            # Nothing in flight, or it belongs to an interrupted turn. Both
+            # mean this turn answers with no cross-session recall -- the running
+            # summary still goes in -- and that is invisible from the outside,
+            # so say which it was. "No retrieval", not "no memory": since the
+            # session-summary half landed, the two have to be told apart in the
+            # log or every quiet turn reads like a broken feature.
             if task is not None:
                 task.cancel()
                 logger.info(
-                    "No memory this turn: the lookup belonged to turn {}, we are "
+                    "No retrieval this turn: the lookup belonged to turn {}, we are "
                     "on turn {} (an interruption came between them)",
                     self._pending_turn,
                     self._turn,
                 )
             else:
                 logger.info(
-                    "No memory this turn: no lookup was ever started for {!r} "
+                    "No retrieval this turn: no lookup was ever started for {!r} "
                     "(the recognizer emitted no interim transcript long enough "
                     "to search on)",
                     text,
@@ -201,7 +241,7 @@ class MemoryProcessor(FrameProcessor):
             # warms, but do not make the child wait for it.
             waited = (time.monotonic() - self._started_at) * 1000
             logger.info(
-                "No memory this turn: the lookup for {!r} has run {:.0f}ms and is "
+                "No retrieval this turn: the lookup for {!r} has run {:.0f}ms and is "
                 "not done, and VOICEMEM_SEARCH_BLOCK_MS is 0 so nothing waits "
                 "for it. Raise it to about 800 if turns keep missing.",
                 self._prefetched_for,
@@ -261,16 +301,17 @@ class MemoryProcessor(FrameProcessor):
         )
         return block
 
-    def _replace_memory_message(self, block: str) -> None:
-        """Drop the previous memory message and put a fresh one at the end.
+    def _rewrite_context(self, block: str) -> None:
+        """Trim the history window, then put one fresh memory message at the end.
 
-        Two things matter here. Exactly one memory block may exist, or the
-        prompt grows by a block per turn and carries stale memories forward.
-        And it belongs at the end: this runs before the user aggregator appends
-        the child's line, so appending now puts memory immediately ahead of the
-        line it was retrieved for -- the same placement VoiceMem's own
-        `inject()` uses. Rewriting the old entry in place would instead leave
-        it stranded near the top as the conversation grows.
+        Two things matter about the memory message. Exactly one may exist, or
+        the prompt grows by a block per turn and carries stale memories
+        forward. And it belongs at the end: this runs before the user
+        aggregator appends the child's line, so appending now puts memory
+        immediately ahead of the line it was retrieved for -- the same
+        placement VoiceMem's own `inject()` uses. Rewriting the old entry in
+        place would instead leave it stranded near the top as the conversation
+        grows.
         """
         try:
             messages = self._context.get_messages()
@@ -278,17 +319,50 @@ class MemoryProcessor(FrameProcessor):
             logger.warning("Could not read LLM context to inject memory: {}", exc)
             return
 
-        kept = [
-            message
-            for message in messages
-            if not _is_memory_message(message)
-        ]
-        kept.append(_memory_message(block))
+        kept = self._trim_history(
+            [message for message in messages if not _is_memory_message(message)]
+        )
+        if block:
+            kept.append(_memory_message(block))
 
         try:
             self._context.set_messages(kept)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not write memory into the LLM context: {}", exc)
+
+    def _trim_history(self, messages: list) -> list:
+        """Keep only the last N exchanges, and everything that is not history.
+
+        Non-conversational messages are kept wherever they are: the greeting
+        instruction bot.py queues on connect is a `developer` message, and
+        dropping it because it is old would change how the toy opens.
+
+        Whatever this drops is not lost -- MemorySession's running summary
+        covers it, and `memories` has the utterances themselves. Without that
+        pairing this would just be forgetting, which is why the two landed in
+        the same change.
+        """
+        if self._max_history_turns <= 0:
+            return list(messages)
+
+        limit = self._max_history_turns * 2
+        history = [
+            index
+            for index, message in enumerate(messages)
+            if _role_of(message) in ("user", "assistant")
+        ]
+        if len(history) <= limit:
+            return list(messages)
+
+        dropped = set(history[:-limit])
+        logger.debug(
+            "History window: dropping {} message(s), keeping the last {} exchange(s)",
+            len(dropped),
+            self._max_history_turns,
+        )
+        return [
+            message for index, message in enumerate(messages) if index not in dropped
+        ]
 
 
 class AssistantTurnCaptureProcessor(FrameProcessor):

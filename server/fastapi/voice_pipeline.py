@@ -69,6 +69,22 @@ def build_voice_pipeline(
     llm_provider = os.getenv("CLASSIC_LLM_PROVIDER", "openai")
     tts_provider = os.getenv("CLASSIC_TTS_PROVIDER", "elevenlabs")
     child = child or {}
+
+    # The system-prompt half of long-term memory: what the last sessions ended
+    # on. `memory_preamble` has been an unused hook in build_session_prompt
+    # since it was written, and this is the thing it was for.
+    #
+    # It goes in the system instruction rather than a per-turn message because
+    # the greeting is queued on connect, before the child has said a word --
+    # the one turn no retrieval can serve, and the turn where being remembered
+    # is most obvious.
+    memory_preamble = child.get("memory_preamble")
+    if memory is not None:
+        brief = memory.opening_brief_block()
+        if brief:
+            memory_preamble = brief
+            logger.info("Opened the session with {} chars of memory brief", len(brief))
+
     system_instruction = build_session_prompt(
         title=title,
         character_prompt=character_prompt,
@@ -76,7 +92,7 @@ def build_voice_pipeline(
         child_name=child.get("name"),
         child_age=child.get("age"),
         child_persona=child.get("persona"),
-        memory_preamble=child.get("memory_preamble"),
+        memory_preamble=memory_preamble,
     )
 
     logger.info(

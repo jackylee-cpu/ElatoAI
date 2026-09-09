@@ -32,6 +32,7 @@ from pathlib import Path
 from loguru import logger
 
 from memory import store
+from memory.summarise import summarise
 
 # Base directory holding one subdirectory per child. Deliberately not named
 # VOICEMEM_MEMORY_ROOT: that name is read by VoiceMem itself and would defeat
@@ -48,10 +49,55 @@ MAX_SESSIONS = int(os.getenv("VOICEMEM_MAX_SESSIONS", "32"))
 # improves slot targeting but it is the bulk of that 1-2s, so it is off by
 # default on a toy where the reply has to land quickly.
 USE_CLASSIFY = os.getenv("VOICEMEM_CLASSIFY", "false").strip().lower() in {"1", "true", "yes"}
+# Completed turns between cold-path summaries. Every boundary costs one LLM
+# call, so this trades money for how much of an abandoned session survives:
+# whatever has not been summarised when the container dies is only in
+# `memories`, and only a search can find it again.
+SUMMARY_EVERY_TURNS = max(1, int(os.getenv("MEMORY_SUMMARY_EVERY_TURNS", "6")))
+# How many of the previous segments the opening brief carries. Two is about one
+# session's worth; more starts to crowd the character's own prompt.
+BRIEF_SEGMENTS = max(0, int(os.getenv("MEMORY_BRIEF_SEGMENTS", "2")))
+# How much of the running summary may go into a turn's memory block. The
+# running summary exists to cover the turns that fell out of the history
+# window, not to restate the whole session.
+SESSION_SUMMARY_MAX_CHARS = int(os.getenv("MEMORY_SESSION_SUMMARY_MAX_CHARS", "400"))
 
 
 def enabled() -> bool:
     return os.getenv("VOICEMEM_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
+
+
+_voicemem_ok: bool | None = None
+
+
+def retrieval_available() -> bool:
+    """Is VoiceMem importable in this deployment?
+
+    Memory has two halves and only one of them needs the library. Retrieval --
+    "what did this child tell me weeks ago about dinosaurs" -- is VoiceMem's
+    job. Continuity -- "last time we talked about dinosaurs" -- is a summary
+    read straight out of Supabase, and it is the half a child actually notices
+    because it lands in the greeting.
+
+    So a missing or broken VoiceMem must not switch memory off wholesale, which
+    is what it used to do. This deployment spent a week with retrieval silently
+    unavailable; there is no reason the toy should also have forgotten
+    yesterday for that week.
+    """
+    global _voicemem_ok
+    if _voicemem_ok is None:
+        try:
+            import voicemem  # noqa: F401
+        except Exception as exc:  # noqa: BLE001 - not installed is a valid deployment
+            logger.warning(
+                "voicemem is not importable ({}), so this server will remember "
+                "what was said in each session but cannot search across them",
+                exc,
+            )
+            _voicemem_ok = False
+        else:
+            _voicemem_ok = True
+    return _voicemem_ok
 
 
 @dataclass
@@ -76,8 +122,11 @@ class MemorySession:
         self.language_code = language_code
         self.root = MEMORY_BASE / user_id
         self._vm = None
+        self._built = False
         self._refs = 0
         self._revision = 0
+        # None until this instance has actually read one. See _build().
+        self._segments_revision: int | None = None
         self._ready = asyncio.Event()
         self._queue: asyncio.Queue[PendingTurn | None] = asyncio.Queue()
         self._worker: asyncio.Task | None = None
@@ -87,18 +136,76 @@ class MemorySession:
         # handed to VoiceMem as its session id so both agree on turn grouping.
         self.chat_group_id: str | None = None
 
+        # ── the always-ready half of memory ──────────────────────────────────
+        # Everything above this line is retrieval: it needs a query and it
+        # costs ~850ms. None of it can answer "hello". These three carry the
+        # continuity instead, and every one of them is a plain string that was
+        # loaded or written before the turn that reads it.
+        #
+        # What the last sessions ended on. Loaded once at start(), rendered
+        # into the system prompt, so it is in front of the model for the
+        # greeting -- the one turn a search can never serve.
+        self.opening_brief = ""
+        # What this session has covered so far, rebuilt every time the cold
+        # path runs. This is what stops the history window from being a
+        # forgetting window: turns that fall out of it are still represented
+        # here.
+        self.session_summary = ""
+        self._turns_seen = 0
+        self._pending_episodes: list[PendingTurn] = []
+        self._session_segments: list[str] = []
+        self._summarised_through = 0
+
     # ── lifecycle ────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
         """Load or rebuild this child's store. Safe to call once per session."""
         async with self._lock:
-            if self._vm is not None and not await self._revision_changed():
+            if self._built and not await self._revision_changed():
                 self._ready.set()
-                return
-            await self._build()
-            self._ready.set()
+            else:
+                await self._build()
+                self._ready.set()
+            # Outside the cache branch on purpose. A reconnect takes the fast
+            # path above -- same instance, store still warm -- and that is
+            # exactly the case that needs a fresh brief: the last session's
+            # closing segment was written after this instance was built, so
+            # skipping this is what makes "disconnect, reconnect, ask if it
+            # remembers" answer no.
+            if self._refs <= 1:
+                await self._begin_session()
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._drain())
+
+    async def _begin_session(self) -> None:
+        """Reset per-session state and load what the last sessions ended on.
+
+        Guarded on the reference count by the caller: two devices on one
+        account share this instance, and resetting the counters under the
+        second one would restart the first one's summary mid-conversation.
+        """
+        self._turns_seen = 0
+        self._summarised_through = 0
+        self._pending_episodes = []
+        self._session_segments = []
+        self.session_summary = ""
+        segments = await store.fetch_recent_segments(self.user_id, BRIEF_SEGMENTS)
+        self.opening_brief = " ".join(s.summary for s in segments).strip()
+        if self.opening_brief:
+            logger.info(
+                "Loaded {} chars of opening brief for {} from {} segment(s)",
+                len(self.opening_brief),
+                self.user_id,
+                len(segments),
+            )
+        else:
+            logger.info(
+                "No previous sessions to brief {} with, so this conversation "
+                "starts cold. That is expected on a first session and a bug "
+                "on a later one -- check for 'Wrote a session summary' in the "
+                "log of the session before it.",
+                self.user_id,
+            )
 
     async def _revision_changed(self) -> bool:
         """Has a parent deleted something since we loaded this store?"""
@@ -127,6 +234,27 @@ class MemorySession:
 
         self._revision = remote_revision
 
+        # Segments are derived from utterances, so a deleted utterance can still
+        # be quoted by a summary; dropping them is the only way a parent's delete
+        # is actually a delete.
+        #
+        # But the baseline has to be "what this process last saw", not the 0 an
+        # instance is born with. Keying it off self._revision instead wipes every
+        # segment on the first connection after a restart, for every child whose
+        # parent has ever deleted anything -- their revision is permanently above
+        # zero, so a fresh process reads it as a change that just happened.
+        # Observed here as "revision changed (0 -> 1)" on a server that had only
+        # just started.
+        if self._segments_revision is not None and remote_revision != self._segments_revision:
+            logger.info(
+                "Memory revision for {} changed ({} -> {}), discarding session summaries",
+                self.user_id,
+                self._segments_revision,
+                remote_revision,
+            )
+            await store.delete_segments(self.user_id)
+        self._segments_revision = remote_revision
+
         if self.root.exists() and not self._has_schema():
             # A directory with a schema-less sqlite in it. This is what deleting
             # a live store leaves behind: the running process still holds the
@@ -141,12 +269,23 @@ class MemorySession:
             )
             await asyncio.to_thread(shutil.rmtree, self.root, True)
 
+        if not retrieval_available():
+            # Not an error path. Segments are read and written without any of
+            # this, so the session continues with continuity but no recall.
+            self._built = True
+            logger.info(
+                "Memory ready for {} without retrieval (session summaries only)",
+                self.user_id,
+            )
+            return
+
         if not self.root.exists():
             restored = await self._restore_snapshot()
             if not restored:
                 await self._rebuild_from_supabase()
 
         self._vm = await asyncio.to_thread(self._construct)
+        self._built = True
         logger.info("Memory ready for {} at {}", self.user_id, self.root)
 
     # Tables VoiceMem builds late, so a half-created store has the early ones
@@ -322,6 +461,12 @@ class MemorySession:
                 self._worker.cancel()
             self._worker = None
 
+        # The tail, after the queue drained so every turn of this session is
+        # counted. Without this the last few turns -- which are the ones a
+        # child is most likely to ask about next time -- never reach a segment,
+        # because a session almost never ends on a summary boundary.
+        await self._summarise_pending(reason="session end")
+
         if self._vm is not None:
             try:
                 await asyncio.to_thread(self._vm.flush)
@@ -443,17 +588,124 @@ class MemorySession:
                 self.chat_group_id,
             )
 
-        if self._vm is None:
+        if self._vm is not None:
+            try:
+                # async_facts stays False: it hands the work to a daemon thread
+                # nobody joins, so a disconnect would silently drop the last
+                # turn.
+                await asyncio.to_thread(
+                    self._vm.ingest,
+                    turn.user_text,
+                    agent_reply=turn.agent_reply or None,
+                    session_id=self.chat_group_id,
+                )
+                self._dirty = True
+            except Exception as exc:  # noqa: BLE001 - see below
+                # Caught here rather than in the worker, and that placement is
+                # the point: an ingest that raises used to take the rest of this
+                # function with it, so a store that could not write also stopped
+                # the turn being counted and the session summary being built.
+                # One broken half must not disable the other.
+                logger.warning("VoiceMem ingest for {} failed: {}", self.user_id, exc)
+
+        # Deliberately outside the block above, and outside its failure. Segments
+        # are what carries this conversation into the next one, and they have to
+        # keep being written whether or not the vector store is working.
+        self._turns_seen += 1
+        self._pending_episodes.append(turn)
+        if len(self._pending_episodes) >= SUMMARY_EVERY_TURNS:
+            await self._summarise_pending(reason="turn boundary")
+
+
+    async def _summarise_pending(self, *, reason: str) -> None:
+        """Compress the turns since the last segment into one row.
+
+        Runs in the write worker or on close, never on the frame path.
+
+        A failure drops the pending turns rather than holding them for the next
+        boundary. Retrying would make every later segment cover a longer and
+        longer stretch, so one bad minute would end up producing a summary far
+        too long for the prompt it feeds -- and the utterances themselves are
+        still in `memories` either way, which is the copy that matters.
+        """
+        episodes = self._pending_episodes
+        if not episodes:
             return
-        # async_facts stays False: it hands the work to a daemon thread nobody
-        # joins, so a disconnect would silently drop the last turn.
-        await asyncio.to_thread(
-            self._vm.ingest,
-            turn.user_text,
-            agent_reply=turn.agent_reply or None,
-            session_id=self.chat_group_id,
+        self._pending_episodes = []
+        from_turn = self._summarised_through
+        to_turn = self._turns_seen
+        self._summarised_through = to_turn
+
+        summary = await summarise(episodes, self.language_code)
+        if not summary:
+            logger.info(
+                "No session summary for {} at {} (turns {}-{}); the next "
+                "conversation will not hear about this stretch",
+                self.user_id,
+                reason,
+                from_turn,
+                to_turn,
+            )
+            return
+
+        self._session_segments.append(summary)
+        self.session_summary = self._join_session_summary()
+        await store.insert_segment(
+            self.user_id, self.chat_group_id, from_turn, to_turn, summary
         )
-        self._dirty = True
+        logger.info(
+            "Wrote a session summary for {} at {} covering turns {}-{}: {}",
+            self.user_id,
+            reason,
+            from_turn,
+            to_turn,
+            summary,
+        )
+
+    def _join_session_summary(self) -> str:
+        """This session's segments, oldest first, inside the character budget.
+
+        Oldest are dropped rather than truncated: half a sentence about what a
+        child said is worse than not mentioning it, because the model will
+        happily complete it.
+        """
+        segments = list(self._session_segments)
+        while segments and len(" ".join(segments)) > SESSION_SUMMARY_MAX_CHARS:
+            segments.pop(0)
+        return " ".join(segments).strip()
+
+    # ── prompt blocks ────────────────────────────────────────────────────────
+
+    def opening_brief_block(self) -> str:
+        """The system-prompt half of memory: what the last sessions ended on.
+
+        This goes into the system instruction at pipeline build time, not into
+        a per-turn message, and that placement is the whole point: the greeting
+        runs before the child has said anything, so it is the one turn no
+        retrieval can ever serve. It is also the turn where being remembered
+        actually shows.
+        """
+        if not self.opening_brief:
+            return ""
+        return (
+            "WHAT YOU REMEMBER FROM YOUR LAST CONVERSATIONS WITH THIS CHILD:\n"
+            f"{self.opening_brief}\n"
+            "Treat that as your own memory of them. Bring it up naturally when "
+            "it fits, the way a friend would; never announce that you were "
+            "given notes and never read it back as a list. If something is not "
+            "written there, you do not know it -- ask, do not guess."
+        )
+
+    def session_block(self) -> str:
+        """The running summary of this conversation, for the per-turn block.
+
+        Pairs with the history window in MemoryProcessor: the window keeps the
+        last few turns verbatim, this keeps the gist of everything before them.
+        Without it, trimming history would simply be forgetting.
+        """
+        if not self.session_summary:
+            return ""
+        return f"EARLIER IN THIS CONVERSATION:\n{self.session_summary}"
 
 
 # ── registry ─────────────────────────────────────────────────────────────────
@@ -487,11 +739,10 @@ async def acquire(user_id: str, language_code: str | None = None) -> MemorySessi
             "Supabase lookup failed, so check the warning above it."
         )
         return None
-    try:
-        from voicemem import VoiceMem  # noqa: F401 - import check only
-    except Exception as exc:  # noqa: BLE001 - not installed is a valid deployment
-        logger.warning("voicemem is not importable ({}), running without memory", exc)
-        return None
+    # Deliberately no check on voicemem here. It used to refuse the session
+    # outright, which meant one missing wheel cost the toy its whole memory --
+    # including the session summaries, which do not need it. `_build()` decides
+    # per-half instead.
 
     evictions: list[tuple[str, MemorySession]] = []
     async with _registry_lock:

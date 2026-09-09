@@ -185,6 +185,126 @@ async def fetch_memories_revision(user_id: str) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
+# ── memory_segments table ────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Segment:
+    """One stretch of a conversation, compressed to a sentence or two.
+
+    Segments are what makes a *new* session feel continuous. A search over
+    `memories` cannot do that job: it needs a query, and at "hello" there is
+    nothing to query with. The last session's closing segments are the answer
+    to a question nobody has asked yet, so they have to be already loaded.
+    """
+
+    summary: str
+    from_turn: int = 0
+    to_turn: int = 0
+    created_at: str | None = None
+
+
+def _parse_segments(rows: list[dict] | None) -> list[Segment]:
+    out: list[Segment] = []
+    for row in rows or []:
+        summary = _clean(row.get("summary"))
+        if not summary:
+            continue
+        out.append(
+            Segment(
+                summary=summary,
+                from_turn=int(row.get("from_turn") or 0),
+                to_turn=int(row.get("to_turn") or 0),
+                created_at=_clean(row.get("created_at")),
+            )
+        )
+    return out
+
+
+async def fetch_recent_segments(user_id: str, limit: int = 2) -> list[Segment]:
+    """This child's most recent segments, oldest first.
+
+    The query asks newest-first because that is what the index serves, and the
+    result is reversed here: a brief reads as "we talked about A, then B", so
+    the order it is rendered in has to be the order it happened in.
+    """
+    if not configured() or not user_id:
+        return []
+    url = (
+        f"{SUPABASE_URL}/rest/v1/memory_segments"
+        f"?user_id=eq.{quote(user_id, safe='')}"
+        f"&select=summary,from_turn,to_turn,created_at"
+        f"&order=created_at.desc"
+        f"&limit={int(limit)}"
+    )
+    rows = await _get_json(url, what=f"memory segments for {user_id}")
+    return list(reversed(_parse_segments(rows)))
+
+
+async def insert_segment(
+    user_id: str,
+    chat_group_id: str | None,
+    from_turn: int,
+    to_turn: int,
+    summary: str,
+) -> bool:
+    """Record one compressed stretch. Fails open like every other write here."""
+    if not configured() or not user_id:
+        return False
+    summary = (summary or "").strip()
+    if not summary:
+        return False
+    row: dict[str, Any] = {
+        "user_id": user_id,
+        "from_turn": int(from_turn),
+        "to_turn": int(to_turn),
+        "summary": summary,
+    }
+    if chat_group_id:
+        row["chat_group_id"] = chat_group_id
+    return await _post_json(
+        f"{SUPABASE_URL}/rest/v1/memory_segments",
+        [row],
+        headers={"Prefer": "return=minimal"},
+        what=f"memory segment for {user_id}",
+    )
+
+
+async def delete_segments(user_id: str) -> bool:
+    """Drop every segment for this child.
+
+    Runs when `memories_revision` changes. A parent who deletes a memory has to
+    see it gone, and a segment written before the delete can still be quoting
+    it -- summaries are derived data, so throwing them away costs nothing but a
+    little continuity, while keeping them would leak exactly what was deleted.
+    """
+    if not configured() or not user_id:
+        return False
+    url = (
+        f"{SUPABASE_URL}/rest/v1/memory_segments"
+        f"?user_id=eq.{quote(user_id, safe='')}"
+    )
+    try:
+        timeout = aiohttp.ClientTimeout(total=WRITE_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.delete(
+                url, headers=_headers({"Prefer": "return=minimal"})
+            ) as response:
+                if response.status not in (200, 204):
+                    body = (await response.text())[:200]
+                    logger.warning(
+                        "Segment delete for {} failed: HTTP {} {}",
+                        user_id,
+                        response.status,
+                        body,
+                    )
+                    return False
+                return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Segment delete for {} errored: {}", user_id, exc)
+        return False
+
+
 # ── conversations table ──────────────────────────────────────────────────────
 
 
@@ -243,16 +363,21 @@ async def fetch_snapshot(user_id: str) -> bytes | None:
         timeout = aiohttp.ClientTimeout(total=READ_TIMEOUT_SECONDS)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=_headers()) as response:
-                if response.status == 404:
+                body = "" if response.status == 200 else (await response.text())
+                # Self-hosted Storage answers a missing object with HTTP 400 and
+                # a 404 in the body, so status alone cannot tell "no snapshot
+                # yet" (every child's first session) from a real failure. Testing
+                # only the status logged a WARNING on every single first
+                # connection, which is how a normal path starts looking broken.
+                if response.status == 404 or '"statusCode":"404"' in body:
                     logger.info("No memory snapshot yet for {}", user_id)
                     return None
                 if response.status != 200:
-                    body = (await response.text())[:200]
                     logger.warning(
                         "Snapshot download for {} failed: HTTP {} {}",
                         user_id,
                         response.status,
-                        body,
+                        body[:200],
                     )
                     return None
                 return await response.read()
