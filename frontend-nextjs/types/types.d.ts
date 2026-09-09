@@ -108,6 +108,23 @@ declare global {
         created_at: string;
     }
 
+    /**
+     * One conversation, compressed to a sentence or two.
+     *
+     * Derived from the utterances in `IMemory`, never edited by hand: this is
+     * what the toy reads at the start of the next conversation, and it is the
+     * layer a parent should be shown first. The raw lines it was made from are
+     * the layer they delete from.
+     */
+    interface IMemorySegment {
+        segment_id: string;
+        summary: string;
+        from_turn: number;
+        to_turn: number;
+        chat_group_id: string | null;
+        created_at: string;
+    }
+
     interface IConversation {
         conversation_id?: string;
         created_at?: string;

@@ -34,9 +34,12 @@ export const userFormNameLabel = "Your Name";
 
 export const memorySectionTitle = "What your toy remembers";
 export const memorySectionSubtitle =
-    "Things said out loud that the toy kept, so it can pick up where you left off. Memories are shared across every character. Delete any of them and it forgets for good.";
+    "A short note from each conversation, so the toy can pick up where it left off. Memory is shared across every character — it is the same child whichever one they talk to.";
 export const memorySectionEmpty =
-    "Nothing remembered yet. After a few conversations, what your child tells the toy will show up here.";
+    "Nothing remembered yet. After your child has a conversation, a note about it will show up here.";
+export const memoryLinesLabel = "Every line it kept";
+export const memoryLinesDescription =
+    "The exact words your child said that the toy stored. This is what it rebuilds its memory from, so deleting a line erases it for good.";
 
 export const INITIAL_CREDITS = 50;
 export const SECONDS_PER_CREDIT = (30 * 60) / INITIAL_CREDITS; // 30 minutes equals 50 credits
