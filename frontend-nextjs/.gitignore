@@ -3,3 +3,7 @@ node_modules
 .env.local
 .env.production
 .next
+
+# Incremental typecheck cache, rewritten on every `tsc` run.
+tsconfig.tsbuildinfo
+*.tsbuildinfo
