@@ -1,5 +1,6 @@
 #include "AudioSelfTest.h"
 #include "Button.h"
+#include "Chime.h"
 #include "Display.h"
 #include "FactoryReset.h"
 #include "LEDHandler.h"
@@ -21,10 +22,25 @@ AsyncWebServer webServer(80);
 WIFIMANAGER WifiManager;
 esp_err_t getErr = ESP_OK;
 
-// Main Thread -> onButtonLongPressUpEventCb -> enterSleep()
-// Main Thread -> onButtonDoubleClickCb -> enterSleep()
-// Touch Task -> touchTask -> enterSleep()
-// Main Thread -> loop() (inactivity timeout) -> enterSleep()
+// Everything below raises sleepRequested; loop() -> processSleepRequest() is
+// the only caller of enterSleep(), so sleep always happens on the main thread
+// with no task holding a driver.
+//
+//   Main Thread  -> loop() -> checkIdleTimeout()      (IDLE_SLEEP_SECONDS)
+//   Network Task -> webSocketEvent() SESSION.END      (server asks)
+//   Button Task  -> onTouchLongPressCb()              (see below)
+//   Touch Task   -> touchTask()                       (TOUCH_MODE builds only)
+//
+// The boot button is push-to-talk and does not sleep the device: sleep lives on
+// the touch pad so a mis-timed PTT press can never trigger it.
+//
+// That touch-pad path does not actually work on this hardware: holding the pad
+// arrives as onTouchTapCb (a single click, which resets the conversation), so
+// the library never sees a press lasting the 1500ms that
+// CONFIG_BUTTON_LONG_PRESS_TIME_MS wants. The pulse width the TTP223 really
+// produces has not been measured yet, so whether the fix is a different gesture
+// or a different threshold is still open. Until then the timeout and
+// SESSION.END are the only two ways in.
 void enterSleep() {
   Serial.println("Going to sleep...");
   displaySleep();
@@ -62,6 +78,12 @@ void enterSleep() {
   // Stop all tasks that might be using I2S or other peripherals
   i2s_driver_uninstall(I2S_PORT_IN);
   i2s_driver_uninstall(I2S_PORT_OUT);
+
+  // Nothing owns the output port now, which is the one window the sleep sound
+  // has. It installs and tears down its own driver and blocks until the last
+  // sample is out, so it has to sit above the pin parking below: it drives
+  // I2S_SD_OUT high and leaves it there.
+  playSleepChime();
 
   // The amp has no usable SD pin on this kit (Config.cpp), so drive the spare
   // line and the LEDs low rather than leaving them wherever the last state put
@@ -116,7 +138,14 @@ void enterSleep() {
 // OTA is mid-update, and SPEAKING/LISTENING are self-evidently in use.
 // PROCESSING counts because a turn the server never answers would otherwise
 // keep the device awake forever.
-static const unsigned long IDLE_SLEEP_MS = 2 * 60 * 1000;
+// Overridable so that testing what happens at sleep does not cost two minutes
+// of waiting per attempt:
+//
+//   PLATFORMIO_BUILD_FLAGS="-D IDLE_SLEEP_SECONDS=15" pio run -t upload
+#ifndef IDLE_SLEEP_SECONDS
+#define IDLE_SLEEP_SECONDS (2 * 60)
+#endif
+static const unsigned long IDLE_SLEEP_MS = IDLE_SLEEP_SECONDS * 1000UL;
 
 static void checkIdleTimeout() {
   if (deviceState != IDLE && deviceState != PROCESSING) {
@@ -447,7 +476,10 @@ void setup() {
                           0                         // Core 0 (protocol core)
   );
 
-  // WIFI
+  // WIFI. audioStreamTask is playing the boot sound by now and is parked in
+  // i2s_write between DMA buffers, which is what leaves this task the CPU to
+  // get here: the sound and the association happen together rather than one
+  // after the other.
   setupWiFi();
 }
 
