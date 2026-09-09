@@ -343,6 +343,53 @@ async def test_a_restart_does_not_wipe_the_segments():
         restore_store(saved)
 
 
+async def test_a_long_number_is_transcribed_but_not_remembered():
+    """Both memory writes are gated, and the transcript still gets the turn.
+
+    Gating one of the two would be worse than gating neither: the number would
+    live in the running VoiceMem store until the next restart, so the toy would
+    say it back today and have forgotten it tomorrow.
+    """
+    fake = RecordingStore()
+    saved = []
+    patch_store(saved, fake)
+
+    upserted, conversation_rows = [], []
+    original_upsert = store.upsert_memories
+    original_insert = store.insert_conversation_turn
+    store.upsert_memories = lambda user_id, rows: _record(upserted, rows, 0)
+    store.insert_conversation_turn = lambda user_id, role, content, *a: _record(
+        conversation_rows, (role, content), True
+    )
+
+    ingested = []
+
+    class RecordingVoiceMem:
+        def ingest(self, *args, **kwargs):
+            ingested.append(args)
+
+    try:
+        session = MemorySession("child-1")
+        session._vm = RecordingVoiceMem()
+
+        await session._write_turn(turn("我的电话是13812345678", "好的，我记住了"))
+        assert upserted == [], upserted
+        assert ingested == [], ingested
+        assert session._turns_seen == 0, session._turns_seen
+        assert len(conversation_rows) == 2, conversation_rows
+
+        # An ordinary turn is unaffected.
+        await session._write_turn(turn("我最喜欢的动物是水母", "水母会发光呢"))
+        assert len(upserted) == 1, upserted
+        assert len(ingested) == 1, ingested
+        assert session._turns_seen == 1, session._turns_seen
+        print("  ok: a long number is transcribed but never remembered")
+    finally:
+        store.upsert_memories = original_upsert
+        store.insert_conversation_turn = original_insert
+        restore_store(saved)
+
+
 async def test_the_opening_brief_is_loaded_at_session_start():
     fake = RecordingStore(
         recent=[
@@ -385,6 +432,11 @@ async def _immediate(value):
     return value
 
 
+async def _record(sink, item, result):
+    sink.append(item)
+    return result
+
+
 async def main():
     tests = [
         test_history_window_keeps_the_last_exchanges,
@@ -396,6 +448,7 @@ async def main():
         test_a_failed_summary_does_not_replay_the_same_turns,
         test_a_broken_vector_store_still_counts_the_turn,
         test_a_restart_does_not_wipe_the_segments,
+        test_a_long_number_is_transcribed_but_not_remembered,
         test_the_opening_brief_is_loaded_at_session_start,
         test_no_history_means_no_brief_block,
     ]

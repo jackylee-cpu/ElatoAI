@@ -31,7 +31,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from memory import store
+from memory import privacy, store
 from memory.summarise import summarise
 
 # Base directory holding one subdirectory per child. Deliberately not named
@@ -563,6 +563,34 @@ class MemorySession:
                 self._queue.task_done()
 
     async def _write_turn(self, turn: PendingTurn) -> None:
+        # A turn carrying a phone number, an ID or a card number is transcribed
+        # but never remembered. The check runs before both writes rather than on
+        # one of them: gating only the Supabase mirror would leave the number in
+        # the live VoiceMem store until the next restart, so the toy would repeat
+        # it today and forget it tomorrow. See memory/privacy.py for what this
+        # does and does not catch.
+        sensitive = privacy.holds_sensitive_number(turn.user_text) or (
+            privacy.holds_sensitive_number(turn.agent_reply)
+        )
+        if sensitive:
+            logger.info(
+                "A turn for {} held a long number, so it stays in the transcript "
+                "but not in memory",
+                self.user_id,
+            )
+            await store.insert_conversation_turn(
+                self.user_id, "user", turn.user_text, turn.personality_key, self.chat_group_id
+            )
+            if turn.agent_reply:
+                await store.insert_conversation_turn(
+                    self.user_id,
+                    "assistant",
+                    turn.agent_reply,
+                    turn.personality_key,
+                    self.chat_group_id,
+                )
+            return
+
         # Supabase first: it is the source of truth, and a row written here can
         # rebuild the local store, whereas a local write we failed to mirror is
         # lost the next time the container restarts.
