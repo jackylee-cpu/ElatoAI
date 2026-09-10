@@ -22,7 +22,6 @@ import asyncio
 import io
 import os
 import shutil
-import sqlite3
 import tarfile
 import time
 from collections import OrderedDict
@@ -156,6 +155,25 @@ class MemorySession:
         self._session_segments: list[str] = []
         self._summarised_through = 0
 
+        # ── the replay, moved off the critical path ──────────────────────────
+        # A replay is one fact-extraction call per remembered utterance:
+        # measured at 287s for seven rows. It used to be awaited before the
+        # pipeline was built, so the toy said nothing at all for that whole
+        # time and every client gave up first. It now runs in the background
+        # and the session starts immediately with the always-ready half above
+        # (the opening brief and the running summary), which is the same state
+        # a deployment without retrieval configured already runs in.
+        #
+        # `_warming` is True while that is happening. Turns spoken during it
+        # are already safe in Supabase -- _write_turn mirrors there first,
+        # unconditionally -- but they are not yet in the local index, and the
+        # replay reads a list of rows fetched before they existed. Buffering
+        # them here and ingesting them once the store attaches is what stops
+        # them being the one gap a completed replay never fills.
+        self._warming = False
+        self._warmup_turns: list[PendingTurn] = []
+        self._warmup_task: asyncio.Task | None = None
+
     # ── lifecycle ────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -222,6 +240,21 @@ class MemorySession:
         """
         remote_revision = await store.fetch_memories_revision(self.user_id)
 
+        # A fresh instance is born with `_revision` 0, but the store it is
+        # about to find on disk was built at some particular revision and
+        # records it. Seeding from that is what stops every child whose parent
+        # has *ever* deleted something from being replayed in full on the first
+        # connection after each restart: their remote revision is permanently
+        # above zero, so comparing it against 0 reads as a deletion that just
+        # happened. This is the same trap the segments branch below already
+        # documents -- this is the store half of it, and it was the expensive
+        # half, because discarding the store also deletes the snapshot and so
+        # forces the minutes-long replay path.
+        if not self._built:
+            stored_revision = self._read_stored_revision()
+            if stored_revision is not None:
+                self._revision = stored_revision
+
         if remote_revision != self._revision and self.root.exists():
             logger.info(
                 "Memory revision for {} changed ({} -> {}), discarding local store",
@@ -255,20 +288,6 @@ class MemorySession:
             await store.delete_segments(self.user_id)
         self._segments_revision = remote_revision
 
-        if self.root.exists() and not self._has_schema():
-            # A directory with a schema-less sqlite in it. This is what deleting
-            # a live store leaves behind: the running process still holds the
-            # open file, sqlite recreates an empty one at the same path, and
-            # VoiceMem only builds its schema at construction -- so every search
-            # and every ingest afterwards fails with "no such table" forever.
-            # Rebuilding is the only way out, and it has to be automatic:
-            # nothing about the symptom points at the directory.
-            logger.warning(
-                "Memory store for {} has no schema, discarding and rebuilding it",
-                self.user_id,
-            )
-            await asyncio.to_thread(shutil.rmtree, self.root, True)
-
         if not retrieval_available():
             # Not an error path. Segments are read and written without any of
             # this, so the session continues with continuity but no recall.
@@ -279,44 +298,109 @@ class MemorySession:
             )
             return
 
+        replayed = False
         if not self.root.exists():
             restored = await self._restore_snapshot()
+            if restored:
+                # The snapshot carries the revision it was packed at. One that
+                # predates a deletion has to go too: restoring it would quietly
+                # resurrect what the parent removed, which is the one failure
+                # this feature cannot have.
+                snapshot_revision = self._read_stored_revision()
+                if snapshot_revision is not None and snapshot_revision != remote_revision:
+                    logger.info(
+                        "Snapshot for {} predates a deletion ({} -> {}), replaying instead",
+                        self.user_id,
+                        snapshot_revision,
+                        remote_revision,
+                    )
+                    await asyncio.to_thread(shutil.rmtree, self.root, True)
+                    await store.delete_snapshot(self.user_id)
+                    restored = False
             if not restored:
-                await self._rebuild_from_supabase()
+                replayed = True
+
+        if replayed:
+            # Start the session now and replay behind it. Retrieval is absent
+            # until the store attaches; continuity is not, because the opening
+            # brief and running summary do not depend on it.
+            self._vm = None
+            self._warming = True
+            self._built = True
+            self._warmup_task = asyncio.create_task(self._replay_in_background(remote_revision))
+            logger.info(
+                "Memory for {} is replaying in the background; this session "
+                "starts with session summaries but no recall until it finishes",
+                self.user_id,
+            )
+            return
 
         self._vm = await asyncio.to_thread(self._construct)
+        # Written after _construct so the directory is certain to exist, and
+        # before any snapshot is packed so the tarball carries it.
+        self._write_stored_revision(remote_revision)
         self._built = True
         logger.info("Memory ready for {} at {}", self.user_id, self.root)
 
-    # Tables VoiceMem builds late, so a half-created store has the early ones
-    # and not these. Both names come from the errors a broken store actually
-    # produced -- "no such table: touched_refs" on every search and "no such
-    # table: memory_tags" on every ingest (2026-09-08). A store missing them is
-    # unusable in both directions, and no amount of running fixes it.
-    _SCHEMA_SENTINELS = ("touched_refs", "memory_tags")
+    async def _replay_in_background(self, remote_revision: int) -> None:
+        """Rebuild the store from Supabase without holding up the greeting.
 
-    def _has_schema(self) -> bool:
-        """Does the store on disk actually hold VoiceMem's schema?
-
-        Existence of the directory is not enough -- see the caller.
+        Deliberately not cancelled when the session ends: the whole point is
+        that the work survives a client giving up. The revision marker and the
+        snapshot are written only once this completes, so a crash part-way
+        leaves no marker and the next connection simply replays again -- which
+        is correct, because Supabase still holds every row.
         """
-        databases = list(self.root.glob("*.sqlite"))
-        if not databases:
-            return False
-        for database in databases:
-            try:
-                with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as conn:
-                    present = {
-                        row[0]
-                        for row in conn.execute(
-                            "SELECT name FROM sqlite_master WHERE type='table'"
-                        )
-                    }
-            except sqlite3.Error:
-                return False
-            if not present.issuperset(self._SCHEMA_SENTINELS):
-                return False
-        return True
+        try:
+            await self._rebuild_from_supabase()
+            vm = await asyncio.to_thread(self._construct)
+
+            async with self._lock:
+                self._vm = vm
+                # Anything said while the replay was running. It is in Supabase
+                # already, but the row list the replay worked from predates it.
+                buffered, self._warmup_turns = self._warmup_turns, []
+                self._warming = False
+
+            for turn in buffered:
+                try:
+                    await asyncio.to_thread(
+                        vm.ingest,
+                        turn.user_text,
+                        agent_reply=turn.agent_reply or None,
+                        session_id=self.chat_group_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - one row must not stop the rest
+                    logger.warning(
+                        "Could not ingest a turn buffered during replay for {}: {}",
+                        self.user_id,
+                        exc,
+                    )
+            if buffered:
+                logger.info(
+                    "Ingested {} turn(s) said while memory for {} was replaying",
+                    len(buffered),
+                    self.user_id,
+                )
+
+            self._write_stored_revision(remote_revision)
+            # Persist straight away rather than waiting for close(). A replay
+            # costs minutes, and the session that pays for it is exactly the
+            # one most likely to have been abandoned -- which is what made a
+            # slow first session look like a toy that had permanently stopped
+            # talking.
+            await self._push_snapshot()
+            self._dirty = False
+            logger.info("Memory ready for {} at {}", self.user_id, self.root)
+        except Exception as exc:  # noqa: BLE001 - a failed replay must not kill the session
+            logger.warning(
+                "Background memory replay for {} failed: {}. No revision marker "
+                "was written, so the next connection will try again.",
+                self.user_id,
+                exc,
+            )
+            async with self._lock:
+                self._warming = False
 
     @staticmethod
     def _local_slot_classifier():
@@ -381,6 +465,38 @@ class MemorySession:
             top_k=TOP_K,
             memory_language=self.language_code,
         )
+
+    def _revision_file(self) -> Path:
+        """Where the store records which revision it reflects.
+
+        Inside the store directory on purpose: `_pack_snapshot` tars everything
+        under the root, so this rides along in the snapshot and comes back with
+        it. That is what lets a cold process tell "the parent deleted
+        something" apart from "I have only just started".
+        """
+        return self.root / ".revision"
+
+    def _read_stored_revision(self) -> int | None:
+        """The revision this store was built at, or None if it does not say.
+
+        None means a store written before this file existed, or an unreadable
+        one. Both have to fall back to the old behaviour rather than guess: a
+        wrong guess here either replays needlessly or, worse, keeps serving a
+        memory a parent deleted.
+        """
+        try:
+            return int(self._revision_file().read_text().strip())
+        except (OSError, ValueError):
+            return None
+
+    def _write_stored_revision(self, revision: int) -> None:
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._revision_file().write_text(str(revision))
+        except OSError as exc:  # noqa: BLE001 - losing this only costs one replay
+            logger.warning(
+                "Could not record memory revision for {}: {}", self.user_id, exc
+            )
 
     async def _restore_snapshot(self) -> bool:
         blob = await store.fetch_snapshot(self.user_id)
@@ -467,6 +583,18 @@ class MemorySession:
         # because a session almost never ends on a summary boundary.
         await self._summarise_pending(reason="session end")
 
+        if self._warming:
+            # A replay is still running. Its own completion writes the marker
+            # and uploads the snapshot, and it is deliberately not cancelled
+            # here -- so leave both alone rather than packing a half-built
+            # store over the top of it.
+            logger.info(
+                "Session for {} ended while memory was still replaying; the "
+                "replay continues and will persist itself",
+                self.user_id,
+            )
+            return
+
         if self._vm is not None:
             try:
                 await asyncio.to_thread(self._vm.flush)
@@ -514,7 +642,9 @@ class MemorySession:
             # still writing happily, which looks from the outside like a toy
             # that has simply stopped remembering. Name it, because the library's
             # own wording buries the cause.
-            if "already accessed by another instance" in str(exc):
+            if self._note_missing_schema(exc):
+                pass
+            elif "already accessed by another instance" in str(exc):
                 logger.error(
                     "Memory search for {} failed: another process already holds "
                     "{}. Only one server may use a store at a time -- this one "
@@ -527,6 +657,35 @@ class MemorySession:
             else:
                 logger.warning("Memory search for {} failed: {}", self.user_id, exc)
             return ""
+
+    def _note_missing_schema(self, exc: Exception) -> bool:
+        """Was this "no such table", and if so, arrange a rebuild.
+
+        VoiceMem builds its tables lazily, from several cached components -- so
+        a store on disk legitimately holds only the tables the paths exercised
+        so far, and the shape of the directory says nothing about its health.
+        What does break it is the file being replaced underneath a live
+        instance (deleting a store while the server runs): the cached
+        components keep their handles, sqlite serves them a fresh empty
+        database, and every call after that fails with "no such table" for the
+        life of the process.
+
+        Dropping `_vm` makes the next session rebuild it, which re-runs those
+        constructors and recreates what is missing. Deliberately not a rebuild
+        in place: this runs inside an exception handler, on a worker thread, in
+        the middle of somebody's turn.
+        """
+        if "no such table" not in str(exc):
+            return False
+        logger.error(
+            "Memory store for {} lost its schema ({}). Its files were most "
+            "likely replaced while the server was running -- deleting a store "
+            "needs the server stopped first. Rebuilding on the next session.",
+            self.user_id,
+            exc,
+        )
+        self._vm = None
+        return True
 
     def _search_sync(self, text: str) -> str:
         from voicemem.memory_api import build_memory_context
@@ -558,7 +717,8 @@ class MemorySession:
             try:
                 await self._write_turn(turn)
             except Exception as exc:  # noqa: BLE001 - a failed write must not kill the worker
-                logger.warning("Memory write for {} failed: {}", self.user_id, exc)
+                if not self._note_missing_schema(exc):
+                    logger.warning("Memory write for {} failed: {}", self.user_id, exc)
             finally:
                 self._queue.task_done()
 
@@ -615,6 +775,14 @@ class MemorySession:
                 turn.personality_key,
                 self.chat_group_id,
             )
+
+        if self._warming:
+            # The store is still replaying. This turn is already in Supabase
+            # (above), so nothing is lost; it is held here because the replay
+            # is working from a row list that predates it, and would otherwise
+            # finish and write its marker without ever having seen it.
+            self._warmup_turns.append(turn)
+            return
 
         if self._vm is not None:
             try:

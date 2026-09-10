@@ -428,6 +428,363 @@ async def test_no_history_means_no_brief_block():
         restore_store(saved)
 
 
+class _StoreBuildHarness:
+    """Drive MemorySession._build with every expensive step stubbed out.
+
+    Records whether the local store was thrown away and whether the replay --
+    the minutes-long path -- was entered.
+    """
+
+    def __init__(self, session, remote_revision):
+        self.session = session
+        self.remote_revision = remote_revision
+        self.snapshot_deleted = []
+        self.replayed = 0
+        self.snapshots_pushed = 0
+        self.restore_result = False
+        self._originals = {}
+
+    def __enter__(self):
+        for name in ("fetch_memories_revision", "delete_snapshot", "delete_segments"):
+            self._originals[name] = getattr(store, name)
+        store.fetch_memories_revision = lambda user_id: _immediate(self.remote_revision)
+        store.delete_snapshot = lambda user_id: self._deleted(user_id)
+        store.delete_segments = lambda user_id: _immediate(True)
+
+        self._available = memory_session.retrieval_available
+        memory_session.retrieval_available = lambda: True
+
+        self.session._restore_snapshot = self._restore
+        self.session._rebuild_from_supabase = self._replay
+        self.session._construct = lambda: object()
+        self.session._push_snapshot = self._push
+        return self
+
+    def __exit__(self, *exc):
+        for name, original in self._originals.items():
+            setattr(store, name, original)
+        memory_session.retrieval_available = self._available
+        return False
+
+    async def _deleted(self, user_id):
+        self.snapshot_deleted.append(user_id)
+        return True
+
+    async def _restore(self):
+        return self.restore_result
+
+    async def _replay(self):
+        self.replayed += 1
+
+    async def _push(self):
+        self.snapshots_pushed += 1
+
+    async def finish(self):
+        """Wait for the background replay, if _build started one.
+
+        The replay is deliberately off the critical path now, so a test that
+        asserts on its results has to say when it wants them.
+        """
+        task = self.session._warmup_task
+        if task is not None:
+            await asyncio.wait_for(task, timeout=10)
+
+
+def _store_dir(session, revision=None):
+    """Create the on-disk store, optionally recording a revision in it."""
+    session.root.mkdir(parents=True, exist_ok=True)
+    (session.root / "qdrant").mkdir(exist_ok=True)
+    if revision is not None:
+        session._write_stored_revision(revision)
+
+
+async def test_a_restart_does_not_replay_the_whole_store():
+    """The expensive sibling of test_a_restart_does_not_wipe_the_segments.
+
+    Discarding the store also deletes the snapshot, which forces the replay
+    path: one fact-extraction call per remembered utterance. Measured at 200
+    seconds for seven rows, and it happens before the pipeline is built, so the
+    toy is silent for that whole time. Because the snapshot is only pushed when
+    a session ends cleanly, a client that gave up left nothing behind and the
+    next connection paid it again -- indistinguishable, from the outside, from
+    a toy that had simply stopped working.
+    """
+    import shutil
+
+    session = MemorySession("child-restart")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        # The store on disk was built when the revision was already 1.
+        _store_dir(session, revision=1)
+        with _StoreBuildHarness(session, remote_revision=1) as h:
+            await session._build()
+            assert h.replayed == 0, "a cold start replayed a store that was already current"
+            assert h.snapshot_deleted == [], h.snapshot_deleted
+        print("  ok: a standing revision is not read as a fresh delete")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_a_real_deletion_still_discards_the_store():
+    """The invariant the fix above must not break.
+
+    A parent removing a memory has to win over every cache. If this ever stops
+    holding, the toy keeps talking about something a parent deliberately
+    deleted -- the one failure this feature cannot have.
+    """
+    import shutil
+
+    session = MemorySession("child-deleted")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        _store_dir(session, revision=1)
+        with _StoreBuildHarness(session, remote_revision=2) as h:
+            await session._build()
+            # The discard is synchronous -- a parent's delete must take effect
+            # before the session serves anything.
+            assert h.snapshot_deleted == ["child-deleted"], h.snapshot_deleted
+            await h.finish()
+            assert h.replayed == 1, "a discarded store must be replayed"
+        print("  ok: a real deletion still wipes the store")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_a_store_that_does_not_record_a_revision_is_replayed():
+    """Stores written before .revision existed have to keep the old behaviour.
+
+    Guessing "probably current" here would serve a deleted memory, so an
+    unreadable or absent marker deliberately falls back to discarding.
+    """
+    import shutil
+
+    session = MemorySession("child-legacy")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        _store_dir(session, revision=None)
+        with _StoreBuildHarness(session, remote_revision=1) as h:
+            await session._build()
+            assert h.snapshot_deleted == ["child-legacy"], h.snapshot_deleted
+        print("  ok: a store with no revision marker is discarded, not trusted")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_a_stale_snapshot_is_not_restored_over_a_deletion():
+    """A snapshot packed before a delete must not resurrect it.
+
+    The snapshot carries .revision inside the tarball, so this is checkable
+    after restoring but before the store is used.
+    """
+    import shutil
+
+    session = MemorySession("child-stale-snap")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        with _StoreBuildHarness(session, remote_revision=3) as h:
+            # No local store, and the snapshot restores as revision 1.
+            async def restore():
+                _store_dir(session, revision=1)
+                return True
+
+            session._restore_snapshot = restore
+            await session._build()
+            assert h.snapshot_deleted == ["child-stale-snap"], h.snapshot_deleted
+            await h.finish()
+            assert h.replayed == 1, "a stale snapshot must fall through to a replay"
+        print("  ok: a snapshot predating a deletion is thrown away")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_a_current_snapshot_is_used_without_replaying():
+    import shutil
+
+    session = MemorySession("child-fresh-snap")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        with _StoreBuildHarness(session, remote_revision=3) as h:
+            async def restore():
+                _store_dir(session, revision=3)
+                return True
+
+            session._restore_snapshot = restore
+            await session._build()
+            assert h.replayed == 0, "replayed despite a current snapshot"
+            assert h.snapshot_deleted == [], h.snapshot_deleted
+        print("  ok: a current snapshot skips the replay")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_a_replay_is_snapshotted_immediately():
+    """So an impatient client does not leave the work to be done again.
+
+    close() only pushes at a clean teardown. A replay costs minutes; the
+    session that pays for it is exactly the one most likely to be abandoned.
+    """
+    import shutil
+
+    session = MemorySession("child-replay-push")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        with _StoreBuildHarness(session, remote_revision=1) as h:
+            await session._build()
+            await h.finish()
+            assert h.replayed == 1, "expected the replay path"
+            assert h.snapshots_pushed == 1, "a replay was not persisted immediately"
+        print("  ok: a replay is uploaded as soon as it finishes")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_the_revision_marker_is_recorded_after_a_build():
+    import shutil
+
+    session = MemorySession("child-marker")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        with _StoreBuildHarness(session, remote_revision=7) as h:
+            await session._build()
+            await h.finish()
+        assert session._read_stored_revision() == 7, session._read_stored_revision()
+        print("  ok: the store records the revision it reflects")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_the_replay_does_not_hold_up_the_greeting():
+    """The measured symptom: 287s of silence before the toy said anything.
+
+    _build used to await the replay, and server.py awaits _build before the
+    pipeline is built, so the whole thing sat in front of the first word. It
+    must now return with the session usable and the replay still running.
+    """
+    import shutil
+
+    session = MemorySession("child-nonblocking")
+    shutil.rmtree(session.root, ignore_errors=True)
+    gate = asyncio.Event()
+    try:
+        with _StoreBuildHarness(session, remote_revision=1) as h:
+            async def slow_replay():
+                await gate.wait()
+                h.replayed += 1
+
+            session._rebuild_from_supabase = slow_replay
+
+            await asyncio.wait_for(session._build(), timeout=2)
+            assert session._built is True, "the session was not usable"
+            assert session._warming is True, "the replay was not backgrounded"
+            assert h.replayed == 0, "_build waited for the replay after all"
+
+            gate.set()
+            await h.finish()
+            assert session._warming is False
+            assert session._vm is not None, "the store never attached"
+        print("  ok: the session starts while the replay runs behind it")
+    finally:
+        gate.set()
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_a_turn_said_during_the_replay_still_reaches_the_index():
+    """The gap backgrounding introduces, and the reason for the buffer.
+
+    The replay works from a list of rows fetched before the session started, so
+    a turn spoken while it runs is in Supabase but not in that list. Without
+    buffering, the replay would finish, write its marker -- and that turn would
+    never be indexed, because a matching marker means no future replay.
+    """
+    import shutil
+
+    session = MemorySession("child-midreplay")
+    shutil.rmtree(session.root, ignore_errors=True)
+    gate = asyncio.Event()
+    ingested = []
+    try:
+        with _StoreBuildHarness(session, remote_revision=1) as h:
+            async def slow_replay():
+                await gate.wait()
+
+            class RecordingVm:
+                def ingest(self, text, agent_reply=None, session_id=None):
+                    ingested.append(text)
+
+            session._rebuild_from_supabase = slow_replay
+            session._construct = RecordingVm
+
+            await session._build()
+            assert session._warming is True
+
+            # The child says something while the replay is still going.
+            await session._write_turn(turn("i like jellyfish", "Me too!"))
+            assert ingested == [], "ingested into a store that does not exist yet"
+            assert len(session._warmup_turns) == 1, session._warmup_turns
+
+            gate.set()
+            await h.finish()
+            assert ingested == ["i like jellyfish"], ingested
+            assert session._warmup_turns == [], "the buffer was not drained"
+        print("  ok: a turn said mid-replay is buffered and then indexed")
+    finally:
+        gate.set()
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_a_failed_replay_leaves_no_marker_so_it_is_retried():
+    """A marker written on a failed replay would make the failure permanent."""
+    import shutil
+
+    session = MemorySession("child-failed-replay")
+    shutil.rmtree(session.root, ignore_errors=True)
+    try:
+        with _StoreBuildHarness(session, remote_revision=4) as h:
+            async def boom():
+                raise RuntimeError("openrouter said no")
+
+            session._rebuild_from_supabase = boom
+            await session._build()
+            await h.finish()
+
+            assert session._warming is False, "left stuck in the warming state"
+            assert session._read_stored_revision() is None, (
+                "a failed replay recorded a marker, so it will never be retried"
+            )
+            assert h.snapshots_pushed == 0, "uploaded a store that was never built"
+        print("  ok: a failed replay is retried on the next connection")
+    finally:
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
+async def test_closing_mid_replay_does_not_overwrite_the_snapshot():
+    """close() must not pack a half-built store over the replay's own upload."""
+    import shutil
+
+    session = MemorySession("child-close-midreplay")
+    shutil.rmtree(session.root, ignore_errors=True)
+    gate = asyncio.Event()
+    try:
+        with _StoreBuildHarness(session, remote_revision=1) as h:
+            async def slow_replay():
+                await gate.wait()
+
+            session._rebuild_from_supabase = slow_replay
+            await session._build()
+            session._dirty = True
+
+            await session.close()
+            assert h.snapshots_pushed == 0, "close() uploaded a store mid-replay"
+
+            gate.set()
+            await h.finish()
+            assert h.snapshots_pushed == 1, "the replay did not persist itself"
+        print("  ok: an abandoned session leaves the replay to finish and save")
+    finally:
+        gate.set()
+        shutil.rmtree(session.root, ignore_errors=True)
+
+
 async def _immediate(value):
     return value
 
@@ -448,6 +805,17 @@ async def main():
         test_a_failed_summary_does_not_replay_the_same_turns,
         test_a_broken_vector_store_still_counts_the_turn,
         test_a_restart_does_not_wipe_the_segments,
+        test_a_restart_does_not_replay_the_whole_store,
+        test_a_real_deletion_still_discards_the_store,
+        test_a_store_that_does_not_record_a_revision_is_replayed,
+        test_a_stale_snapshot_is_not_restored_over_a_deletion,
+        test_a_current_snapshot_is_used_without_replaying,
+        test_a_replay_is_snapshotted_immediately,
+        test_the_revision_marker_is_recorded_after_a_build,
+        test_the_replay_does_not_hold_up_the_greeting,
+        test_a_turn_said_during_the_replay_still_reaches_the_index,
+        test_a_failed_replay_leaves_no_marker_so_it_is_retried,
+        test_closing_mid_replay_does_not_overwrite_the_snapshot,
         test_a_long_number_is_transcribed_but_not_remembered,
         test_the_opening_brief_is_loaded_at_session_start,
         test_no_history_means_no_brief_block,
