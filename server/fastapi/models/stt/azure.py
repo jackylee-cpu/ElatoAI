@@ -99,21 +99,29 @@ def create_service(**kwargs):
     return _tune_low_latency(AzureSTTService(**init_kwargs))
 
 
-# Azure finalizes a phrase after this much trailing silence. Mandarin has
-# frequent sub-300ms gaps between words, so anything shorter chops a single
-# sentence into several "recognized" events (and several LLM turns).
+# Azure finalizes a phrase after this much trailing silence. A push-to-talk
+# client stops sending audio the moment it commits, so this silence is written
+# for it (bot.py) -- which means the number is paid, in full, on every turn.
 #
-# 2000, not the 600 this started at: both clients are push-to-talk and say
-# explicitly when a turn is over, so Azure's own endpointing only ever needs to
-# be slow enough to stay out of the way. At 600 a child pausing mid-sentence to
-# think of a word ("hello hello 我叫 ... GIXIE") had the sentence cut in two,
-# answered twice, and the second half treated as a new turn -- reproduced with a
-# 700ms pause. Nothing is lost by waiting: RealtimeInputControlProcessor flushes
-# the recognizer the moment the button comes up.
+# 2000 is deliberately far above what transcription needs, and lowering it is
+# not the free win it looks like. Azure's endpointer runs on *stream* time, so a
+# short timeout finalizes a phrase in the middle of the utterance, seconds
+# before the child lets go of the button. Measured 2026-09-10 against the live
+# recogniser on a sentence with a 700ms thinking pause, at a 500ms timeout:
 #
-# The cost lands on hands-free mode, where no commit arrives and this timeout is
-# what ends a phrase, so a reply there now waits ~1.4s longer. Push-to-talk is
-# the default on both clients, so that is the right way round.
+#     fragment at commit -4215ms   我最喜歡的動物是。
+#     fragment at commit   +387ms   小熊貓，因為他們又懶又可愛。
+#
+# Every word is still recoverable, but nothing in the pipeline waits 4.6s to
+# collect them: ExternalUserTurnStopStrategy closes the turn 500ms after the
+# first fragment, which is while the child is still talking. The result is two
+# user turns, two LLM requests and two answers on top of each other -- observed
+# in a real session 2026-09-10 after exactly this change, and reverted.
+#
+# So the ~600ms this costs on every turn is not buyable by tuning this number.
+# It needs a stop strategy that refuses to close a push-to-talk turn until the
+# commit has arrived, and only then waits a short merge window. Until that
+# exists and is validated in the real pipeline, this stays where it is.
 _DEFAULT_SILENCE_MS = 2000
 _MIN_SILENCE_MS = 300
 
@@ -137,8 +145,9 @@ def _silence_timeout_ms() -> str:
 # emit a final result. Measured 2026-09-08 with the timeout at 600ms: 800ms of
 # trailing silence produced nothing and 1200ms produced the final, so the
 # property is not honoured to the millisecond. The margin is free -- the flush is
-# written to the stream as fast as the queue takes it -- and being under the
-# real threshold costs the whole turn.
+# written to the stream as fast as the queue takes it, and the Silero VAD it
+# passes through on the way costs 18ms for 2.9s of silence (measured
+# 2026-09-10) -- and being under the real threshold costs the whole turn.
 _FLUSH_MARGIN_MS = 900
 
 
