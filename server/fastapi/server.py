@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
+import app_settings
 from bot import create_esp32_auth_message, run_bot_session
 from device_registry import fetch_device_personality, fetch_user_personality
 from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
@@ -324,8 +325,11 @@ def create_app() -> FastAPI:
         memory = await memory_session.acquire(
             profile.user_id, profile.language_code
         )
+        # One id per session, generated whether or not memory is running: it is
+        # what ties a turn_metrics row to the conversation it was measured in.
+        chat_group_id = str(uuid.uuid4())
         if memory is not None:
-            memory.chat_group_id = str(uuid.uuid4())
+            memory.chat_group_id = chat_group_id
         child = {
             "name": profile.child_name,
             "age": profile.child_age,
@@ -348,6 +352,8 @@ def create_app() -> FastAPI:
                 first_message_prompt=first_message_prompt,
                 memory=memory,
                 child=child,
+                user_id=profile.user_id,
+                chat_group_id=chat_group_id,
             )
         finally:
             # Draining pending writes and uploading the snapshot hang off this,
@@ -386,8 +392,11 @@ def create_app() -> FastAPI:
         memory = await memory_session.acquire(
             personality.user_id, personality.language_code
         )
+        # Same reasoning as the browser route: the id exists for the metrics
+        # even when there is no memory to attach it to.
+        chat_group_id = str(uuid.uuid4())
         if memory is not None:
-            memory.chat_group_id = str(uuid.uuid4())
+            memory.chat_group_id = chat_group_id
         child = {
             "name": personality.child_name,
             "age": personality.child_age,
@@ -410,6 +419,8 @@ def create_app() -> FastAPI:
                 voice_prompt=personality.voice_prompt,
                 memory=memory,
                 child=child,
+                user_id=personality.user_id,
+                chat_group_id=chat_group_id,
             )
         finally:
             # Draining pending writes, running the session-boundary batch and
@@ -442,16 +453,7 @@ def create_app() -> FastAPI:
         Not being connected is a success, not an error: the device picks up the
         new character whenever it next wakes.
         """
-        if not INTERNAL_API_TOKEN:
-            raise HTTPException(status_code=503, detail="internal API disabled")
-        # Compare as bytes: compare_digest raises TypeError on a str holding
-        # non-ASCII, and headers arrive latin-1 decoded, so a header with any
-        # non-ASCII byte would 500 instead of cleanly failing auth.
-        if not x_internal_token or not hmac.compare_digest(
-            x_internal_token.encode("utf-8", "surrogateescape"),
-            INTERNAL_API_TOKEN.encode("utf-8"),
-        ):
-            raise HTTPException(status_code=401, detail="bad internal token")
+        _require_internal_token(x_internal_token)
 
         mac = str(payload.get("mac", "")).strip().upper()
         if not mac:
@@ -473,7 +475,37 @@ def create_app() -> FastAPI:
         logger.info("Device refresh for {} closed {} session(s)", mac, closed)
         return {"ok": True, "closed": closed}
 
+    @app.post("/internal/settings_refresh")
+    async def settings_refresh(x_internal_token: str | None = Header(default=None)):
+        """Forget the cached app_settings row so the next session re-reads it.
+
+        The cache would expire on its own within APP_SETTINGS_CACHE_TTL; this is
+        what makes "save the model, reconnect, hear the new model" work every
+        time rather than usually. Live sessions are untouched either way -- the
+        model is fixed when the pipeline is built.
+        """
+        _require_internal_token(x_internal_token)
+        app_settings.invalidate_cache()
+        logger.info("App settings cache invalidated")
+        return {"ok": True}
+
     return app
+
+
+def _require_internal_token(x_internal_token: str | None) -> None:
+    """Guard for /internal/*. Fails closed when no token is configured.
+
+    Compare as bytes: compare_digest raises TypeError on a str holding
+    non-ASCII, and headers arrive latin-1 decoded, so a header with any
+    non-ASCII byte would 500 instead of cleanly failing auth.
+    """
+    if not INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=503, detail="internal API disabled")
+    if not x_internal_token or not hmac.compare_digest(
+        x_internal_token.encode("utf-8", "surrogateescape"),
+        INTERNAL_API_TOKEN.encode("utf-8"),
+    ):
+        raise HTTPException(status_code=401, detail="bad internal token")
 
 
 app = create_app()

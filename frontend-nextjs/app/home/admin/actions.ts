@@ -1,0 +1,204 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { assertAdmin } from "@/lib/admin";
+import { createServiceClient } from "@/utils/supabase/service";
+import { saveVoiceStackSettings } from "@/db/appSettings";
+import {
+    createBuiltinPersonality,
+    updatePersonalityAsAdmin,
+} from "@/db/personalities";
+
+const PROVIDER_SORTS: OpenRouterProviderSort[] = [
+    "latency",
+    "throughput",
+    "price",
+    "nitro",
+];
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Point every new session at a different model.
+ *
+ * Existing sessions are untouched: the model is fixed when the pipeline is
+ * built, exactly like the character prompt beside it. The toy picks the new one
+ * up when it next reconnects.
+ */
+export async function saveVoiceStackAction(
+    settings: IVoiceStackSettings,
+): Promise<ActionResult> {
+    const admin = await assertAdmin();
+
+    const value: IVoiceStackSettings = {};
+
+    const model = (settings.llm_model ?? "").trim();
+    // Blank means "go back to the server's own default", which is an absent
+    // key -- not an empty string. An empty string would be sent to OpenRouter
+    // as the model name and fail at the API call, a long way from here.
+    if (model) {
+        value.llm_model = model;
+    }
+
+    const sort = settings.provider_sort;
+    if (sort) {
+        // The voice server raises on an unrecognised sort rather than quietly
+        // falling back, so a typo saved here would break every new session.
+        // Reject it while there is still someone looking at a form.
+        if (!PROVIDER_SORTS.includes(sort)) {
+            return { ok: false, error: `Unknown provider sort "${sort}"` };
+        }
+        value.provider_sort = sort;
+    }
+
+    try {
+        const supabase = createServiceClient();
+        await saveVoiceStackSettings(supabase, value, admin.user_id);
+    } catch (error) {
+        console.error("saveVoiceStackAction failed", error);
+        return { ok: false, error: "Could not save the settings" };
+    }
+
+    await refreshVoiceServerSettings();
+    revalidatePath("/home/admin");
+    return { ok: true };
+}
+
+const EDITABLE_FIELDS = [
+    "title",
+    "subtitle",
+    "short_description",
+    "character_prompt",
+    "first_message_prompt",
+    "voice_prompt",
+    "oai_voice",
+    "provider",
+    "is_hidden",
+    "is_child_voice",
+    "is_story",
+] as const;
+
+export async function updatePersonalityAction(
+    personalityId: string,
+    updates: Partial<IPersonality>,
+): Promise<ActionResult> {
+    await assertAdmin();
+
+    if (!personalityId) {
+        return { ok: false, error: "Missing character id" };
+    }
+
+    const clean = pickEditable(updates);
+    if (Object.keys(clean).length === 0) {
+        return { ok: false, error: "Nothing to save" };
+    }
+
+    try {
+        const supabase = createServiceClient();
+        await updatePersonalityAsAdmin(supabase, personalityId, clean);
+    } catch (error) {
+        console.error("updatePersonalityAction failed", error);
+        return { ok: false, error: "Could not save the character" };
+    }
+
+    revalidatePath("/home/admin");
+    revalidatePath("/home");
+    return { ok: true };
+}
+
+/**
+ * Retire a character without deleting it.
+ *
+ * Deleting is not offered on purpose: users.personality_id references this row
+ * with ON DELETE SET DEFAULT, so removing one would silently move every child
+ * using it back to the Elato default. Hiding leaves those sessions alone.
+ */
+export async function setPersonalityHiddenAction(
+    personalityId: string,
+    isHidden: boolean,
+): Promise<ActionResult> {
+    return updatePersonalityAction(personalityId, { is_hidden: isHidden });
+}
+
+export async function createPersonalityAction(
+    personality: Partial<IPersonality>,
+): Promise<ActionResult> {
+    await assertAdmin();
+
+    const key = (personality.key ?? "").trim().toLowerCase();
+    const title = (personality.title ?? "").trim();
+
+    // `key` is UNIQUE and is what conversations.personality_key and
+    // memories.source_personality_key point at, so it has to be a stable slug
+    // rather than whatever was typed.
+    if (!/^[a-z0-9_]+$/.test(key)) {
+        return {
+            ok: false,
+            error: "Key must be lowercase letters, numbers and underscores",
+        };
+    }
+    if (!title) {
+        return { ok: false, error: "Title is required" };
+    }
+
+    try {
+        const supabase = createServiceClient();
+        await createBuiltinPersonality(supabase, {
+            ...pickEditable(personality),
+            key,
+            title,
+        });
+    } catch (error) {
+        console.error("createPersonalityAction failed", error);
+        const message = String((error as { message?: string })?.message ?? "");
+        if (message.includes("duplicate key")) {
+            return { ok: false, error: `A character with key "${key}" already exists` };
+        }
+        return { ok: false, error: "Could not create the character" };
+    }
+
+    revalidatePath("/home/admin");
+    revalidatePath("/home");
+    return { ok: true };
+}
+
+function pickEditable(updates: Partial<IPersonality>): Partial<IPersonality> {
+    const clean: Record<string, unknown> = {};
+    for (const field of EDITABLE_FIELDS) {
+        if (updates[field] !== undefined) {
+            clean[field] = updates[field];
+        }
+    }
+    return clean as Partial<IPersonality>;
+}
+
+/**
+ * Tell the voice server to forget its cached settings row.
+ *
+ * Best-effort, exactly like refreshDeviceSession in app/actions.ts: the cache
+ * expires on its own within APP_SETTINGS_CACHE_TTL, so a failure here delays a
+ * change by seconds rather than losing it.
+ */
+async function refreshVoiceServerSettings(): Promise<boolean> {
+    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    if (!internalUrl || !internalToken) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(`${internalUrl}/internal/settings_refresh`, {
+            method: "POST",
+            cache: "no-store",
+            signal: AbortSignal.timeout(3000),
+            headers: {
+                "Content-Type": "application/json",
+                "X-Internal-Token": internalToken,
+            },
+        });
+        return response.ok;
+    } catch (error) {
+        console.warn("Could not refresh voice server settings:", error);
+        return false;
+    }
+}

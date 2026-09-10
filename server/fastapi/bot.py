@@ -13,8 +13,10 @@ import time
 import uuid
 from typing import Any, Literal
 
-from voice_pipeline import build_voice_pipeline
+from app_settings import fetch_voice_settings
+from voice_pipeline import build_voice_pipeline, resolve_voice_stack
 from dotenv import load_dotenv
+from metrics.turn_metrics import TurnMetricsObserver
 from gem_live_route import build_gem_live_route
 from grok_route import build_grok_route
 from loguru import logger
@@ -594,9 +596,25 @@ async def run_bot_session(
     first_message_prompt: str | None = None,
     memory=None,
     child=None,
+    user_id: str | None = None,
+    chat_group_id: str | None = None,
 ):
     voice_route = CURRENT_VOICE_ROUTE
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
+
+    # Which model this session runs on is a database read, not an env read, so
+    # the admin page can change it without a restart. It is resolved once here,
+    # before the pipeline is built, because the model is fixed for the life of
+    # a websocket -- exactly like the character prompt beside it.
+    #
+    # Only the classic route has a model to choose. gem_live and grok build
+    # their own single speech-to-speech service and would ignore it, so they do
+    # not pay for the lookup.
+    stack = (
+        resolve_voice_stack(await fetch_voice_settings())
+        if voice_route == "classic"
+        else None
+    )
 
     # gem_live and grok are speech-to-speech: our STT never emits a
     # TranscriptionFrame on those routes and their instructions are fixed when
@@ -633,6 +651,7 @@ async def run_bot_session(
             extra_after_llm=extra_after_llm,
             memory=memory,
             child=child,
+            stack=stack,
         )
 
     processors = [transport.input(), *route_processors]
@@ -653,6 +672,8 @@ async def run_bot_session(
 
     pipeline = Pipeline(processors)
 
+    # enable_metrics has been on since this pipeline was written; until the
+    # observer below there was nothing reading the MetricsFrames it produces.
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
@@ -661,6 +682,32 @@ async def run_bot_session(
             audio_in_sample_rate=AUDIO_IN_SAMPLE_RATE,
             audio_out_sample_rate=AUDIO_OUT_SAMPLE_RATE,
         ),
+        observers=[
+            TurnMetricsObserver(
+                user_id=user_id,
+                chat_group_id=chat_group_id,
+                transport=transport_kind,
+                personality_key=(child or {}).get("personality_key"),
+                # Only the classic route is a three-provider stack. gem_live and
+                # grok are single speech-to-speech models, so tagging their
+                # turns with the classic STT/LLM/TTS names would credit the
+                # timings to services that never ran -- and those rows would
+                # then pollute the per-model comparison on the admin page. The
+                # route name is the honest label there; the end-to-end total is
+                # still measured either way, and for a speech-to-speech model
+                # that is the only span there is.
+                **(
+                    {
+                        "stt_provider": stack["stt_provider"],
+                        "llm_provider": stack["llm_provider"],
+                        "tts_provider": stack["tts_provider"],
+                        "llm_model": stack["llm_model"],
+                    }
+                    if stack is not None
+                    else {"llm_provider": voice_route}
+                ),
+            )
+        ],
     )
 
     @transport.event_handler("on_client_connected")

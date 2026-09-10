@@ -99,6 +99,102 @@ declare global {
      * whichever character they talk to. `source_personality_key` records where
      * a memory came from, for display only.
      */
+    /**
+     * One site-wide setting group, keyed by name with a jsonb body.
+     *
+     * `voice_stack` is the only key so far. A field absent from `value` means
+     * "use whatever the voice server was started with", so an untouched
+     * install behaves exactly as it did before the admin page existed.
+     */
+    interface IAppSetting {
+        key: string;
+        value: IVoiceStackSettings;
+        updated_at: string;
+        updated_by: string | null;
+    }
+
+    interface IVoiceStackSettings {
+        llm_model?: string;
+        provider_sort?: OpenRouterProviderSort;
+    }
+
+    // Mirrors _VALID_SORTS in server/fastapi/models/llm/openrouter.py.
+    type OpenRouterProviderSort = "latency" | "throughput" | "price" | "nitro";
+
+    /**
+     * What one conversational turn cost, in milliseconds.
+     *
+     * Written by the voice server's observer, one row per turn. Every duration
+     * is nullable on purpose: a turn cut short by barge-in or a dropped socket
+     * is still worth keeping, so reading these means tolerating nulls rather
+     * than assuming a number is there.
+     */
+    interface ITurnMetric {
+        turn_metric_id: string;
+        created_at: string;
+        user_id: string | null;
+        chat_group_id: string | null;
+        turn_index: number;
+        transport: string | null;
+        personality_key: string | null;
+        stt_provider: string | null;
+        llm_provider: string | null;
+        tts_provider: string | null;
+        llm_model: string | null;
+        // Every span below is measured between two frames inside the voice
+        // server, on the pipeline clock. None of them include the trip to or
+        // from the device: the commit arriving over the websocket is the start,
+        // and the server handing audio to the transport is the end. The child
+        // waits for the network and the toy's own playback buffer on top.
+        //
+        // commit received -> final transcript
+        stt_ms: number | null;
+        // Wall clock instant the final transcript was emitted, for lining a
+        // turn up against the conversation and the server log.
+        stt_done_at: string | null;
+        // final transcript -> user turn closed. Dead time waiting on
+        // ExternalUserTurnStopStrategy's transcript-merge timer, still counted
+        // inside llm_ttfb_ms; subtract it for the model's own latency.
+        turn_close_ms: number | null;
+        // final transcript -> first LLM token (turn_close_ms included)
+        llm_ttfb_ms: number | null;
+        // first LLM token -> last LLM token
+        llm_total_ms: number | null;
+        // first LLM token -> first audio out
+        tts_ttfb_ms: number | null;
+        // commit received -> first audio handed to the transport
+        total_ms: number | null;
+        prompt_tokens: number | null;
+        completion_tokens: number | null;
+        transcript_chars: number | null;
+        response_chars: number | null;
+        interrupted: boolean;
+        detail: ITurnMetricDetail;
+    }
+
+    // The services' own reported figures, kept next to ours. When they
+    // disagree, the gap is time spent in the pipeline rather than waiting on an
+    // API -- which is the distinction you need before blaming a model.
+    interface ITurnMetricDetail {
+        ttfb?: { processor: string; model: string | null; secs: number }[];
+        ttfa?: {
+            processor: string;
+            model: string | null;
+            secs: number;
+            leading_silence_secs: number;
+        }[];
+        processing?: { processor: string; model: string | null; secs: number }[];
+    }
+
+    /** One model as OpenRouter's /api/v1/models lists it. */
+    interface IOpenRouterModel {
+        id: string;
+        name: string;
+        context_length: number | null;
+        prompt_price: number | null;
+        completion_price: number | null;
+    }
+
     interface IMemory {
         memory_id: string;
         content: string;
@@ -261,9 +357,23 @@ declare global {
         first_message_prompt: string;
         creator_id: string | null;
         pitch_factor: number;
+        // Retired from the picker without being deleted. The row has to stay:
+        // users.personality_id references it, and deleting one silently moves
+        // every child using it back to the Elato default.
+        is_hidden?: boolean;
     }
 
     type PersonalityFilter = "is_child_voice" | "is_doctor" | "is_story";
+
+    /** A character plus who owns it, for the admin list. */
+    interface IAdminPersonality extends IPersonality {
+        personality_id: string;
+        created_at?: string;
+        // Null for a built-in character, which is also what creator_id being
+        // null means -- kept separate so the list can say "built-in" rather
+        // than showing a blank owner column.
+        creator_email: string | null;
+    }
 
     type Module = "math" | "science" | "spelling" | "general_trivia";
 

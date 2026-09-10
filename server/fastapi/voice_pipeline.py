@@ -53,6 +53,40 @@ def build_user_turn_strategies() -> UserTurnStrategies:
     )
 
 
+def resolve_voice_stack(settings: dict | None = None) -> dict:
+    """Which providers and which model this session will actually run on.
+
+    Settings from the `app_settings` row win over the environment, which wins
+    over whatever the provider defaults to on its own. Anything absent from the
+    row means "leave it as the server was started with", so a deployment that
+    never touches the admin page behaves exactly as it did before.
+
+    Also used to tag every turn_metrics row, so the numbers on the admin page
+    say which model produced them.
+    """
+    settings = settings or {}
+    stt_provider = os.getenv("CLASSIC_STT_PROVIDER", "deepgram")
+    llm_provider = os.getenv("CLASSIC_LLM_PROVIDER", "openai")
+    tts_provider = os.getenv("CLASSIC_TTS_PROVIDER", "elevenlabs")
+
+    llm_model = settings.get("llm_model")
+    if not llm_model and llm_provider.strip().lower() in {"openrouter", "open_router"}:
+        # OpenRouter is the one provider in this stack that names its model in
+        # the environment (models/llm/openrouter.py). For the rest the model is
+        # whatever pipecat's service class defaults to, and there is no env var
+        # to read it back out of -- so an untouched setting leaves the tag
+        # empty rather than guessing.
+        llm_model = os.getenv("OPENROUTER_MODEL") or "openai/gpt-4o-mini"
+
+    return {
+        "stt_provider": stt_provider,
+        "llm_provider": llm_provider,
+        "tts_provider": tts_provider,
+        "llm_model": llm_model,
+        "provider_sort": settings.get("provider_sort"),
+    }
+
+
 def build_voice_pipeline(
     input_processor,
     context: LLMContext,
@@ -64,10 +98,15 @@ def build_voice_pipeline(
     extra_after_llm=None,
     memory=None,
     child=None,
+    stack: dict | None = None,
 ):
-    stt_provider = os.getenv("CLASSIC_STT_PROVIDER", "deepgram")
-    llm_provider = os.getenv("CLASSIC_LLM_PROVIDER", "openai")
-    tts_provider = os.getenv("CLASSIC_TTS_PROVIDER", "elevenlabs")
+    # `stack` is resolved by the caller because reading it needs an await and
+    # this function is synchronous. Falling back to the env-only stack keeps
+    # every existing caller (and every test) working unchanged.
+    stack = stack or resolve_voice_stack()
+    stt_provider = stack["stt_provider"]
+    llm_provider = stack["llm_provider"]
+    tts_provider = stack["tts_provider"]
     child = child or {}
 
     # The system-prompt half of long-term memory: what the last sessions ended
@@ -96,10 +135,11 @@ def build_voice_pipeline(
     )
 
     logger.info(
-        "Building classic route with stt={} llm={} tts={} voice={} character={}",
+        "Building classic route with stt={} llm={} tts={} model={} voice={} character={}",
         stt_provider,
         llm_provider,
         tts_provider,
+        stack["llm_model"] or "provider default",
         tts_voice or "default",
         title or "default",
     )
@@ -109,10 +149,15 @@ def build_voice_pipeline(
     # much trailing silence that takes is the recognizer's property, not the
     # transport's. See models/stt/azure.py for the measurement.
     input_processor.set_flush_silence_ms(flush_silence_ms(stt_provider))
-    llm = create_llm_service(
-        llm_provider,
-        system_instruction=system_instruction,
-    )
+    # Only pass what was actually chosen. models/_unsupported.py forwards
+    # `model` straight into the service's Settings, so handing it None would
+    # overwrite the provider's own default with nothing.
+    llm_kwargs = {"system_instruction": system_instruction}
+    if stack["llm_model"]:
+        llm_kwargs["model"] = stack["llm_model"]
+    if stack["provider_sort"]:
+        llm_kwargs["provider_sort"] = stack["provider_sort"]
+    llm = create_llm_service(llm_provider, **llm_kwargs)
     tts_kwargs = {}
     if tts_voice:
         tts_kwargs["voice"] = tts_voice
