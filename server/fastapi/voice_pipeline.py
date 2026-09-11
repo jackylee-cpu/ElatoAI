@@ -84,6 +84,8 @@ def resolve_voice_stack(settings: dict | None = None) -> dict:
         "tts_provider": tts_provider,
         "llm_model": llm_model,
         "provider_sort": settings.get("provider_sort"),
+        "provider_order": settings.get("provider_order"),
+        "reasoning_effort": settings.get("reasoning_effort"),
     }
 
 
@@ -135,11 +137,12 @@ def build_voice_pipeline(
     )
 
     logger.info(
-        "Building classic route with stt={} llm={} tts={} model={} voice={} character={}",
+        "Building classic route with stt={} llm={} tts={} model={} reasoning={} voice={} character={}",
         stt_provider,
         llm_provider,
         tts_provider,
         stack["llm_model"] or "provider default",
+        stack.get("reasoning_effort") or "model default",
         tts_voice or "default",
         title or "default",
     )
@@ -157,6 +160,10 @@ def build_voice_pipeline(
         llm_kwargs["model"] = stack["llm_model"]
     if stack["provider_sort"]:
         llm_kwargs["provider_sort"] = stack["provider_sort"]
+    if stack.get("provider_order"):
+        llm_kwargs["provider_order"] = stack["provider_order"]
+    if stack.get("reasoning_effort"):
+        llm_kwargs["reasoning_effort"] = stack["reasoning_effort"]
     llm = create_llm_service(llm_provider, **llm_kwargs)
     tts_kwargs = {}
     if tts_voice:

@@ -76,10 +76,19 @@ def test_the_environment_is_read_lazily_not_at_import_time():
 
 
 def test_a_settings_row_is_read_out_of_the_response():
-    rows = [{"value": {"llm_model": "google/gemini-flash-1.5", "provider_sort": "price"}}]
+    rows = [{
+        "value": {
+            "llm_model": "google/gemini-flash-1.5",
+            "provider_sort": "price",
+            "provider_order": ["groq", "akashml"],
+            "reasoning_effort": "low",
+        }
+    }]
     parsed = app_settings.parse_rows(rows)
     assert parsed["llm_model"] == "google/gemini-flash-1.5"
     assert parsed["provider_sort"] == "price"
+    assert parsed["provider_order"] == ["groq", "akashml"]
+    assert parsed["reasoning_effort"] == "low"
     print("  ok: a saved model comes back")
 
 

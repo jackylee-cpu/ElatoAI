@@ -116,10 +116,22 @@ declare global {
     interface IVoiceStackSettings {
         llm_model?: string;
         provider_sort?: OpenRouterProviderSort;
+        /** OpenRouter provider slugs, tried first and in this order. */
+        provider_order?: string[];
+        reasoning_effort?: OpenRouterReasoningEffort;
     }
 
     // Mirrors _VALID_SORTS in server/fastapi/models/llm/openrouter.py.
     type OpenRouterProviderSort = "latency" | "throughput" | "price" | "nitro";
+
+    // Mirrors _VALID_EFFORTS in server/fastapi/models/llm/openrouter.py.
+    type OpenRouterReasoningEffort =
+        | "none"
+        | "minimal"
+        | "low"
+        | "medium"
+        | "high"
+        | "xhigh";
 
     /**
      * What one conversational turn cost, in milliseconds.
@@ -193,6 +205,14 @@ declare global {
         context_length: number | null;
         prompt_price: number | null;
         completion_price: number | null;
+    }
+
+    /** One host that serves a model, from OpenRouter's endpoints list. */
+    interface IOpenRouterEndpoint {
+        slug: string;
+        name: string;
+        quantization: string | null;
+        uptime: number | null;
     }
 
     interface IMemory {

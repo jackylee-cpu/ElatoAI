@@ -16,6 +16,15 @@ const PROVIDER_SORTS: OpenRouterProviderSort[] = [
     "nitro",
 ];
 
+const REASONING_EFFORTS: OpenRouterReasoningEffort[] = [
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+];
+
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
 /**
@@ -49,6 +58,22 @@ export async function saveVoiceStackAction(
             return { ok: false, error: `Unknown provider sort "${sort}"` };
         }
         value.provider_sort = sort;
+    }
+
+    const order = cleanProviderOrder(settings.provider_order);
+    if (order === null) {
+        return { ok: false, error: "Unknown provider in the preferred list" };
+    }
+    if (order.length > 0) {
+        value.provider_order = order;
+    }
+
+    const effort = settings.reasoning_effort;
+    if (effort) {
+        if (!REASONING_EFFORTS.includes(effort)) {
+            return { ok: false, error: `Unknown reasoning effort "${effort}"` };
+        }
+        value.reasoning_effort = effort;
     }
 
     try {
@@ -160,6 +185,34 @@ export async function createPersonalityAction(
     revalidatePath("/home/admin");
     revalidatePath("/home");
     return { ok: true };
+}
+
+const PROVIDER_SLUG = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+const MAX_PREFERRED_PROVIDERS = 12;
+
+/**
+ * OpenRouter `provider.order` slugs, or null if anything in the list is junk.
+ *
+ * Empty is valid — it means "no preference, use the sort". A typo slug would
+ * 404 every new session ("No endpoints found for the request with manual
+ * order"), so it is rejected here rather than at the first spoken turn.
+ */
+function cleanProviderOrder(order: string[] | undefined): string[] | null {
+    if (!order || order.length === 0) {
+        return [];
+    }
+    const slugs: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of order) {
+        const slug = raw.trim().toLowerCase();
+        if (!slug || seen.has(slug)) continue;
+        if (!PROVIDER_SLUG.test(slug) || slugs.length >= MAX_PREFERRED_PROVIDERS) {
+            return null;
+        }
+        seen.add(slug);
+        slugs.push(slug);
+    }
+    return slugs;
 }
 
 function pickEditable(updates: Partial<IPersonality>): Partial<IPersonality> {

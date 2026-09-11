@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/use-toast";
-import { Check, ChevronsUpDown, Loader2 } from "lucide-react";
+import { Check, ChevronsUpDown, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { saveVoiceStackAction } from "@/app/home/admin/actions";
 
@@ -32,7 +32,17 @@ const PROVIDER_SORTS: { value: OpenRouterProviderSort; label: string }[] = [
     { value: "price", label: "price — cheapest provider" },
 ];
 
+const REASONING_EFFORTS: { value: OpenRouterReasoningEffort; label: string }[] = [
+    { value: "none", label: "off — no thinking" },
+    { value: "minimal", label: "minimal" },
+    { value: "low", label: "low — short thinking, best for speech" },
+    { value: "medium", label: "medium" },
+    { value: "high", label: "high" },
+    { value: "xhigh", label: "extra high — Qwen's default, slow for speech" },
+];
+
 const SERVER_DEFAULT = "__server_default__";
+const MAX_PREFERRED_PROVIDERS = 12;
 
 interface ModelSettingsTabProps {
     settings: IVoiceStackSettings;
@@ -41,10 +51,17 @@ interface ModelSettingsTabProps {
 const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
     const [model, setModel] = useState(settings.llm_model ?? "");
     const [sort, setSort] = useState<string>(settings.provider_sort ?? SERVER_DEFAULT);
+    const [order, setOrder] = useState<string[]>(settings.provider_order ?? []);
+    const [effort, setEffort] = useState<string>(
+        settings.reasoning_effort ?? SERVER_DEFAULT,
+    );
     const [models, setModels] = useState<IOpenRouterModel[]>([]);
+    const [endpoints, setEndpoints] = useState<IOpenRouterEndpoint[]>([]);
     const [loadingModels, setLoadingModels] = useState(true);
+    const [loadingEndpoints, setLoadingEndpoints] = useState(false);
     const [catalogueError, setCatalogueError] = useState(false);
     const [open, setOpen] = useState(false);
+    const [providerOpen, setProviderOpen] = useState(false);
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
@@ -63,9 +80,46 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
         };
     }, []);
 
+    useEffect(() => {
+        if (!model) {
+            setEndpoints([]);
+            setLoadingEndpoints(false);
+            return;
+        }
+
+        let cancelled = false;
+        setLoadingEndpoints(true);
+        fetch(`/api/admin/openrouter-endpoints?model=${encodeURIComponent(model)}`)
+            .then((response) => response.json())
+            .then((payload) => {
+                if (cancelled) return;
+                setEndpoints(payload.endpoints ?? []);
+            })
+            .catch(() => {
+                if (!cancelled) setEndpoints([]);
+            })
+            .finally(() => {
+                if (!cancelled) setLoadingEndpoints(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [model]);
+
+    useEffect(() => {
+        if (!model || loadingEndpoints || endpoints.length === 0) return;
+        const available = new Set(endpoints.map((entry) => entry.slug));
+        setOrder((current) => {
+            const next = current.filter((slug) => available.has(slug));
+            return next.length === current.length ? current : next;
+        });
+    }, [model, endpoints, loadingEndpoints]);
+
     const dirty =
         model !== (settings.llm_model ?? "") ||
-        sort !== (settings.provider_sort ?? SERVER_DEFAULT);
+        sort !== (settings.provider_sort ?? SERVER_DEFAULT) ||
+        !sameOrder(order, settings.provider_order ?? []) ||
+        effort !== (settings.reasoning_effort ?? SERVER_DEFAULT);
 
     const onSave = async () => {
         setSaving(true);
@@ -75,6 +129,11 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
                 sort === SERVER_DEFAULT
                     ? undefined
                     : (sort as OpenRouterProviderSort),
+            provider_order: order,
+            reasoning_effort:
+                effort === SERVER_DEFAULT
+                    ? undefined
+                    : (effort as OpenRouterReasoningEffort),
         });
         setSaving(false);
 
@@ -89,6 +148,19 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
     };
 
     const selected = models.find((entry) => entry.id === model);
+    const endpointBySlug = new Map(endpoints.map((entry) => [entry.slug, entry]));
+
+    const togglePreferred = (slug: string) => {
+        setOrder((current) => {
+            if (current.includes(slug)) {
+                return current.filter((item) => item !== slug);
+            }
+            if (current.length >= MAX_PREFERRED_PROVIDERS) {
+                return current;
+            }
+            return [...current, slug];
+        });
+    };
 
     return (
         <div className="flex flex-col gap-4">
@@ -186,15 +258,141 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
                         )}
                     </div>
 
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="flex flex-col gap-2">
+                            <label className="text-sm font-medium">Provider routing</label>
+                            <Select value={sort} onValueChange={setSort}>
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={SERVER_DEFAULT}>Server default</SelectItem>
+                                    {PROVIDER_SORTS.map((entry) => (
+                                        <SelectItem key={entry.value} value={entry.value}>
+                                            {entry.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                            <label className="text-sm font-medium">Preferred providers</label>
+                            <Popover open={providerOpen} onOpenChange={setProviderOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        role="combobox"
+                                        aria-expanded={providerOpen}
+                                        disabled={!model}
+                                        className="justify-between font-normal"
+                                    >
+                                        <span className="truncate">
+                                            {order.length === 0
+                                                ? "Any provider"
+                                                : order
+                                                      .map(
+                                                          (slug) =>
+                                                              endpointBySlug.get(slug)?.name ??
+                                                              slug,
+                                                      )
+                                                      .join(", ")}
+                                        </span>
+                                        {loadingEndpoints ? (
+                                            <Loader2 className="ml-2 h-4 w-4 shrink-0 animate-spin" />
+                                        ) : (
+                                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                        )}
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent
+                                    className="w-[--radix-popover-trigger-width] p-0"
+                                    align="start"
+                                >
+                                    <Command>
+                                        <CommandInput placeholder="Search hosts…" />
+                                        <CommandList>
+                                            <CommandEmpty>
+                                                {model
+                                                    ? "No hosts listed for this model."
+                                                    : "Choose a model first."}
+                                            </CommandEmpty>
+                                            <CommandGroup>
+                                                {endpoints.map((entry) => {
+                                                    const rank = order.indexOf(entry.slug);
+                                                    return (
+                                                        <CommandItem
+                                                            key={entry.slug}
+                                                            value={`${entry.name} ${entry.slug}`}
+                                                            onSelect={() =>
+                                                                togglePreferred(entry.slug)
+                                                            }
+                                                        >
+                                                            <Check
+                                                                className={cn(
+                                                                    "mr-2 h-4 w-4",
+                                                                    rank >= 0
+                                                                        ? "opacity-100"
+                                                                        : "opacity-0",
+                                                                )}
+                                                            />
+                                                            <div className="flex min-w-0 flex-1 flex-col">
+                                                                <span className="truncate">
+                                                                    {rank >= 0
+                                                                        ? `${rank + 1}. ${entry.name}`
+                                                                        : entry.name}
+                                                                </span>
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {describeEndpoint(entry)}
+                                                                </span>
+                                                            </div>
+                                                        </CommandItem>
+                                                    );
+                                                })}
+                                            </CommandGroup>
+                                        </CommandList>
+                                    </Command>
+                                </PopoverContent>
+                            </Popover>
+                            {order.length > 0 && (
+                                <div className="flex flex-row flex-wrap gap-1.5">
+                                    {order.map((slug, index) => (
+                                        <Badge
+                                            key={slug}
+                                            variant="outline"
+                                            className="gap-1 font-normal"
+                                        >
+                                            {index + 1}. {endpointBySlug.get(slug)?.name ?? slug}
+                                            <button
+                                                type="button"
+                                                className="rounded-sm opacity-70 hover:opacity-100"
+                                                onClick={() => togglePreferred(slug)}
+                                                aria-label={`Remove ${slug}`}
+                                            >
+                                                <X className="h-3 w-3" />
+                                            </button>
+                                        </Badge>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                        Routing picks by latency, throughput or price. Preferred
+                        providers are tried first, in the order you tap them;
+                        others still serve if those are down. Speech usually
+                        wants `latency` plus a fast host if you have a favourite.
+                    </p>
+
                     <div className="flex flex-col gap-2">
-                        <label className="text-sm font-medium">Provider routing</label>
-                        <Select value={sort} onValueChange={setSort}>
+                        <label className="text-sm font-medium">Thinking</label>
+                        <Select value={effort} onValueChange={setEffort}>
                             <SelectTrigger>
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value={SERVER_DEFAULT}>Server default</SelectItem>
-                                {PROVIDER_SORTS.map((entry) => (
+                                {REASONING_EFFORTS.map((entry) => (
                                     <SelectItem key={entry.value} value={entry.value}>
                                         {entry.label}
                                     </SelectItem>
@@ -202,9 +400,9 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
                             </SelectContent>
                         </Select>
                         <p className="text-xs text-muted-foreground">
-                            OpenRouter serves most models from several providers.
-                            This picks which one, and for speech `latency` is
-                            usually the one you want.
+                            How hard the model thinks before it speaks. Off is
+                            fastest. gpt-oss cannot turn thinking off — use low
+                            there, or the request fails.
                         </p>
                     </div>
 
@@ -238,12 +436,21 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
                         on the Playground drops and re-establishes the session,
                         which is the quickest way to force it.
                     </p>
-                    <div className="flex flex-row gap-2 pt-1">
+                    <div className="flex flex-row flex-wrap gap-2 pt-1">
                         <Badge variant="outline">
                             Saved: {settings.llm_model ?? "server default"}
                         </Badge>
                         <Badge variant="outline">
                             Routing: {settings.provider_sort ?? "server default"}
+                        </Badge>
+                        <Badge variant="outline">
+                            Preferred:{" "}
+                            {settings.provider_order?.length
+                                ? settings.provider_order.join(", ")
+                                : "any"}
+                        </Badge>
+                        <Badge variant="outline">
+                            Thinking: {settings.reasoning_effort ?? "server default"}
                         </Badge>
                     </div>
                 </CardContent>
@@ -251,6 +458,21 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
         </div>
     );
 };
+
+function describeEndpoint(endpoint: IOpenRouterEndpoint): string {
+    const parts: string[] = [endpoint.slug];
+    if (endpoint.quantization) {
+        parts.push(endpoint.quantization);
+    }
+    if (endpoint.uptime !== null) {
+        parts.push(`${Math.round(endpoint.uptime)}% up`);
+    }
+    return parts.join(" · ");
+}
+
+function sameOrder(left: string[], right: string[]): boolean {
+    return left.length === right.length && left.every((slug, index) => slug === right[index]);
+}
 
 function describeModel(model: IOpenRouterModel): string {
     const parts: string[] = [];
