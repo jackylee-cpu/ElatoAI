@@ -1,16 +1,7 @@
-import ModifyCharacterSheet from "./ModifyCharacterSheet";
 import Image from "next/image";
 import { cn, getPersonalityImageSrc } from "@/lib/utils";
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
-import { Check, CheckCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { EmojiComponent } from "./EmojiImage";
+import { playgroundAssets } from "./playgroundAssets";
 
 interface CharacterSectionProps {
     allPersonalities: IPersonality[];
@@ -22,16 +13,17 @@ interface CharacterSectionProps {
     selectedFilters: PersonalityFilter[];
 }
 
+const formatCharacterName = (personality: IPersonality) =>
+    personality.title.replace(/\s+/g, "-").toUpperCase();
+
 const CharacterSection = ({
     allPersonalities,
-    languageState,
     personalityIdState,
     onPersonalityPicked,
     title,
     disableButtons,
     selectedFilters,
 }: CharacterSectionProps) => {
-
     const filteredPersonalities = allPersonalities.filter((personality) => {
         return selectedFilters.every((filter) => {
             return personality[filter] === true;
@@ -42,74 +34,77 @@ const CharacterSection = ({
         return null;
     }
 
+    const hideTitle = title === "Characters";
+
     return (
-        <div className="flex flex-col gap-2 w-full">
-            <p className="text-sm text-gray-600 self-start flex flex-row items-center gap-2">
-                <span>{title}</span>
-            </p>
-            <div className="w-full">
-                <div className="grid grid-cols-2 lg:grid-cols-4 md:gap-6 gap-4">
-                    {filteredPersonalities.map((personality, index) => {
-                        const isCurrentPersonality = personalityIdState === personality.personality_id;
-                        return (
-                        <ModifyCharacterSheet
-                        key={personality.personality_id}
-                        openPersonality={personality}
-                        languageState={languageState}
-                        isCurrentPersonality={isCurrentPersonality}
-                        onPersonalityPicked={onPersonalityPicked}
-                        disableButtons={disableButtons}
-                    >
-                        <Card
+        <div className="flex w-full flex-col gap-3">
+            {!hideTitle && (
+                <p className="px-1 text-xs font-medium uppercase tracking-wider text-gray-500">
+                    {title}
+                </p>
+            )}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 lg:gap-5">
+                {filteredPersonalities.map((personality) => {
+                    const isCurrentPersonality =
+                        personalityIdState === personality.personality_id;
+                    return (
+                        <button
+                            key={personality.personality_id}
+                            type="button"
+                            disabled={disableButtons}
+                            onClick={() =>
+                                onPersonalityPicked(personality.personality_id!)
+                            }
                             className={cn(
-                                "p-0 rounded-3xl cursor-pointer shadow-lg transition-all hover:scale-103 flex flex-col",
-                                personalityIdState === personality.personality_id
-                                    ? "border-primary border-2"
-                                    : "hover:border-primary/50"
+                                "flex flex-col items-center rounded-[28px] bg-white/90 px-3 pb-3 pt-4 shadow-[0_8px_24px_rgba(80,120,180,0.10)] transition-transform",
+                                "border-[2.5px]",
+                                isCurrentPersonality
+                                    ? "border-[#4C74F6]"
+                                    : "border-transparent hover:border-[#4C74F6]/40",
+                                disableButtons
+                                    ? "cursor-not-allowed opacity-70"
+                                    : "cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
                             )}
-                            // onClick={() => onPersonalityPicked(personality)}
+                            aria-pressed={isCurrentPersonality}
+                            aria-label={personality.title}
                         >
-                            <CardContent className="flex-shrink-0 p-0 h-[160px] sm:h-[180px] relative">
-                                {personality.creator_id === null ? (
-                                    <Image
-                                        src={getPersonalityImageSrc(personality.key)}
-                                        alt={personality.key}
-                                        width={100}
-                                        height={180}
-                                    className="rounded-3xl rounded-br-none rounded-bl-none w-full h-full object-cover"
-                                />
-                                ) : (
-                                    <div className="flex flex-row items-center justify-center h-full">
-                                        <EmojiComponent personality={personality} />
-                                    </div>
-                                )}
-                                <Button
-                                    size="sm"
-                                    variant={isCurrentPersonality ? "default" : "outline"}
-                                    className={`absolute shadow-lg top-2 right-2 rounded-full h-9 w-9 p-0 ${isCurrentPersonality ? "bg-primary text-primary-foreground" : ""}`}
-                                    onClick={() => onPersonalityPicked(personality.personality_id!)}
-                                    aria-label={isCurrentPersonality ? "Deselect feature" : "Select feature"}
-                                >
-                                    {true ? (
-                                        <Check className="h-4 w-4" strokeWidth={3} />
+                            <div className="relative mx-auto h-[110px] w-[110px] shrink-0 sm:h-[124px] sm:w-[124px] md:h-[140px] md:w-[140px]">
+                                <div className="absolute inset-0 overflow-hidden rounded-full bg-[#f3f6fb]">
+                                    {personality.creator_id === null ? (
+                                        <Image
+                                            src={getPersonalityImageSrc(
+                                                personality.key
+                                            )}
+                                            alt={personality.title}
+                                            fill
+                                            sizes="(max-width: 640px) 40vw, (max-width: 1024px) 22vw, 160px"
+                                            className="object-cover object-top"
+                                        />
                                     ) : (
-                                        <CheckCircle className="h-4 w-4" strokeWidth={3} />
+                                        <div className="flex h-full w-full items-center justify-center">
+                                            <EmojiComponent
+                                                personality={personality}
+                                                size={72}
+                                            />
+                                        </div>
                                     )}
-                                </Button>
-                            </CardContent>
-                            <CardHeader className="flex-shrink-0 gap-0 px-4 py-2">
-                                <CardTitle className="font-semibold text-md flex flex-row items-center gap-2">
-                                    {personality.title}  
-                                </CardTitle>
-                                <CardDescription className="text-sm font-normal">
-                                    {personality.subtitle}
-                                </CardDescription>
-                            </CardHeader>
-                        </Card>
-                        </ModifyCharacterSheet>
+                                </div>
+                                {isCurrentPersonality && (
+                                    <Image
+                                        src={playgroundAssets.check}
+                                        alt=""
+                                        width={28}
+                                        height={28}
+                                        className="absolute -right-0.5 -top-0.5 z-10 h-7 w-7 object-contain"
+                                    />
+                                )}
+                            </div>
+                            <span className="mt-3 max-w-full truncate text-center text-[11px] font-medium tracking-[0.04em] text-[#7A8AA0] md:text-xs">
+                                {formatCharacterName(personality)}
+                            </span>
+                        </button>
                     );
-                    })}
-                </div>
+                })}
             </div>
         </div>
     );

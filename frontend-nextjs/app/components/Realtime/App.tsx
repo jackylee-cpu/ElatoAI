@@ -21,9 +21,8 @@ import { FastAPIVoiceSession, FastAPIControlMessage } from "./lib/fastapiConnect
 import { getFastAPIVoiceUrl, shouldUseFastAPIVoice } from "./lib/voiceBackend";
 import { MicMode, MIC_MODE_STORAGE_KEY, parseMicMode } from "./lib/micMode";
 import { toast } from "@/components/ui/use-toast";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import Transcript from "./components/Transcript";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { getPersonalityById } from "@/db/personalities";
 import { createClient } from "@/utils/supabase/client";
 
@@ -55,13 +54,23 @@ const HANDS_FREE_REOPEN_DELAY_MS = 1000;
 // rate it used to run at, or quarters it on a 120Hz display.
 const BOT_REVEAL_INTERVAL_MS = 33;
 
+export type VoiceTriggerRenderProps = {
+  sessionStatus: SessionStatus;
+  onToggleConnection: () => void;
+  isDoctor: boolean;
+  personality: IPersonality | null;
+  usesFastAPI: boolean;
+  disabled: boolean;
+};
+
 interface AppProps {
   personalityIdState: string;
   isDoctor: boolean;
   userId: string;
+  renderTrigger?: (props: VoiceTriggerRenderProps) => React.ReactNode;
 }
 
-function App({ personalityIdState, isDoctor, userId }: AppProps) {
+function App({ personalityIdState, isDoctor, userId, renderTrigger }: AppProps) {
   const supabase = createClient();
 
   const { transcriptItems, addTranscriptMessage, upsertTranscriptMessage, updateTranscriptItemStatus } =
@@ -74,8 +83,6 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
 
     const [isSheetOpen, setIsSheetOpen] = useState<boolean>(false);
     const [userText, setUserText] = useState<string>("");
-
-  const isMobile = useMediaQuery("(max-width: 768px)");
 
   const [personality, setPersonality] = useState<IPersonality | null>(null);
   
@@ -848,29 +855,49 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     }
   };
 
-  if (!personality) {
-    return null;
-  }
+  const usesFastAPI = personality
+    ? shouldUseFastAPIVoice(personality.provider)
+    : false;
+  const triggerDisabled =
+    sessionStatus === "CONNECTING" ||
+    !personality ||
+    (!usesFastAPI && personality?.provider === "gemini");
 
-  const usesFastAPI = shouldUseFastAPIVoice(personality.provider);
+  const trigger = renderTrigger ? (
+    renderTrigger({
+      sessionStatus,
+      onToggleConnection,
+      isDoctor,
+      personality,
+      usesFastAPI,
+      disabled: triggerDisabled,
+    })
+  ) : personality ? (
+    <BottomToolbar
+      sessionStatus={sessionStatus}
+      onToggleConnection={onToggleConnection}
+      isDoctor={isDoctor}
+      personality={personality}
+      usesFastAPI={usesFastAPI}
+    />
+  ) : null;
+
+  if (!personality) {
+    return trigger;
+  }
 
   return   <Sheet open={isSheetOpen} onOpenChange={handleSheetOpenChange}>
     <div className="inline-block">
-       <BottomToolbar
-        sessionStatus={sessionStatus}
-        onToggleConnection={onToggleConnection}
-        isDoctor={isDoctor}
-        personality={personality}
-        usesFastAPI={usesFastAPI}
-      />
+       {trigger}
     </div>
-  <SheetContent 
-    side={isMobile ? "bottom" : "right"} 
-    className="h-[80vh] md:h-full p-0"
-    style={{ maxWidth: isMobile ? "100%" : "50%" }}
+  <SheetContent
+    side="bottom"
+    hideCloseButton
+    overlayClassName="bg-black/45"
+    className="flex flex-col inset-x-3 top-[4.75rem] bottom-3 w-auto gap-0 overflow-hidden rounded-[28px] border-0 bg-transparent p-0 shadow-2xl md:inset-x-auto md:bottom-auto md:left-1/2 md:right-auto md:top-[5%] md:h-[min(760px,86vh)] md:w-[min(440px,92vw)] md:-translate-x-1/2 [&>button]:hidden"
   >
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col">
+        <SheetTitle className="sr-only">{personality.title}</SheetTitle>
         <Transcript
           userText={userText}
           setUserText={setUserText}
@@ -896,7 +923,6 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
           }
           onRestartConversation={usesFastAPI ? restartConversation : undefined}
         />
-      </div>
     </div>
   </SheetContent>
 </Sheet>

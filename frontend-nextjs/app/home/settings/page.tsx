@@ -21,13 +21,13 @@ export default async function Home() {
     const allLanguages = await getAllLanguages(supabase);
 
     return (
-        <div className="pb-4 flex flex-col gap-2">
+        <>
             {dbUser && (
                 <SettingsDashboard
                     selectedUser={dbUser}
                     allLanguages={allLanguages}
                 />
             )}
-        </div>
+        </>
     );
 }

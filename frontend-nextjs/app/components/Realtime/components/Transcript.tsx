@@ -5,11 +5,13 @@ import { TranscriptItem, VoiceTurnStatus } from "@/app/components/Realtime/types
 import { MicMode } from "@/app/components/Realtime/lib/micMode";
 import Image from "next/image";
 import { useTranscript } from "@/app/components/Realtime/contexts/TranscriptContext";
-import { getPersonalityImageSrc } from "@/lib/utils";
-import { ArrowRight, Mic, RotateCcw } from "lucide-react";
+import { cn, getPersonalityImageSrc } from "@/lib/utils";
 import { dbInsertTranscriptItem } from "@/db/conversations";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { EmojiComponent } from "../../Playground/EmojiImage";
+import { playgroundAssets } from "../../Playground/playgroundAssets";
+import { SheetClose } from "@/components/ui/sheet";
+import { Loader2 } from "lucide-react";
 
 export interface TranscriptProps {
   userText: string;
@@ -32,72 +34,68 @@ export interface TranscriptProps {
 const VOICE_STATUS_LABELS: Record<VoiceTurnStatus, string> = {
   disconnected: "",
   connecting: "Connecting…",
-  idle: "Hold to talk",
-  listening: "Listening",
-  user_speaking: "Hearing you…",
+  idle: "Ready",
+  listening: "Listening…",
+  user_speaking: "Listening…",
   thinking: "Thinking…",
   speaking: "Speaking…",
 };
 
-function formatMs(ms?: number) {
-  if (ms == null || Number.isNaN(ms)) return null;
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.max(0, Math.round(ms))}ms`;
+const WAVEFORM_BARS = [
+  8, 14, 22, 12, 18, 30, 16, 24, 34, 20, 26, 14, 20, 10, 16, 28, 22, 12, 18,
+  32, 16, 10, 20, 26, 14, 22, 12, 8, 16, 24, 18, 12, 20, 28, 14, 22, 10, 16,
+];
+
+function TalkWaveform({ active }: { active: boolean }) {
+  return (
+    <div className="flex h-9 min-w-0 flex-1 items-center gap-[2px]" aria-hidden>
+      {WAVEFORM_BARS.map((height, index) => (
+        <span
+          key={index}
+          className={cn(
+            "max-w-[4px] flex-1 rounded-full bg-[#3B82F6] origin-center",
+            active && "animate-waveform"
+          )}
+          style={{
+            height,
+            animationDelay: active ? `${(index % 8) * 80}ms` : undefined,
+            opacity: active ? 1 : 0.55,
+          }}
+        />
+      ))}
+    </div>
+  );
 }
 
-function timingLabel(item: TranscriptItem) {
-  const first = formatMs(item.firstLatencyMs);
-  const elapsed = formatMs(item.elapsedMs);
-  const parts: string[] = [];
-  if (first) parts.push(`首字 ${first}`);
-  if (item.status === "DONE" && elapsed && elapsed !== first) parts.push(`定稿 ${elapsed}`);
-  else if (elapsed && !first) parts.push(elapsed);
-  return parts.join(" · ");
+function formatBubbleTime(createdAtMs: number) {
+  return new Date(createdAtMs)
+    .toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+    .toLowerCase();
 }
 
 function Transcript({
-  userText,
-  setUserText,
-  onSendMessage,
-  canSend,
   personality,
   userId,
   isDoctor,
   supabase,
   voiceStatus,
-  micMode,
   isTalking = false,
   onTalkStart,
   onTalkEnd,
-  onToggleMicMode,
-  onRestartConversation,
 }: TranscriptProps) {
-  const { transcriptItems, toggleTranscriptItemExpand } = useTranscript();
+  const { transcriptItems } = useTranscript();
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [prevLogs, setPrevLogs] = useState<TranscriptItem[]>([]);
-  const [justCopied, setJustCopied] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  const liveItem = [...transcriptItems].reverse().find(
-    (item) => item.type === "MESSAGE" && item.role === "user" && !item.isHidden
-  );
-  const showLiveCaption =
-    Boolean(voiceStatus && voiceStatus !== "disconnected") &&
-    Boolean(liveItem) &&
-    (liveItem?.status === "IN_PROGRESS" || voiceStatus === "user_speaking");
 
   function scrollToBottom() {
     if (transcriptRef.current) {
       transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
     }
   }
-
-  useEffect(() => {
-    if (!showLiveCaption) return;
-    const timer = window.setInterval(() => setNowMs(Date.now()), 100);
-    return () => window.clearInterval(timer);
-  }, [showLiveCaption]);
 
   useEffect(() => {
     const hasNewMessage = transcriptItems.length > prevLogs.length;
@@ -133,229 +131,186 @@ function Transcript({
     setPrevLogs(transcriptItems);
   }, [transcriptItems]);
 
-  // Autofocus on text box input on load
-  useEffect(() => {
-    if (canSend && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [canSend]);
-
-  const liveText = liveItem?.title && !liveItem.title.startsWith("[") ? liveItem.title : "";
-  const liveElapsed = liveItem
-    ? formatMs(liveItem.elapsedMs ?? Math.max(0, nowMs - liveItem.createdAtMs))
-    : null;
+  const statusLabel =
+    voiceStatus && voiceStatus !== "disconnected"
+      ? VOICE_STATUS_LABELS[voiceStatus]
+      : "";
+  const isLiveStatus =
+    voiceStatus === "speaking" ||
+    voiceStatus === "listening" ||
+    voiceStatus === "user_speaking";
+  const waveformActive =
+    isTalking ||
+    voiceStatus === "user_speaking" ||
+    voiceStatus === "listening" ||
+    voiceStatus === "speaking";
+  const canHoldToTalk = Boolean(onTalkStart && onTalkEnd);
+  const holdDisabled = voiceStatus === "connecting";
+  const hasMessages = transcriptItems.some(
+    (item) => item.type === "MESSAGE" && !item.isHidden
+  );
 
   return (
-<div className="flex flex-col h-full bg-white rounded-xl" style={{ fontFamily: '"PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", "Heiti SC", sans-serif' }}>
-      {/* Fixed Personality header */}
-      <div className="sticky top-0 p-4 border-b border-gray-200 flex items-center bg-white">
-      <div className="w-12 h-12 rounded-full bg-gray-200 overflow-hidden mr-3">
-          {personality.key && (
-            personality.creator_id === null ? (
-              <Image 
-                src={getPersonalityImageSrc(personality.key)} 
-                alt={personality.title} 
-                width={48} 
-                height={48} 
-                className="object-cover w-full h-full"
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <EmojiComponent personality={personality} size={48} />
-              </div>
-            )
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] bg-white">
+      <Image
+        src={playgroundAssets.chatBg}
+        alt=""
+        fill
+        sizes="(max-width: 768px) 100vw, 440px"
+        className="object-cover object-top"
+        priority
+      />
+
+      <div className="relative z-10 flex items-center gap-3 bg-white/90 px-4 py-3 backdrop-blur-sm">
+        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-gray-100">
+          {personality.creator_id === null ? (
+            <Image
+              src={getPersonalityImageSrc(personality.key)}
+              alt={personality.title}
+              width={48}
+              height={48}
+              className="h-full w-full object-cover object-top"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center">
+              <EmojiComponent personality={personality} size={48} />
+            </div>
           )}
         </div>
-        <div className="flex-1">
-          <h2 className="font-medium text-lg">{personality.title}</h2>
-          <p className="text-sm text-gray-500">
-            {voiceStatus && voiceStatus !== "disconnected"
-              ? VOICE_STATUS_LABELS[voiceStatus]
-              : personality.subtitle}
-          </p>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-base font-semibold text-gray-900">
+            {personality.title}
+          </h2>
+          {statusLabel && (
+            <p
+              className={cn(
+                "flex items-center gap-1.5 text-sm",
+                isLiveStatus ? "text-emerald-500" : "text-gray-400"
+              )}
+            >
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  isLiveStatus ? "bg-emerald-500" : "bg-gray-300"
+                )}
+              />
+              {statusLabel}
+            </p>
+          )}
         </div>
-        {/* <button
-          onClick={handleCopyTranscript}
-          className="text-sm px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
-        >
-          {justCopied ? "Copied!" : "Copy"}
-        </button> */}
+        <SheetClose asChild>
+          <button
+            type="button"
+            aria-label="Close chat"
+            className="shrink-0 transition-transform hover:scale-105 active:scale-95"
+          >
+            <Image
+              src={playgroundAssets.close}
+              alt=""
+              width={40}
+              height={40}
+              className="h-10 w-10 object-contain"
+            />
+          </button>
+        </SheetClose>
       </div>
 
-    {/* Transcript */}
- <div 
+      <div
         ref={transcriptRef}
-        className="flex-1 overflow-y-auto p-4 flex flex-col gap-y-3"
+        className="relative z-10 flex-1 space-y-3 overflow-y-auto px-4 py-4"
       >
-        {transcriptItems.every((item) => item.type !== "MESSAGE" || item.isHidden) && (
-          <div className="text-sm text-gray-400 text-center mt-8">
-            {voiceStatus && voiceStatus !== "disconnected"
-              ? `${VOICE_STATUS_LABELS[voiceStatus]}. Start talking.`
-              : "Talk to see the conversation here."}
-          </div>
+        {!hasMessages && (
+          <p className="mt-10 text-center text-sm text-gray-400">
+            Hold the mic to start talking
+          </p>
         )}
         {transcriptItems.map((item) => {
-          const { itemId, type, role, data, expanded, timestamp, title = "", isHidden } = item;
+          const { itemId, type, role, title = "", isHidden, createdAtMs, status } = item;
+          if (isHidden || type !== "MESSAGE") return null;
 
-          if (isHidden) {
-            return null;
-          }
+          const isUser = role === "user";
+          const isBracketedMessage = title.startsWith("[") && title.endsWith("]");
+          const displayTitle = isBracketedMessage ? title.slice(1, -1) : title;
+          const showCaret = status === "IN_PROGRESS" && !isBracketedMessage;
 
-          if (type === "MESSAGE") {
-            const isUser = role === "user";
-            const containerClasses = `flex ${isUser ? "justify-end" : "justify-start"} mb-2`;
-            const bubbleClasses = `max-w-[80%] p-3 rounded-xl ${
-              isUser ? "bg-blue-400 text-white" : "bg-yellow-100 text-gray-800"
-            } border-2 ${isUser ? "border-blue-500" : "border-yellow-200"} shadow-sm`;
-            const isBracketedMessage = title.startsWith("[") && title.endsWith("]");
-            const messageStyle = isBracketedMessage
-              ? "italic text-gray-400 text-lg leading-relaxed"
-              : "text-lg font-medium leading-relaxed tracking-wide";
-            const displayTitle = isBracketedMessage ? title.slice(1, -1) : title;
-            const showCaret = item.status === "IN_PROGRESS" && !isBracketedMessage;
-            const timing = isUser ? timingLabel(item) : "";
-
-            return (
-              <div key={itemId} className={containerClasses}>
-                <div className={bubbleClasses}>
-                  <div className={`${messageStyle} whitespace-pre-wrap break-words`}>
-                    {displayTitle}
-                    {showCaret && (
-                      <span className={`inline-block w-[2px] h-[1em] ml-0.5 align-[-2px] animate-pulse ${isUser ? "bg-white" : "bg-gray-700"}`} />
-                    )}
-                  </div>
-                  <div className="text-xs opacity-70 mt-1 text-right flex items-center justify-end gap-2">
-                    {timing && <span>{timing}</span>}
-                    <span>{timestamp}</span>
-                  </div>
-                </div>
+          return (
+            <div
+              key={itemId}
+              className={cn("flex", isUser ? "justify-end" : "justify-start")}
+            >
+              <div
+                className={cn(
+                  "max-w-[85%] rounded-[20px] px-4 py-3 shadow-sm",
+                  isUser
+                    ? "rounded-tr-md bg-[#D7F3FA] text-gray-800"
+                    : "rounded-tl-md bg-white text-gray-800"
+                )}
+              >
+                <p
+                  className={cn(
+                    "whitespace-pre-wrap break-words text-[15px] leading-relaxed",
+                    isBracketedMessage && "italic text-gray-400"
+                  )}
+                >
+                  {displayTitle}
+                  {showCaret && (
+                    <span className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse align-[-2px] bg-gray-500" />
+                  )}
+                </p>
+                <p className="mt-1 text-right text-[11px] italic text-gray-400">
+                  {formatBubbleTime(createdAtMs)}
+                </p>
               </div>
-            );
-          }
+            </div>
+          );
         })}
       </div>
-      {showLiveCaption && liveItem && (
-        <div className="px-4 pb-2">
-          <div className="rounded-2xl bg-slate-950 text-white px-4 py-3 shadow-lg">
-            <div className="flex items-center justify-between gap-3 text-[11px] tracking-widest text-emerald-300">
-              <span>{liveText ? "即時字幕" : "聆聽中"}</span>
-              <span className="font-mono tracking-normal text-emerald-200">
-                {formatMs(liveItem.firstLatencyMs) ? `首字 ${formatMs(liveItem.firstLatencyMs)}` : liveElapsed}
-              </span>
-            </div>
-            <p className="mt-2 text-2xl font-medium leading-snug tracking-wide min-h-[2rem]">
-              {liveText || "…"}
-              {liveItem.status === "IN_PROGRESS" && (
-                <span className="inline-block w-[3px] h-[1.1em] bg-emerald-300 ml-1 align-[-3px] animate-pulse" />
-              )}
-            </p>
-          </div>
-        </div>
-      )}
-      {voiceStatus && voiceStatus !== "disconnected" && (
-        <div className="sticky bottom-0 px-4 py-3 border-t border-gray-200 bg-gray-50 flex flex-col gap-3">
-          <div className="text-sm text-gray-600 flex items-center gap-2">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                voiceStatus === "speaking" || voiceStatus === "user_speaking"
-                  ? "bg-green-500"
-                  : voiceStatus === "thinking" || voiceStatus === "connecting"
-                    ? "bg-amber-500"
-                    : "bg-blue-500"
-              }`}
-            />
-            {VOICE_STATUS_LABELS[voiceStatus]}
-            {liveElapsed && voiceStatus === "user_speaking" && (
-              <span className="ml-auto font-mono text-xs text-gray-500">{liveElapsed}</span>
-            )}
-          </div>
 
-          {onTalkStart && onTalkEnd && (
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                // Pointer capture keeps the release on this button even if the
-                // finger slides off it mid-sentence, so the mic cannot be left
-                // open by a sloppy drag.
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  onTalkStart();
-                }}
-                onPointerUp={(e) => {
-                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-                    e.currentTarget.releasePointerCapture(e.pointerId);
-                  }
-                  onTalkEnd();
-                }}
-                onPointerCancel={() => onTalkEnd()}
-                onContextMenu={(e) => e.preventDefault()}
-                disabled={voiceStatus === "connecting"}
-                className={`flex-1 select-none touch-none rounded-full px-4 py-3 text-base font-medium shadow-sm flex items-center justify-center gap-2 transition-colors ${
-                  isTalking
-                    ? "bg-red-600 text-white"
-                    : "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400"
-                }`}
-              >
-                <Mic size={18} />
-                {isTalking ? "Release to send" : "Hold to talk"}
-              </button>
-              {onRestartConversation && (
-                <button
-                  type="button"
-                  onClick={onRestartConversation}
-                  title="Start a new conversation"
-                  className="rounded-full p-3 bg-gray-200 text-gray-700 hover:bg-gray-300"
-                >
-                  <RotateCcw size={18} />
-                </button>
-              )}
-            </div>
-          )}
-
-          {micMode && onToggleMicMode && (
-            <div className="flex items-center justify-between text-xs text-gray-500">
-              <span>
-                {micMode === "ptt"
-                  ? "Push-to-talk (hold the button or the space bar)"
-                  : "Hands-free: the mic reopens after each answer"}
-              </span>
-              <button
-                type="button"
-                onClick={onToggleMicMode}
-                className="underline underline-offset-2 hover:text-gray-700"
-              >
-                {micMode === "ptt" ? "Switch to hands-free" : "Switch to push-to-talk"}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-    {/* 
-    <div className="sticky bottom-0 left-0 right-0 p-3 flex items-center gap-x-2 border-t border-gray-200 bg-gray-50 shadow-md">
-        <input
-          ref={inputRef}
-          type="text"
-          value={userText}
-          onChange={(e) => setUserText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && canSend) {
-              onSendMessage();
-            }
-          }}
-          className="flex-1 px-4 py-2 rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          placeholder="Type a message..."
-        />
+      <div
+        className="relative z-10 flex items-center gap-3 bg-white px-4 pt-3"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+      >
         <button
-          onClick={onSendMessage}
-          disabled={!canSend || !userText.trim()}
-          className="bg-blue-600 text-white rounded-full w-10 h-10 flex items-center justify-center disabled:opacity-50 disabled:bg-gray-400"
+          type="button"
+          aria-label={isTalking ? "Release to send" : "Hold to talk"}
+          disabled={!canHoldToTalk || holdDisabled}
+          onPointerDown={(e) => {
+            if (!canHoldToTalk) return;
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            onTalkStart?.();
+          }}
+          onPointerUp={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }
+            onTalkEnd?.();
+          }}
+          onPointerCancel={() => onTalkEnd?.()}
+          onContextMenu={(e) => e.preventDefault()}
+          className={cn(
+            "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full touch-none select-none",
+            "shadow-[0_8px_18px_rgba(88,86,214,0.28)]",
+            isTalking && "scale-95 ring-4 ring-indigo-200",
+            (!canHoldToTalk || holdDisabled) && "cursor-not-allowed opacity-70"
+          )}
         >
-          <ArrowRight size={20} />
+          <Image
+            src={playgroundAssets.mic}
+            alt=""
+            width={56}
+            height={56}
+            className="h-full w-full object-contain"
+          />
+          {holdDisabled && (
+            <span className="absolute inset-0 flex items-center justify-center rounded-full bg-indigo-600/40">
+              <Loader2 className="h-6 w-6 animate-spin text-white" />
+            </span>
+          )}
         </button>
-      </div> */}
-  </div>
+        <TalkWaveform active={waveformActive} />
+      </div>
+    </div>
   );
 }
 

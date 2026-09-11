@@ -2,8 +2,9 @@ import { createUser, doesUserExist, getUserById } from "@/db/users";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import Playground from "../components/Playground/PlaygroundComponent";
-import { defaultPersonalityId, defaultToyId } from "@/lib/data";
+import { defaultPersonalityId } from "@/lib/data";
 import { getAllPersonalities, getMyPersonalities } from "@/db/personalities";
+import { isAdminEmail } from "@/lib/admin";
 
 
 export const revalidate = 0; // disable cache for this route
@@ -39,14 +40,15 @@ export default async function Home() {
     const myPersonalities = await getMyPersonalities(supabase, user?.id ?? "");
 
     return (
-        <div>
+        <>
             {dbUser && (
                 <Playground
                     allPersonalities={allPersonalities}
                     myPersonalities={myPersonalities}
                     currentUser={dbUser}
+                    isAdmin={isAdminEmail(dbUser.email)}
                 />
             )}
-        </div>
+        </>
     );
 }

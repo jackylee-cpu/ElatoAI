@@ -103,6 +103,10 @@ const config = {
                     from: { transform: "translateX(-100%)" },
                     to: { transform: "translateX(0)" },
                 },
+                waveform: {
+                    "0%, 100%": { transform: "scaleY(0.35)" },
+                    "50%": { transform: "scaleY(1)" },
+                },
             },
             fontFamily: {
                 inter: ["var(--font-inter)"],
@@ -124,6 +128,7 @@ const config = {
                 "infinite-scroll": "infinite-scroll 60s linear infinite",
                 "infinite-scroll-inverse":
                     "infinite-scroll-inverse 60s linear infinite",
+                waveform: "waveform 0.9s ease-in-out infinite",
             },
             boxShadow: {
                 cool:

@@ -23,7 +23,8 @@ import { useToast } from "@/components/ui/use-toast";
 
 interface AppSettingsProps {
     selectedUser: IUser;
-    heading: React.ReactNode;
+    heading?: React.ReactNode;
+    hideUserForm?: boolean;
 }
 
 const skipDeviceRegistration = process.env.NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION === "True";
@@ -32,6 +33,7 @@ const skipDeviceRegistration = process.env.NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION 
 const AppSettings: React.FC<AppSettingsProps> = ({
     selectedUser,
     heading,
+    hideUserForm = false,
 }) => {
     const supabase = createClient();
     const { toast } = useToast();
@@ -151,6 +153,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
 
     return (
         <>
+            {!hideUserForm && (
             <GeneralUserForm
                     selectedUser={selectedUser}
                     userId={selectedUser.user_id}
@@ -158,8 +161,9 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                     onSave={onSave}
                     onClickCallback={() => handleSave()}
                 />
+            )}
 
-            <div className="space-y-4 max-w-screen-sm mt-12">
+            <div className={`space-y-4 max-w-screen-sm ${hideUserForm ? "mt-0" : "mt-12"}`}>
                 <h2 className="text-lg font-semibold border-b border-gray-200 pb-2">
                     Device settings
                 </h2>

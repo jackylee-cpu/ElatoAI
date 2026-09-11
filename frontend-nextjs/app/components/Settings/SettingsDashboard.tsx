@@ -1,97 +1,100 @@
 "use client";
 
 import React, { useState } from "react";
-import HomePageSubtitles from "../HomePageSubtitles";
+import Image from "next/image";
+import Link from "next/link";
 import AppSettings from "./AppSettings";
 import MemorySection from "./MemorySection";
-import { updateUser } from "@/db/users";
-import { createClient } from "@/utils/supabase/client";
-import PickLanguage from "../Playground/PickLanguage";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import { Button } from "@/components/ui/button";
-import { Info } from "lucide-react";
+import MyInfoForm from "./MyInfoForm";
+import { playgroundAssets } from "../Playground/playgroundAssets";
+import { cn } from "@/lib/utils";
 
 interface SettingsDashboardProps {
     selectedUser: IUser;
     allLanguages: ILanguage[];
 }
 
+type SettingsTab = "info" | "setting";
+
 const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     selectedUser,
     allLanguages,
 }) => {
-    const supabase = createClient();
-
-    const [languageState, setLanguageState] = useState<string>(
-        selectedUser.language_code! // Initial value from props
-    );
-
-
-    const onLanguagePicked = async (languagePicked: string) => {
-        setLanguageState(languagePicked);
-        await updateUser(
-            supabase,
-            {
-                language_code: languagePicked,
-            },
-            selectedUser.user_id
-        );
-    };
-
-    const LanguagePicker = () => {
-        return (
-            <PickLanguage
-                onLanguagePicked={onLanguagePicked}
-                allLanguages={allLanguages}
-                languageState={languageState}
-                isDisabled={false}
-            />
-        )
-    }
-
-    const Heading = () => {
-        return (
-            <div className="flex flex-col gap-2">
-                <div className="flex flex-row gap-4 items-center sm:justify-normal justify-between max-w-screen-sm">
-                    <div className="flex flex-row gap-4 items-center justify-between w-full">
-                        <h1 className="text-3xl font-normal">Settings</h1>
-                        <div className="pt-1 flex flex-row items-center">
-                        <Popover>
-      <PopoverTrigger asChild>
-        <Button variant="link" size="icon">
-            <Info size={12} />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-80">
-        <div className="grid gap-4 text-xs">
-            The AI model will use this language as your character&apos;s default language.
-        </div>
-      </PopoverContent>
-    </Popover>
-                            <LanguagePicker />
-                        </div>
-                    </div>
-                </div>
-                <HomePageSubtitles user={selectedUser} page="settings" />
-            </div>
-        );
-    };
+    const [tab, setTab] = useState<SettingsTab>("info");
 
     return (
-        <div className="overflow-hidden pb-2 w-full flex-auto flex flex-col px-1">
-            <AppSettings
-                heading={<Heading />}
-                selectedUser={selectedUser}
+        <div className="relative h-dvh w-full overflow-hidden bg-[#d4e8f8]">
+            <Image
+                src={playgroundAssets.bg}
+                alt=""
+                fill
+                priority
+                sizes="100vw"
+                className="object-cover object-top"
             />
-            {/* Long-term memory is on by default, so the place to inspect and
-                delete it sits alongside the child's profile -- the one screen
-                where a parent already manages what the toy knows. */}
-            <div className="mt-8 border-t pt-6">
-                <MemorySection selectedUser={selectedUser} />
+
+            <div className="relative z-10 mx-auto flex h-full w-full max-w-lg flex-col px-4 pt-[max(0.75rem,env(safe-area-inset-top))] md:max-w-xl md:px-8 md:pt-8">
+                <header className="relative mb-3 flex h-14 shrink-0 items-center justify-center md:h-16">
+                    <Link
+                        href="/home"
+                        aria-label="Back to playground"
+                        className="absolute left-0 top-1/2 -translate-y-1/2 transition-transform hover:scale-105 active:scale-95"
+                    >
+                        <Image
+                            src={playgroundAssets.back}
+                            alt=""
+                            width={40}
+                            height={40}
+                            className="h-10 w-10 object-contain"
+                            priority
+                        />
+                    </Link>
+                    <h1 className="font-fredoka text-[28px] font-semibold tracking-tight text-gray-900 md:text-[32px]">
+                        {tab === "info" ? "My Info" : "Setting"}
+                    </h1>
+                </header>
+
+                <div className="mx-auto mb-5 grid w-full grid-cols-2 rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)]">
+                    {(
+                        [
+                            { id: "info", label: "My Info" },
+                            { id: "setting", label: "Setting" },
+                        ] as const
+                    ).map((item) => (
+                        <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setTab(item.id)}
+                            className={cn(
+                                "rounded-full py-2.5 text-sm font-medium transition-all md:text-base",
+                                tab === item.id
+                                    ? "bg-white text-gray-900 shadow-sm"
+                                    : "text-gray-400 hover:text-gray-600"
+                            )}
+                        >
+                            {item.label}
+                        </button>
+                    ))}
+                </div>
+
+                {tab === "info" ? (
+                    <MyInfoForm
+                        selectedUser={selectedUser}
+                        allLanguages={allLanguages}
+                    />
+                ) : (
+                    <div className="scrollbar-hide flex-1 overflow-y-auto pb-8">
+                        <div className="rounded-[24px] bg-white/90 p-4 shadow-[0_8px_24px_rgba(80,120,180,0.08)] backdrop-blur-sm">
+                            <AppSettings
+                                selectedUser={selectedUser}
+                                hideUserForm
+                            />
+                            <div className="mt-8 border-t pt-6">
+                                <MemorySection selectedUser={selectedUser} />
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
