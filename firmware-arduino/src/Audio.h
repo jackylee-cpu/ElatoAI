@@ -49,10 +49,12 @@ extern const int CHANNELS;         // Mono
 extern const int BITS_PER_SAMPLE; // 16-bit audio
 
 // AUDIO OUTPUT
-// The server encodes 120ms Opus frames. At the 24kHz output rate one decodes
-// to 5760 bytes, so this holds ~3.5 frames and absorbs network jitter without
-// the network task ever blocking mid-write. Keep this above 2x the frame size
-// if SAMPLE_RATE is ever raised again.
+// The server encodes 40ms Opus frames (server/fastapi/esp32_transport.py).
+// At the 24kHz output rate one decodes to 1920 bytes, so this holds ~10 of
+// them and absorbs network jitter without the network task ever blocking
+// mid-write. A server still sending the old 120ms frames decodes to 5760
+// bytes and is equally fine here. Keep this above 2x the frame size if
+// SAMPLE_RATE is ever raised again.
 constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 20;     // total bytes in the buffer (~416ms @ 24kHz)
 constexpr size_t AUDIO_CHUNK_SIZE  = 1024;         // ideal read/write chunk size
 extern OpusAudioDecoder opusDecoder;

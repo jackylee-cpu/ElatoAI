@@ -46,6 +46,15 @@ const MIC_SILENCE_LEVEL = 120;
 // scheduledTime = millis() + 1000).
 const HANDS_FREE_REOPEN_DELAY_MS = 1000;
 
+// Shortest gap between two steps of the bot transcript's character-by-character
+// reveal. Each step is a React state update that re-renders every consumer of
+// the transcript context, so this is the rate at which the main thread is asked
+// to do real work for the whole duration of an answer. 33ms (~30 steps/s) is
+// still smooth to read -- the reveal advances by more characters per step to
+// keep the same words-per-second -- and halves that load against the 60Hz frame
+// rate it used to run at, or quarters it on a 120Hz display.
+const BOT_REVEAL_INTERVAL_MS = 33;
+
 interface AppProps {
   personalityIdState: string;
   isDoctor: boolean;
@@ -90,6 +99,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
   const botTargetTextRef = useRef<Record<string, string>>({});
   const botShownTextRef = useRef<Record<string, string>>({});
   const botRevealRafRef = useRef<number | null>(null);
+  const botRevealLastAtRef = useRef<number | null>(null);
   const [sessionStatus, setSessionStatus] =
     useState<SessionStatus>("DISCONNECTED");
   const [voiceStatus, setVoiceStatus] =
@@ -142,7 +152,11 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     setSelectedAgentName,
   });
 
-  const revealBotText = (itemId: string, flush = false) => {
+  const revealBotText = (
+    itemId: string,
+    flush = false,
+    elapsedMs = BOT_REVEAL_INTERVAL_MS,
+  ) => {
     const target = botTargetTextRef.current[itemId] ?? "";
     const shown = botShownTextRef.current[itemId] ?? "";
     if (flush || shown === target) {
@@ -157,7 +171,16 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     if (remaining <= 0) {
       return false;
     }
-    const nextCount = remaining > 24 ? Math.min(remaining, 4) : remaining > 8 ? 2 : 1;
+    // Characters per second, not characters per frame. The old code revealed a
+    // fixed 4/2/1 characters per animation frame, which made the reveal speed a
+    // property of the display: the same sentence crawled out at 240 chars/s on a
+    // 60Hz panel and 480 on a 120Hz one. Deriving the count from elapsed time
+    // keeps the original 60Hz speed and makes it the same everywhere.
+    const perSecond = remaining > 24 ? 240 : remaining > 8 ? 120 : 60;
+    const nextCount = Math.max(
+      1,
+      Math.min(remaining, Math.round((perSecond * elapsedMs) / 1000)),
+    );
     const next = target.slice(0, shown.length + nextCount);
     botShownTextRef.current[itemId] = next;
     upsertTranscriptMessage(itemId, "assistant", next, "replace");
@@ -170,9 +193,27 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
     }
     botRevealRafRef.current = window.requestAnimationFrame(() => {
       botRevealRafRef.current = null;
+      const now = performance.now();
+      const since = botRevealLastAtRef.current;
+      const elapsed = since == null ? BOT_REVEAL_INTERVAL_MS : now - since;
+
+      // Come back next frame without touching React state. Every reveal step
+      // is an upsertTranscriptMessage, which re-renders every consumer of the
+      // transcript context -- at 60Hz that is a state update every 16.7ms for
+      // the whole of an answer, and on a 120Hz display every 8.3ms. That work
+      // lands on the main thread, which is also where audio playback used to
+      // run; see PLAYBACK_WORKLET in lib/fastapiConnection.ts. requestAnimation
+      // Frame on its own is cheap, so the throttle goes here rather than on the
+      // scheduling.
+      if (elapsed < BOT_REVEAL_INTERVAL_MS) {
+        scheduleBotReveal();
+        return;
+      }
+      botRevealLastAtRef.current = now;
+
       let needMore = false;
       Object.keys(botTargetTextRef.current).forEach((itemId) => {
-        if (revealBotText(itemId)) {
+        if (revealBotText(itemId, false, elapsed)) {
           needMore = true;
         }
       });
@@ -593,6 +634,7 @@ function App({ personalityIdState, isDoctor, userId }: AppProps) {
       window.cancelAnimationFrame(botRevealRafRef.current);
       botRevealRafRef.current = null;
     }
+    botRevealLastAtRef.current = null;
     botTargetTextRef.current = {};
     botShownTextRef.current = {};
 

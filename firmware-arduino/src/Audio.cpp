@@ -224,13 +224,22 @@ volatile bool i2sOutputFlushScheduled = false;
 // playing at the exact rate the network delivers, and every jitter spike then
 // becomes a gap -- a run of those gaps is the stutter.
 static volatile bool playbackPrimed = false;
-// ~170ms at 24kHz mono s16, out of the 416ms ring. Costs that much at the start
+// ~85ms at 24kHz mono s16, out of the 416ms ring. Costs that much at the start
 // of a turn and buys a matching cushion against network jitter for the rest of
-// it. Lower it if responses feel sluggish, but watch the starvation figure
-// transitionToIdle() logs.
-static const size_t PLAYBACK_PRIME_BYTES = 8192;
+// it.
+//
+// Was 8192 (~170ms) while the server sent 120ms Opus frames, where the ring
+// filled two packets at a time and there was no point asking for a cushion
+// finer than one of them. The server now sends 40ms frames, so jitter arrives
+// in 1920-byte steps and half the cushion covers the same number of late
+// packets. That halving comes straight off the time to the first spoken word.
+//
+// This is the knob to turn back up if playback stutters: raise it and watch
+// the starvation figure transitionToIdle() logs go to zero. A turn reporting
+// more than a few ms of starvation wants a bigger cushion, not a smaller one.
+static const size_t PLAYBACK_PRIME_BYTES = 4096;
 // ...but never wait longer than this for it. A reply shorter than
-// PLAYBACK_PRIME_BYTES of PCM (170ms) would otherwise never reach the
+// PLAYBACK_PRIME_BYTES of PCM (85ms) would otherwise never reach the
 // threshold, and playback would never start at all: the audio just sits in the
 // ring until the end of the turn drops it.
 static const unsigned long PLAYBACK_PRIME_MAX_WAIT_MS = 150;
@@ -384,9 +393,18 @@ void audioStreamTask(void *parameter) {
     cfg.sample_rate = SAMPLE_RATE;
     cfg.channels = CHANNELS;
     cfg.bits_per_sample = BITS_PER_SAMPLE;
-    // A 120ms Opus frame is 5760 bytes at 24kHz mono s16. Kept at double that
-    // so raising AUDIO_OUTPUT_SAMPLE_RATE on the server does not silently
-    // truncate frames here.
+    // This is the decode *output* buffer, and OpusAudioDecoder derives
+    // opus_decode()'s frame_count from it -- so it caps the longest packet
+    // this build can decode at all, not just the one the server happens to
+    // send. A packet larger than it fails with OPUS_BUFFER_TOO_SMALL and is
+    // dropped silently into a LOGW.
+    //
+    // The server now sends 40ms frames (1920 bytes at 24kHz mono s16), but it
+    // is deployed separately from this firmware: a device in the field must
+    // still decode the 120ms frames (5760 bytes) an older or rolled-back
+    // server sends, and 120ms is the longest packet Opus can express. Kept at
+    // 16384 for that, and for headroom if AUDIO_OUTPUT_SAMPLE_RATE is ever
+    // raised. Do not shrink this to fit the current frame size.
     cfg.max_buffer_size = 16384;
 
     xSemaphoreTake(wsMutex, portMAX_DELAY);
@@ -422,14 +440,6 @@ void audioStreamTask(void *parameter) {
     Serial.printf("Opus %s | heap %u | largest block %u\n",
                   decoderStarted ? "ready" : "FAILED", ESP.getFreeHeap(),
                   heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-
-    // Here and not in setup(): this task owns the output port, so this is the
-    // only place the boot sound can install its own I2S without racing anyone,
-    // and it is late enough that the decoder already has its scratch block.
-    // setup() has not finished yet -- it resumes while this blocks on DMA and
-    // brings the radio up, so the sound plays over the association instead of
-    // delaying it.
-    playBootChime();
 
     audioBuffer.setReadMaxWait(0);
     
@@ -484,6 +494,17 @@ void audioStreamTask(void *parameter) {
     // The streams exist now, so a level restored from NVS at boot can finally
     // be applied -- before this both streams are at their library default.
     applyVolume(currentVolume);
+
+    // After i2s.begin(), deliberately: the boot sound plays through the port
+    // this task owns rather than installing and tearing down one of its own.
+    // setup() has not finished yet -- it resumes while this blocks on DMA and
+    // brings the radio up, so the sound plays over the association instead of
+    // delaying it.
+#ifndef SKIP_BOOT_CHIME
+    playBootChime();
+#else
+    Serial.println("Chime: boot skipped (SKIP_BOOT_CHIME)");
+#endif
 
     while (1) {
         if (i2sOutputFlushScheduled) {
