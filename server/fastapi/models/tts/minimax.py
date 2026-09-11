@@ -13,7 +13,10 @@ from urllib.parse import urlparse
 import aiohttp
 from loguru import logger
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
-from pipecat.services.minimax.tts import MiniMaxHttpTTSService
+from pipecat.services.minimax.tts import (
+    MiniMaxHttpTTSService,
+    language_to_minimax_language,
+)
 from pipecat.services.tts_service import WebsocketTTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.tracing.service_decorators import traced_tts
@@ -21,13 +24,22 @@ from websockets.protocol import State
 
 _http_session: aiohttp.ClientSession | None = None
 
+# Spelling of a language on the way in -> the Language member MiniMax's own
+# map knows. Cantonese is the one that matters: ZH_HK looks like the obvious
+# member and is the wrong one, because MiniMax's map is keyed on YUE and
+# anything it does not know falls through to the raw code string.
 _LANGUAGE_ALIASES = {
     "CHINESE": "ZH",
     "MANDARIN": "ZH",
     "ZH_CN": "ZH",
+    "ZH_HANS": "ZH",
     "ZH_TW": "ZH",
     "CANTONESE": "YUE",
+    "ZH_HK": "YUE",
+    "ZH_HANT_HK": "YUE",
     "ENGLISH": "EN",
+    "EN_US": "EN",
+    "EN_GB": "EN",
 }
 
 
@@ -46,6 +58,25 @@ def _parse_language(value: str | None):
         return None
     attr = _LANGUAGE_ALIASES.get(token, token)
     return getattr(Language, attr, None)
+
+
+def _language_boost(language) -> str | None:
+    """The `language_boost` string MiniMax actually reads, or None.
+
+    `TTSSettings.language` is a dead end for this service. Pipecat stores it
+    and converts it to a service string, but neither the HTTP payload nor the
+    websocket's `task_start` message ever looks at it -- both read
+    `language_boost`, which upstream only fills in from the deprecated
+    `params=` constructor path this module does not use. So `MINIMAX_LANGUAGE`
+    silently did nothing until this converted it here.
+
+    Note that Cantonese has to arrive as `Language.YUE`. `Language.ZH_HK` is
+    not in MiniMax's map and resolves to the literal "zh-HK", which the API
+    does not recognise as a language at all.
+    """
+    if language is None:
+        return None
+    return language_to_minimax_language(language)
 
 
 def _settings(**values):
@@ -565,7 +596,9 @@ def create_service(**kwargs):
     settings = _settings(
         model=kwargs.get("model") or os.getenv("MINIMAX_TTS_MODEL") or "speech-2.6-turbo",
         voice=kwargs.get("voice") or os.getenv("MINIMAX_VOICE") or "Calm_Woman",
-        language=_parse_language(kwargs.get("language") or os.getenv("MINIMAX_LANGUAGE")),
+        language_boost=_language_boost(
+            _parse_language(kwargs.get("language") or os.getenv("MINIMAX_LANGUAGE"))
+        ),
         emotion=kwargs.get("emotion") or os.getenv("MINIMAX_EMOTION"),
     )
     base_url = kwargs.get("base_url") or os.getenv("MINIMAX_BASE_URL")

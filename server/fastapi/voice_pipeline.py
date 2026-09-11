@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import language_profiles
 from character_prompt import build_session_prompt
 from loguru import logger
 from models.llm import create_llm_service
@@ -112,6 +113,7 @@ def build_voice_pipeline(
     memory=None,
     child=None,
     stack: dict | None = None,
+    language_code: str | None = None,
 ):
     # `stack` is resolved by the caller because reading it needs an await and
     # this function is synchronous. Falling back to the env-only stack keeps
@@ -121,6 +123,11 @@ def build_voice_pipeline(
     llm_provider = stack["llm_provider"]
     tts_provider = stack["tts_provider"]
     child = child or {}
+
+    # One decision drives the recognizer, the voice and the system prompt. An
+    # account on a language with no profile resolves to None, which leaves all
+    # three exactly where the env vars put them. See language_profiles.py.
+    language = language_profiles.resolve(language_code)
 
     # The system-prompt half of long-term memory: what the last sessions ended
     # on. `memory_preamble` has been an unused hook in build_session_prompt
@@ -145,20 +152,39 @@ def build_voice_pipeline(
         child_age=child.get("age"),
         child_persona=child.get("persona"),
         memory_preamble=memory_preamble,
+        language_instruction=language.prompt if language else None,
+    )
+
+    # The voice is part of the language, not a free choice beside it: a MiniMax
+    # voice id speaks exactly one language. `voice_for` keeps the character's
+    # own voice when it can say these words and substitutes the language's
+    # otherwise, so a Cantonese session never runs an English voice id.
+    session_voice = (
+        language_profiles.voice_for(language, tts_voice) if language else tts_voice
     )
 
     logger.info(
-        "Building classic route with stt={} llm={} tts={} model={} reasoning={} voice={} character={}",
+        "Building classic route with stt={} llm={} tts={} model={} reasoning={} "
+        "language={} voice={} character={}",
         stt_provider,
         llm_provider,
         tts_provider,
         stack["llm_model"] or "provider default",
         stack.get("reasoning_effort") or "model default",
-        tts_voice or "default",
+        language.label if language else (language_code or "provider default"),
+        session_voice or "default",
         title or "default",
     )
+    if language and tts_voice and session_voice != tts_voice:
+        logger.info(
+            "Character voice {} cannot speak {}, using {} instead",
+            tts_voice,
+            language.label,
+            session_voice,
+        )
 
-    stt = create_stt_service(stt_provider)
+    stt_kwargs = {"language": language.stt_language} if language else {}
+    stt = create_stt_service(stt_provider, **stt_kwargs)
     # Azure force-finalizes on commit (flush_silence_ms=0). Other recognizers
     # still need trailing silence written in; see models/stt/azure.py.
     input_processor.set_flush_silence_ms(flush_silence_ms(stt_provider))
@@ -176,11 +202,10 @@ def build_voice_pipeline(
         llm_kwargs["reasoning_effort"] = stack["reasoning_effort"]
     llm = create_llm_service(llm_provider, **llm_kwargs)
     tts_kwargs = {}
-    if tts_voice:
-        tts_kwargs["voice"] = tts_voice
-        lowered = tts_voice.lower()
-        if "chinese" in lowered or "mandarin" in lowered:
-            tts_kwargs["language"] = "zh"
+    if session_voice:
+        tts_kwargs["voice"] = session_voice
+    if language:
+        tts_kwargs["language"] = language.tts_language
     tts = create_tts_service(tts_provider, **tts_kwargs)
 
     # Whisper is a segmented STT: it only transcribes after VAD start/stop.

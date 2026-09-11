@@ -109,10 +109,17 @@ def build_session_prompt(
     child_age: int | None = None,
     child_persona: str | None = None,
     memory_preamble: str | None = None,
+    language_instruction: str | None = None,
 ) -> str:
     prompt = (character_prompt or "").strip()
     child_block = build_child_block(child_name, child_age, child_persona)
     preamble = (memory_preamble or "").strip()
+    # Late, and after the character, because a character prompt usually names a
+    # language of its own -- the built-in pal teaches Spanish, and several of
+    # the stored characters are written in Spanish. The account's choice is the
+    # one that has to win, and the later instruction is the one that does.
+    # It stays ahead of SPOKEN_OUTPUT_RULES: see the note on why those are last.
+    language = (language_instruction or "").strip()
 
     if not prompt:
         parts = [LANGUAGE_LEARNING_PAL_PROMPT]
@@ -120,6 +127,8 @@ def build_session_prompt(
             parts.append(child_block)
         if preamble:
             parts.append(preamble)
+        if language:
+            parts.append(language)
         # Appended here too. The rules used to hang off the custom-character
         # branch only, so the built-in pal was the one character with no
         # instruction not to speak markdown.
@@ -148,6 +157,8 @@ def build_session_prompt(
         "anything that identifies them or their family. Things the child "
         "tells you on their own are fine to remember and refer back to."
     )
+    if language:
+        parts.append(language)
     # Last, so it is the most recent instruction before the conversation starts.
     parts.append(SPOKEN_OUTPUT_RULES)
     return "\n\n".join(parts)

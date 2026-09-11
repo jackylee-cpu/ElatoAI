@@ -354,6 +354,7 @@ def create_app() -> FastAPI:
                 child=child,
                 user_id=profile.user_id,
                 chat_group_id=chat_group_id,
+                language_code=profile.language_code,
             )
         finally:
             # Draining pending writes and uploading the snapshot hang off this,
@@ -421,6 +422,7 @@ def create_app() -> FastAPI:
                 child=child,
                 user_id=personality.user_id,
                 chat_group_id=chat_group_id,
+                language_code=personality.language_code,
             )
         finally:
             # Draining pending writes, running the session-boundary batch and

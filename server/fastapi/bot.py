@@ -597,6 +597,7 @@ async def run_bot_session(
     child=None,
     user_id: str | None = None,
     chat_group_id: str | None = None,
+    language_code: str | None = None,
 ):
     voice_route = CURRENT_VOICE_ROUTE
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
@@ -651,6 +652,7 @@ async def run_bot_session(
             memory=memory,
             child=child,
             stack=stack,
+            language_code=language_code,
         )
 
     processors = [transport.input(), *route_processors]
