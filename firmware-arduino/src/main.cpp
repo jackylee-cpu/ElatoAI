@@ -427,6 +427,12 @@ void setup() {
   displaySetup();
   noteActivity();
 
+  // Before the tasks, not inside one: networkTask is created at the highest
+  // priority in the system and starts dispatching websocket frames the instant
+  // it exists, so the queue it writes into cannot be allocated by a task that
+  // may not have been scheduled yet.
+  audioPacketQueueSetup();
+
   // Pin audio tasks to Core 1 (application core)
   xTaskCreatePinnedToCore(ledTask,    // Function
                           "LED Task", // Name
@@ -444,6 +450,34 @@ void setup() {
                           3,                   // Priority
                           &speakerTaskHandle,  // Handle
                           1                    // Core 1 (application core)
+  );
+
+  // Opus decode, fed by networkTask over the queue allocated above.
+  //
+  // Core 1 rather than 0: core 0 belongs to the radio (the wifi driver task and
+  // lwIP), and networkTask already sits above both of them at the top priority
+  // in the system -- a decode burst there preempts the stack it is decoding
+  // data from.
+  //
+  // Priority 2 is below the speaker task deliberately. This task spends most of
+  // a turn parked in the PCM ring's blocking write, and the only thing that
+  // frees that ring is the speaker task: it must always win. Above the display
+  // task, whose redraws can wait.
+  xTaskCreatePinnedToCore(decodeTask,        // Function
+                          "Opus Decode",     // Name
+                          6144,              // Stack size. opus keeps its
+                                             // working arrays on the heap, so
+                                             // this is mostly call depth --
+                                             // but the decode used to run on
+                                             // networkTask's 8192 and a stack
+                                             // overflow here is a boot loop,
+                                             // not a log line. Trim it against
+                                             // the "Decode stack headroom"
+                                             // figure, not by guessing.
+                          NULL,              // Parameters
+                          2,                 // Priority
+                          &decodeTaskHandle, // Handle
+                          1                  // Core 1 (application core)
   );
 
   xTaskCreatePinnedToCore(micTask,           // Function
@@ -487,6 +521,9 @@ void loop() {
   if (!bootBannerReprinted && millis() > 4000) {
     bootBannerReprinted = true;
     Serial.printf("(replay) %s\n", bootBanner);
+    // Same reason as the banner: these are decided during setup, and the host
+    // has not finished enumerating the CDC port by then.
+    audioMemoryReport();
   }
   checkIdleTimeout();
   processSleepRequest();

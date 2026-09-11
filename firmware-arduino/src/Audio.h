@@ -11,6 +11,7 @@ extern WebSocketsClient webSocket;
 extern TaskHandle_t speakerTaskHandle;
 extern TaskHandle_t micTaskHandle;
 extern TaskHandle_t networkTaskHandle;
+extern TaskHandle_t decodeTaskHandle;
 
 // Set when the server says the turn is over; networkTask closes the mic once
 // the buffered tail has finished playing. Under push-to-talk the mic does not
@@ -57,7 +58,10 @@ extern const int BITS_PER_SAMPLE; // 16-bit audio
 // SAMPLE_RATE is ever raised again.
 constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 20;     // total bytes in the buffer (~416ms @ 24kHz)
 constexpr size_t AUDIO_CHUNK_SIZE  = 1024;         // ideal read/write chunk size
-extern OpusAudioDecoder opusDecoder;
+// Subclassed in Audio.cpp so its state buffer can be pinned to internal RAM;
+// see the memory notes there.
+class PlacedOpusDecoder;
+extern PlacedOpusDecoder opusDecoder;
 extern BufferRTOS<uint8_t> audioBuffer;
 extern I2SStream i2s; 
 extern VolumeStream volume;
@@ -86,6 +90,19 @@ void transitionToIdle();
 // AUDIO OUTPUT
 unsigned long getSpeakingDuration();
 void audioStreamTask(void *parameter);
+
+// OPUS DECODE
+// Allocates the networkTask -> decodeTask packet queue. Must run before any
+// task is created: networkTask has the highest priority in the system and
+// starts dispatching websocket frames immediately.
+void audioPacketQueueSetup();
+void decodeTask(void *parameter);
+
+// Where each audio buffer actually ended up, internal RAM or PSRAM. Printed
+// once by decodeTask and replayed from loop(), because everything it describes
+// is allocated during setup and setup's output does not survive USB CDC
+// enumeration on this board.
+void audioMemoryReport();
 
 // AUDIO INPUT
 void micTask(void *parameter);

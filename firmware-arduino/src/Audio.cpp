@@ -1,8 +1,12 @@
 #include "OTA.h"
 #include "Audio.h"
+#include "DecodeStats.h"
 #include "Chime.h"
 #include "PitchShift.h"
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
+#include <soc/soc_memory_types.h>
+#include <freertos/message_buffer.h>
 
 // WEBSOCKET
 SemaphoreHandle_t wsMutex;
@@ -12,6 +16,7 @@ WebSocketsClient webSocket;
 TaskHandle_t speakerTaskHandle = NULL;
 TaskHandle_t micTaskHandle = NULL;
 TaskHandle_t networkTaskHandle = NULL;
+TaskHandle_t decodeTaskHandle = NULL;
 
 // TIMING REGISTERS
 volatile bool scheduleIdleAfterTurn = false;
@@ -168,7 +173,9 @@ public:
   // networkTask -> webSocket.loop() -> webSocketEvent(WStype_BIN, ...) -> opusDecoder.write() -> bufferPrint.write()
   virtual size_t write(uint8_t data) override {
     if (webSocket.isConnected() && deviceState == SPEAKING) {
-        return _buffer.writeArray(&data, 1);
+        const int written = _buffer.writeArray(&data, 1);
+        decodeStatsAddPcmBytes(written > 0 ? (size_t)written : 0);
+        return written;
     }
     return 1; //let opusDecoder write, otherwise thread will stuck
   }
@@ -177,7 +184,15 @@ public:
   virtual size_t write(const uint8_t *buffer, size_t size) override {
     if (webSocket.isConnected() && deviceState == SPEAKING) {
         inspectDecodedPcm(buffer, size);
-        return _buffer.writeArray(buffer, size);
+        // writeArray() waits portMAX_DELAY for room, so on a full ring this is
+        // where the decoding task stops being a decoding task. Timed rather
+        // than assumed: it is the whole of the case for moving the decode off
+        // the task that also reads the socket.
+        const int64_t blockedAt = esp_timer_get_time();
+        const int written = _buffer.writeArray(buffer, size);
+        decodeStatsAddRingBlockUs((uint32_t)(esp_timer_get_time() - blockedAt));
+        decodeStatsAddPcmBytes(written > 0 ? (size_t)written : 0);
+        return written;
     }
     return size; //let opusDecoder write, otherwise thread will stuck
   }
@@ -187,15 +202,154 @@ private:
 };
 
 BufferPrint bufferPrint(audioBuffer);
-OpusAudioDecoder opusDecoder;  //access guarded by wsmutex
-// audio-tools' DefaultAllocator tries ps_malloc first, so with PSRAM enabled
-// this ring would live in external RAM -- on the SPI bus, behind the cache,
-// with latency that jitters against flash access. It is drained at a fixed
-// 48KB/s by the I2S pipeline, so it belongs in internal SRAM; the big
-// latency-insensitive blocks (libopus' 60KB scratch) are what PSRAM is for.
-static audio_tools::Allocator internalRamAllocator;
+
+// ---------------------------------------------------------------------------
+// Where the audio buffers actually live
+//
+// This build has CONFIG_SPIRAM_USE_MALLOC=1 with CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL
+// at 4096 (framework-arduinoespressif32/tools/sdk/esp32s3/qio_opi/include/sdkconfig.h),
+// which means heap_caps_malloc_default() sends *every* allocation over 4KB to
+// PSRAM first and only falls back to internal RAM if that fails. Every buffer
+// on this path is over 4KB, so all of them were in external RAM:
+//
+//   - the PCM ring below (20KB). The previous allocator here was
+//     audio_tools::Allocator, whose do_allocate() is plain calloc() -- the
+//     comment said "internal SRAM" and the 4096 rule quietly overruled it.
+//   - the Opus decoder state (~18KB, via audio-tools' AllocatorExt, which
+//     tries ps_malloc explicitly).
+//   - libopus' 60KB pseudostack scratch (opus_alloc_scratch -> malloc).
+//
+// On the S3 that memory is reached through the same cache as the code, which
+// also runs from flash -- so a decoder walking its state in PSRAM evicts the
+// instructions decoding it. The two that matter are the ones touched randomly
+// and constantly: the decoder state and the scratch. The ring matters for a
+// different reason -- it is drained at a fixed 48KB/s by the I2S DMA and must
+// not jitter against flash access.
+//
+// The decode *output* buffer stays in PSRAM deliberately: opus_decode() fills
+// it front to back and the copy to the ring reads it front to back, which is
+// the access pattern external RAM is actually good at, and it is 16KB of
+// internal RAM this board cannot spare.
+//
+// Nothing here is allowed to fail: every allocation falls back to PSRAM, i.e.
+// to exactly the behaviour that was in place before. audioMemoryReport() prints
+// what each one got once Serial is up -- these run from static constructors,
+// long before anything can be logged.
+namespace {
+
+struct Placement {
+    const char *what;
+    void *address;
+    size_t bytes;
+    bool internalRam;
+};
+
+Placement placements[4];
+size_t placementCount = 0;
+
+// libopus' pseudostack does not go through an Allocator -- it is a plain
+// malloc() inside the library -- so its outcome is recorded separately and
+// printed by the same report.
+struct ScratchResult {
+    bool decided;
+    bool forcedInternal;
+    size_t internalBefore;
+    size_t internalAfter;
+};
+ScratchResult scratchResult = {false, false, 0, 0};
+
+void notePlacement(const char *what, void *address, size_t bytes) {
+    if (placementCount >= (sizeof(placements) / sizeof(placements[0]))) return;
+    placements[placementCount++] = {what, address, bytes,
+                                    address != nullptr && !esp_ptr_external_ram(address)};
+}
+
+}  // namespace
+
+// The A/B switch for the two buffers above: `-D AUDIO_BUFFERS_IN_PSRAM` puts
+// them back where the sdkconfig would have put them, so the two builds can be
+// flashed one after the other and their `cpu` figures compared. See the
+// `-psrambufs` environment in platformio.ini. Placement is the kind of claim
+// that is easy to argue and cheap to measure; measure it. It no longer covers
+// libopus' 60KB scratch, which that measurement sent back to PSRAM for good.
+#ifdef AUDIO_BUFFERS_IN_PSRAM
+static constexpr bool kPreferInternalRam = false;
+#else
+static constexpr bool kPreferInternalRam = true;
+#endif
+
+class InternalRamAllocator : public audio_tools::Allocator {
+public:
+    explicit InternalRamAllocator(const char *what) : _what(what) {}
+
+protected:
+    void *do_allocate(size_t size) override {
+        if (size == 0) size = 1;
+        // MALLOC_CAP_INTERNAL, not calloc: this is the only way to say "not
+        // PSRAM" while CONFIG_SPIRAM_USE_MALLOC is on.
+        const uint32_t first = kPreferInternalRam ? MALLOC_CAP_INTERNAL : MALLOC_CAP_SPIRAM;
+        const uint32_t second = kPreferInternalRam ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL;
+        void *result = heap_caps_calloc(1, size, first | MALLOC_CAP_8BIT);
+        if (result == nullptr) {
+            result = heap_caps_calloc(1, size, second | MALLOC_CAP_8BIT);
+        }
+        notePlacement(_what, result, size);
+        return result;
+    }
+
+private:
+    const char *_what;
+};
+
+// One line per buffer. Called once from decodeTask and again from loop()'s
+// four-second replay: everything here is placed during setup, and on this board
+// setup's output is lost to USB CDC enumeration. Safe to call repeatedly -- it
+// only reads what the allocators recorded.
+void audioMemoryReport() {
+    for (size_t i = 0; i < placementCount; i++) {
+        const Placement &p = placements[i];
+        Serial.printf("Audio memory | %-14s %6u B at %p -> %s\n", p.what,
+                      (unsigned)p.bytes, p.address, p.internalRam ? "INTERNAL" : "psram");
+    }
+    if (scratchResult.decided) {
+        // Not steered by kPreferInternalRam: it is always PSRAM now, on
+        // measured evidence. See decodeTask().
+        Serial.printf("Audio memory | %-14s %6u B         -> %s (internal free %u -> %u)\n",
+                      "opus scratch", 60000,
+                      scratchResult.forcedInternal ? "INTERNAL" : "psram",
+                      (unsigned)scratchResult.internalBefore,
+                      (unsigned)scratchResult.internalAfter);
+    }
+    Serial.printf("Audio memory | free: internal %u, psram %u, largest internal block %u\n",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
+static InternalRamAllocator pcmRingAllocator("pcm ring");
+static InternalRamAllocator opusStateAllocator("opus state");
+
 BufferRTOS<uint8_t> audioBuffer(AUDIO_BUFFER_SIZE, AUDIO_CHUNK_SIZE, portMAX_DELAY,
-                                portMAX_DELAY, internalRamAllocator);  //producer: networkTask, consumer: audioStreamTask. Thread safe in single producer->single consumer scenario.
+                                portMAX_DELAY, pcmRingAllocator);  //producer: decodeTask, consumer: audioStreamTask. Thread safe in single producer->single consumer scenario.
+
+/**
+ * OpusAudioDecoder with its state buffer placed by hand.
+ *
+ * `decbuf` holds the OpusDecoder struct itself -- the SILK and CELT histories,
+ * the overlap buffers, the resampler state -- which opus_decode() walks on
+ * every frame. It is the one allocation on this path with a genuinely random
+ * access pattern, so it is the one worth spending internal RAM on. Both members
+ * are protected, which is the only reason this subclass exists.
+ */
+class PlacedOpusDecoder : public OpusAudioDecoder {
+public:
+    /// Must be called before begin(): Vector only consults its allocator on resize.
+    void placeStateInInternalRam(audio_tools::Allocator &allocator) {
+        decbuf.setAllocator(allocator);
+    }
+};
+
+PlacedOpusDecoder opusDecoder;  //owned by decodeTask
 I2SStream i2s; //access from audioStreamTask only
 
 // OLD with no pitch shift
@@ -210,6 +364,12 @@ StreamCopy pitchCopier(volumePitch, queue);
 
 AudioInfo info(SAMPLE_RATE, CHANNELS, BITS_PER_SAMPLE);
 volatile bool i2sOutputFlushScheduled = false;
+
+// Set when a turn ends or is abandoned; decodeTask throws away whatever of the
+// old answer is still queued rather than spending CPU decoding audio that
+// BufferPrint will discard anyway. Lives up here with the other flush flags
+// because the transitions that raise it run well before decodeTask is defined.
+static volatile bool packetQueueFlushScheduled = false;
 
 // The MAX98357A's SD pin is not broken out on this kit (see Config.cpp), so
 // I2S_SD_OUT drives a spare GPIO and mutes nothing: the amplifier is live from
@@ -307,15 +467,17 @@ void transitionToSpeaking() {
 
     i2sInputFlushScheduled = true;
 
-    // Flags only. This runs on networkTask, which is the ring's *writer*, and
-    // BufferRTOS is a FreeRTOS StreamBuffer -- safe for one reader and one
-    // writer, and nothing more. Draining from here put a second reader
-    // alongside audioStreamTask. The consumer already clears the ring at the
-    // end of every turn, inside fadeOutAndSilence(), so there is nothing left
-    // here to clean up.
+    // Flags only. BufferRTOS is a FreeRTOS StreamBuffer -- safe for exactly
+    // one reader and one writer, and nothing more -- so draining from here
+    // would put a second reader alongside audioStreamTask. (This used to run
+    // on the ring's writer; since the decode moved to decodeTask it is neither
+    // end of it, which makes touching the ring from here worse, not better.)
+    // The consumer already clears the ring at the end of every turn, inside
+    // fadeOutAndSilence(), so there is nothing left here to clean up.
     playbackPrimed = false;
     playbackPrimeDeadline = millis() + PLAYBACK_PRIME_MAX_WAIT_MS;
     resetPcmStats();
+    decodeStatsBeginTurn();
 
     deviceState = SPEAKING;
     digitalWrite(I2S_SD_OUT, HIGH);
@@ -340,6 +502,10 @@ void transitionToListening() {
 
     i2sInputFlushScheduled = true;
     i2sOutputFlushScheduled = true;
+    // The PCM ring is cleared by audioStreamTask below; the compressed packets
+    // behind it have to go too, or decodeTask spends the next second refilling
+    // the ring with the answer the user just interrupted.
+    packetQueueFlushScheduled = true;
 
     if (wasSpeaking) {
         // A barge-in. Opening the mic now would point it at a speaker that is
@@ -375,20 +541,82 @@ void transitionToIdle() {
     digitalWrite(I2S_SD_OUT, LOW);
     i2sInputFlushScheduled = true;
     i2sOutputFlushScheduled = true;
+    packetQueueFlushScheduled = true;
     noteActivity();  // the clock starts when the turn ends, not when it began
     Serial.printf("Turn over | starvation %ums | pcm peak %ld maxstep %ld glitches %u\n",
                   worstStarvationMs, (long)pcmPeak, (long)pcmMaxStep,
                   (unsigned)pcmBigSteps);
+    decodeStatsLogTurn();
     worstStarvationMs = 0;
     starvationRun = 0;
 }
 
-// audioStreamTask -> copier.copy() (conditional on webSocket.isConnected())
-void audioStreamTask(void *parameter) {
-    Serial.println("Starting I2S stream pipeline...");
-    
-    pinMode(I2S_SD_OUT, OUTPUT);
+// ---------------------------------------------------------------------------
+// Opus packets: networkTask -> decodeTask
+//
+// Decoding used to happen inside webSocketEvent(), on networkTask, which meant
+// the task that reads the socket and sends the button presses was also the task
+// that parked in xStreamBufferSend whenever the PCM ring was full. And the ring
+// is full for most of a turn by design: the server pushes at twice real time
+// (pipecat's websocket output transport sleeps half a chunk per chunk), so it
+// runs ahead until something stops it, and the thing that stopped it was this
+// device refusing to read. That is correct backpressure landing on entirely the
+// wrong task -- webSocket.enableHeartbeat()'s comment already records a pong
+// window missed "while the device was busy decoding audio", and the same stall
+// delays a barge-in by however long the ring takes to drain.
+//
+// So the blocking moves to a task whose only job is to block: decodeTask waits
+// on the ring, and networkTask hands over a compressed packet and returns.
+//
+// The handover buffer is deliberately generous and deliberately in PSRAM. Opus
+// packets are compressed, latency-insensitive bytes -- nobody waits on them the
+// way the I2S DMA waits on the PCM ring -- which is exactly what external RAM
+// is for. 64KB holds around twenty seconds of audio at the current frame
+// duration and bitrate, so in practice the backlog the server builds up lives
+// here and networkTask never blocks at all.
+//
+// If it ever does overflow, the send blocks -- and it blocks inside
+// webSocketEvent(), which holds wsMutex, so that is the old stall in miniature.
+// It is still the right trade: dropping a packet is a hole in the middle of a
+// sentence, and twenty seconds of backlog means something upstream is already
+// badly wrong. The `ws gap max` figure in the per-turn log is what to watch.
+constexpr size_t PACKET_QUEUE_BYTES = 64 * 1024;
+static StaticMessageBuffer_t packetQueueStruct;
+static MessageBufferHandle_t packetQueue = nullptr;
 
+// main.cpp setup() -> audioPacketQueueSetup()
+// Before any task exists, because networkTask has the highest priority in the
+// system and will be dispatching websocket frames the moment it is created.
+void audioPacketQueueSetup() {
+    uint8_t *storage = (uint8_t *)heap_caps_malloc(PACKET_QUEUE_BYTES,
+                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (storage == nullptr) {
+        // No PSRAM, or it is full. Internal RAM would work but 64KB of it is
+        // most of what is left, so fall back to a much smaller queue: the
+        // backlog then lands on TCP instead, which is slower but still correct.
+        storage = (uint8_t *)heap_caps_malloc(8 * 1024, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        packetQueue = storage ? xMessageBufferCreateStatic(8 * 1024, storage, &packetQueueStruct)
+                              : nullptr;
+        Serial.printf("Opus packet queue: PSRAM unavailable, %s\n",
+                      packetQueue ? "8KB in internal RAM" : "FAILED");
+        return;
+    }
+    packetQueue = xMessageBufferCreateStatic(PACKET_QUEUE_BYTES, storage, &packetQueueStruct);
+    Serial.printf("Opus packet queue: %u KB at %p (%s) | internal free %u\n",
+                  (unsigned)(PACKET_QUEUE_BYTES / 1024), storage,
+                  esp_ptr_external_ram(storage) ? "psram" : "internal",
+                  heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+
+// networkTask -> webSocket.loop() -> webSocketEvent(WStype_BIN, ...) -> audioQueueOpusPacket()
+// Returns false only if the packet could not be handed over at all.
+static bool audioQueueOpusPacket(const uint8_t *payload, size_t length) {
+    if (packetQueue == nullptr) return false;
+    return xMessageBufferSend(packetQueue, payload, length, portMAX_DELAY) == length;
+}
+
+// decodeTask -> opusDecoder.write() -> bufferPrint.write() -> audioBuffer
+void decodeTask(void *parameter) {
     OpusSettings cfg;
     cfg.sample_rate = SAMPLE_RATE;
     cfg.channels = CHANNELS;
@@ -407,8 +635,12 @@ void audioStreamTask(void *parameter) {
     // raised. Do not shrink this to fit the current frame size.
     cfg.max_buffer_size = 16384;
 
-    xSemaphoreTake(wsMutex, portMAX_DELAY);
+    // No wsMutex any more: this task is the only thing that touches the
+    // decoder. It used to be shared with networkTask, which is precisely the
+    // arrangement this change exists to undo.
     opusDecoder.setOutput(bufferPrint);
+    // Before begin(), which is what actually sizes the buffer.
+    opusDecoder.placeStateInInternalRam(opusStateAllocator);
     bool decoderStarted = opusDecoder.begin(cfg);
 
     // arduino-libopus is built with NONTHREADSAFE_PSEUDOSTACK, so it keeps its
@@ -416,11 +648,34 @@ void audioStreamTask(void *parameter) {
     // single 60KB scratch block, and opus_alloc_scratch() never checks the
     // result. Audio only arrives once WiFi and TLS have taken the heap, and by
     // then that allocation returns null, which opus writes straight through.
-    // Do it here instead, while the heap is still whole. 0x08 is a valid
-    // TOC-only packet (SILK narrowband, 20ms, mono) that decodes to silence,
-    // and the websocket is not up yet so nothing reaches the ring buffer.
+    // Do it here instead, while the heap is still whole -- this task is created
+    // before setupWiFi() and outranks the Arduino loop task that calls it, so
+    // it reaches this line first. 0x08 is a valid TOC-only packet (SILK
+    // narrowband, 20ms, mono) that decodes to silence, and the websocket is not
+    // up yet so nothing reaches the ring buffer.
+    //
+    // It goes to PSRAM, which is where CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+    // sends it on its own. This build did briefly force it into internal RAM --
+    // heap_caps_malloc_extmem_enable() raised the always-internal threshold for
+    // exactly this call -- and the hardware says it was not worth it.
+    //
+    // Measured 2026-09-11 over a full greeting turn, 40ms frames: with the
+    // ring, the decoder state and this scratch all in internal RAM, decode cost
+    // 7900us per packet (n=19 scheduler-suspended samples); with all three in
+    // PSRAM, 8341us (n=13). 5.3%, for 98KB of the scarcest memory on the chip --
+    // and the scratch is 60KB of that 98KB. The radio is not up yet at this
+    // point (setupWiFi() runs after this task), so every byte taken here is
+    // taken from the wifi driver and the mbedTLS session buffers later.
+    //
+    // The before/after is still measured, because "where did 60KB go" is worth
+    // one line in the boot log even when the answer is never going to change.
+    const size_t internalBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+
     const uint8_t opusWarmupPacket[1] = {0x08};
     opusDecoder.write(opusWarmupPacket, sizeof(opusWarmupPacket));
+
+    scratchResult = {true, false, internalBefore,
+                     heap_caps_get_free_size(MALLOC_CAP_INTERNAL)};
 
     // That packet is the cheapest valid one there is, but it is SILK
     // narrowband, and the decoder keeps that mode. The server streams 24kHz, so
@@ -435,11 +690,102 @@ void audioStreamTask(void *parameter) {
     // which is the whole point of doing this here rather than later.
     opusDecoder.begin(cfg);
 
-    xSemaphoreGive(wsMutex);
-
-    Serial.printf("Opus %s | heap %u | largest block %u\n",
+    Serial.printf("Opus %s | heap %u | largest block %u | internal free %u\n",
                   decoderStarted ? "ready" : "FAILED", ESP.getFreeHeap(),
-                  heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+                  heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                  heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    // Only now: the ring was placed by a static constructor, long before there
+    // was anywhere to print to, but the decoder's state buffer is not placed
+    // until begin() above sizes it. Reporting any earlier would print the ring
+    // and silently omit the allocation this is mostly here to check.
+    audioMemoryReport();
+
+    // One packet at a time. Sized for the longest packet Opus can express at
+    // this bitrate with room to spare; a longer one is refused by
+    // xMessageBufferReceive and dropped, which is the same outcome as the
+    // OPUS_BUFFER_TOO_SMALL above and just as loud in the log.
+    static uint8_t packet[1500];
+
+    while (1) {
+        if (packetQueue == nullptr) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        // Wake up periodically even with nothing queued, so a flush requested
+        // between turns is honoured promptly rather than on the next packet.
+        size_t length = xMessageBufferReceive(packetQueue, packet, sizeof(packet),
+                                              pdMS_TO_TICKS(50));
+
+        if (packetQueueFlushScheduled) {
+            packetQueueFlushScheduled = false;
+            length = 0;
+            // xMessageBufferReset() needs the buffer to be idle on both ends,
+            // which it is not while networkTask may be mid-send. Draining by
+            // reading is always safe, and the queue is never deep enough at
+            // this point for the loop to matter.
+            int guard = 0;
+            while (guard++ < 2048 &&
+                   xMessageBufferReceive(packetQueue, packet, sizeof(packet), 0) > 0) {
+            }
+        }
+
+        if (length == 0) continue;
+
+        // The same guard WStype_BIN used to apply before decoding. A packet
+        // that arrives after the turn is over decodes into a BufferPrint that
+        // discards it, so the only thing decoding it would buy is CPU.
+        if (scheduleIdleAfterTurn || deviceState != SPEAKING) continue;
+
+        // Once per turn, decode one packet with this core's scheduler stopped.
+        // Every other figure here is wall clock and therefore mostly a record
+        // of this task -- priority 2, under three others on this core -- being
+        // preempted; this is the one that is actually decode cost.
+        //
+        // Safe to suspend for: the I2S DMA holds 64ms (6 x 256 frames) and the
+        // ring behind it holds up to 416ms, so audioStreamTask losing a couple
+        // of milliseconds cannot reach the amplifier. ISRs still run.
+        const bool cpuSample = decodeStatsWantsCpuSample();
+        if (cpuSample) vTaskSuspendAll();
+
+        const int64_t decodeStartedAt = esp_timer_get_time();
+        const size_t processed = opusDecoder.write(packet, length);
+        const uint32_t writeTotalUs = (uint32_t)(esp_timer_get_time() - decodeStartedAt);
+
+        if (cpuSample) {
+            xTaskResumeAll();
+            // decodeStatsNotePacketDecoded() below drains the ring-block
+            // accumulator, so read it out of the same subtraction it does.
+            decodeStatsNoteCpuSample(writeTotalUs);
+        }
+
+        // The decoded byte count comes from BufferPrint, not from a delta on
+        // audioBuffer.available() -- audioStreamTask is draining that ring
+        // concurrently, so the delta undercounts and silently inflates rtf.
+        decodeStatsNotePacketDecoded(writeTotalUs);
+
+        if (processed != length) {
+            Serial.printf("Warning: Only processed %u/%u bytes\n", (unsigned)processed,
+                          (unsigned)length);
+        }
+
+        // opus keeps its working arrays off the task stack, so this should
+        // stay comfortable. Reported anyway to keep the assumption honest.
+        static UBaseType_t worstStack = UINT32_MAX;
+        UBaseType_t stackLeft = uxTaskGetStackHighWaterMark(NULL);
+        if (stackLeft < worstStack) {
+            worstStack = stackLeft;
+            Serial.printf("Decode stack headroom: %u bytes\n", (unsigned)stackLeft);
+        }
+    }
+}
+
+// audioStreamTask -> copier.copy() (conditional on webSocket.isConnected())
+void audioStreamTask(void *parameter) {
+    Serial.println("Starting I2S stream pipeline...");
+    
+    pinMode(I2S_SD_OUT, OUTPUT);
 
     audioBuffer.setReadMaxWait(0);
     
@@ -536,11 +882,14 @@ void audioStreamTask(void *parameter) {
             } else {
                 starvationRun = 0;
             }
-            if (currentPitchFactor != 1.0f) {
-                pitchCopier.copy();
-            } else {
-                copier.copy();
-            }
+            // The stamp goes here rather than at the decode, because this is
+            // the first point in the turn where audio is actually on its way
+            // to the amplifier: everything upstream of it can be running well
+            // while PLAYBACK_PRIME_BYTES still holds the speaker silent.
+            const size_t played = (currentPitchFactor != 1.0f)
+                                      ? pitchCopier.copy()
+                                      : copier.copy();
+            if (played > 0) decodeStatsNoteAudioOut();
         }
         else {
             // Always read: BufferPrint writes with portMAX_DELAY, so a producer
@@ -817,19 +1166,18 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             break;
         }
         audioDiscardReported = false;
+        decodeStatsNotePacketArrived(length);
 
-        // Otherwise process the audio data normally
-        size_t processed = opusDecoder.write(payload, length);
-        if (processed != length) {
-            Serial.printf("Warning: Only processed %d/%d bytes\n", processed, length);
-        }
-        // opus keeps its working arrays off the task stack, so this should
-        // stay comfortable. Reported anyway to keep the assumption honest.
-        static UBaseType_t worstStack = UINT32_MAX;
-        UBaseType_t stackLeft = uxTaskGetStackHighWaterMark(NULL);
-        if (stackLeft < worstStack) {
-            worstStack = stackLeft;
-            Serial.printf("Decode stack headroom: %u bytes\n", (unsigned)stackLeft);
+        // Hand it to decodeTask and go straight back to servicing the socket.
+        // This is the whole point: the decode, and the wait on a full PCM ring
+        // that follows it, no longer happen on the task that also carries the
+        // button presses.
+        if (!audioQueueOpusPacket(payload, length)) {
+            static bool queueDropReported = false;
+            if (!queueDropReported) {
+                queueDropReported = true;
+                Serial.printf("Opus packet queue refused %u bytes\n", (unsigned)length);
+            }
         }
         break;
       }
@@ -1010,7 +1358,16 @@ static void processPushToTalk() {
 
 // networkTask -> webSocket.loop()
 void networkTask(void *parameter) {
+    int64_t lastServicedAt = esp_timer_get_time();
     while (1) {
+        // Everything this task owns -- reading the socket, and sending the
+        // button presses that barge in -- happens once per pass, so this gap
+        // is the worst case latency on all of it. A pass that decodes audio
+        // into a full ring buffer is a pass that does none of the rest.
+        const int64_t now = esp_timer_get_time();
+        decodeStatsNoteWsServiceGap((uint32_t)(now - lastServicedAt));
+        lastServicedAt = now;
+
         xSemaphoreTake(wsMutex, portMAX_DELAY);
 
         processPushToTalk();
