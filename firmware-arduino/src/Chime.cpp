@@ -26,7 +26,12 @@ int activeRate = 0;
 // either can play. So how loud they actually are depends on where the volume
 // buttons were last left, and a board sitting at volume 10 will barely be
 // audible however this is set.
+#ifdef CHIME_GAIN_OVERRIDE
+// Diagnostic build: see the -quietchime environment in platformio.ini.
+constexpr float kSoundGain = CHIME_GAIN_OVERRIDE;
+#else
 constexpr float kSoundGain = 0.50f;
+#endif
 
 void writeBlock(int frames) {
     size_t written = 0;
@@ -102,11 +107,53 @@ void playSample(const int16_t *pcm, unsigned frames, int rate) {
     i2s_driver_uninstall(I2S_PORT_OUT);
 }
 
+// Plays through the port audioStreamTask has already opened, instead of
+// installing one. Measured 2026-09-10: installing a second driver on
+// I2S_PORT_OUT, playing, uninstalling it and letting i2s.begin() reinstall the
+// same port leaves the output stage unwell -- the first TTS after boot squealed
+// and popped while the decoded PCM feeding it measured perfectly clean
+// (glitches 0). Skipping the boot sound made that first TTS clean, five turns
+// running. So the sound stays; the teardown goes.
+//
+// i2s.write() and not i2s_write(): audio-tools opened the port with channels=1
+// and duplicates mono to the two I2S slots in software. Writing past it would
+// play at half speed with the samples split across left and right.
+//
+// The recording is 16kHz and the port runs at 24kHz, which is why it wanted its
+// own driver in the first place. Linear interpolation covers the 3:2 ratio
+// perfectly well for a chime.
+static void playResampledOnOpenPort(const int16_t *pcm, unsigned frames, int srcRate) {
+    const float gain = kSoundGain * (currentVolume / 100.0f);
+    const double stepPerOut = (double)srcRate / (double)SAMPLE_RATE;
+    const unsigned outFrames = (unsigned)((double)frames / stepPerOut);
+
+    double pos = 0.0;
+    for (unsigned done = 0; done < outFrames; done += kBlockFrames) {
+        unsigned n = outFrames - done;
+        if (n > (unsigned)kBlockFrames) n = kBlockFrames;
+        for (unsigned i = 0; i < n; i++) {
+            unsigned idx = (unsigned)pos;
+            float frac = (float)(pos - (double)idx);
+            int16_t a = pcm[idx];
+            int16_t b = (idx + 1 < frames) ? pcm[idx + 1] : a;
+            block[i] = (int16_t)(((float)a + ((float)b - (float)a) * frac) * gain);
+            pos += stepPerOut;
+        }
+        i2s.write((const uint8_t *)block, n * sizeof(int16_t));
+    }
+
+    // Leave the port on zeros so the amplifier is not handed the tail of the
+    // last frame while the pipeline is still deciding what to do next.
+    memset(block, 0, sizeof(block));
+    for (int i = 0; i < 8; i++) i2s.write((const uint8_t *)block, sizeof(block));
+}
+
 }  // namespace
 
 void playBootChime() {
-    Serial.printf("Chime: boot, %u frames @ %d Hz\n", kBootSoundFrames, kBootSoundRate);
-    playSample(kBootSoundPcm, kBootSoundFrames, kBootSoundRate);
+    Serial.printf("Chime: boot, %u frames @ %d Hz -> %u Hz on the open port\n",
+                  kBootSoundFrames, kBootSoundRate, (unsigned)SAMPLE_RATE);
+    playResampledOnOpenPort(kBootSoundPcm, kBootSoundFrames, kBootSoundRate);
 }
 
 void playSleepChime() {
