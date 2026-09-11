@@ -926,19 +926,40 @@ void audioStreamTask(void *parameter) {
 // Mic level over the current press, measured on the samples as they go out.
 // A press that captured nothing but room noise should not be committed: the
 // server would run STT over silence and answer a turn the user never took.
+//
+// What decides that is how much *speech* the press caught, not how loud the
+// press was on average. A mean over the whole hold answers the wrong question,
+// because it falls the longer the button is down: a child who says one word
+// and then keeps their thumb on the button for another eight seconds measures
+// as silence and has the turn thrown away -- while the server, which was
+// streamed that word as it was spoken, answers it anyway. The device then sits
+// in IDLE while the toy talks. Voiced time does not dilute: eight seconds of
+// quiet adds nothing to it and takes nothing away either.
 static volatile uint64_t micLevelSum = 0;
 static volatile uint32_t micLevelCount = 0;
 static volatile int32_t micLevelPeak = 0;
+static volatile uint32_t micVoicedMs = 0;
+
+// Mean magnitude of one block, above which that block counts as speech. Mean
+// within the block rather than peak, for the reason the old whole-press mean
+// was chosen over a peak: a knock on the desk or the click of the button is a
+// sample or two wide and lifts a peak without there being anything to
+// transcribe. The number is the one the old whole-press threshold used, which
+// was tuned against this mic -- a block of real speech sits well above it, a
+// block of a quiet room below.
+static const int32_t MIC_VOICE_LEVEL = 150;
 
 static void resetMicLevel() {
     micLevelSum = 0;
     micLevelCount = 0;
     micLevelPeak = 0;
+    micVoicedMs = 0;
 }
 
 static void accumulateMicLevel(const uint8_t *buffer, size_t size) {
     const int16_t *samples = (const int16_t *)buffer;
     size_t count = size / sizeof(int16_t);
+    if (count == 0) return;
     uint64_t sum = 0;
     int32_t peak = 0;
     for (size_t i = 0; i < count; i++) {
@@ -949,10 +970,17 @@ static void accumulateMicLevel(const uint8_t *buffer, size_t size) {
     micLevelSum += sum;
     micLevelCount += count;
     if (peak > micLevelPeak) micLevelPeak = peak;
+    // Judged one block at a time, which is what makes this short-term energy
+    // rather than another average: MIC_COPY_SIZE is 16ms at MIC_SAMPLE_RATE,
+    // inside the window speech is normally measured over.
+    if ((int32_t)(sum / count) >= MIC_VOICE_LEVEL) {
+        micVoicedMs += (uint32_t)((count * 1000) / MIC_SAMPLE_RATE);
+    }
 }
 
-// Mean magnitude rather than peak: one keyboard click or a knock on the desk
-// pushes the peak up without there being any speech to transcribe.
+// Kept for the release log only. It is what the discard used to be decided on,
+// and printing both next to the voiced total is what makes the thresholds
+// tunable against what this mic actually measures.
 static uint32_t micAverageLevel() {
     uint32_t count = micLevelCount;
     return count == 0 ? 0 : (uint32_t)(micLevelSum / count);
@@ -1275,11 +1303,15 @@ void websocketSetup(const String& server_domain, int port, const String& path)
 static const unsigned long PTT_MIN_CAPTURE_MS = 250;
 static unsigned long pttPressedAt = 0;
 
-// Mean magnitude below which a press is treated as silence. Deliberately low:
-// dropping real speech is far worse in a demo than letting a quiet turn
-// through. Every release logs its avg and peak, so tune this against what a
-// silent room and a normal sentence actually measure on this mic.
-static const uint32_t MIC_SILENCE_LEVEL = 150;
+// How much speech a press has to have caught to be worth committing. Short
+// enough to keep a one-word answer -- the shortest spoken word runs 200ms and
+// up -- and long enough that the click of the button or a knock on the desk,
+// a few milliseconds each, never adds up to it. Deliberately generous:
+// dropping real speech is far worse than letting a quiet turn through, and a
+// turn let through costs one answer while a turn dropped costs the child's
+// question. Every release logs voiced ms next to the press's avg and peak, so
+// tune this against what a silent room and a normal sentence measure here.
+static const uint32_t MIC_MIN_VOICED_MS = 120;
 
 // Releasing the button commits the turn immediately. bot.py no longer mutes STT
 // on end_of_speech (that mute used to latch: its only unmute runs when a bot
@@ -1345,34 +1377,38 @@ static void processPushToTalk() {
         if (webSocket.isConnected() && deviceState == LISTENING) {
             unsigned long held = millis() - pttPressedAt;
             uint32_t level = micAverageLevel();
+            uint32_t voicedMs = micVoicedMs;
             int32_t peak = micLevelPeak;
             if (held < PTT_MIN_CAPTURE_MS) {
                 deviceState = PROCESSING;
                 i2sInputFlushScheduled = true;
                 Serial.printf("PTT: %lums tap, treated as interrupt only\n", held);
                 transitionToIdle();
-            } else if (level < MIC_SILENCE_LEVEL) {
+            } else if (voicedMs < MIC_MIN_VOICED_MS) {
                 // Nothing worth transcribing, so close the mic without a tail:
-                // the server's VAD never sees a turn and stays quiet.
+                // the server's VAD never sees a turn and stays quiet. The two
+                // agree on this press -- neither heard enough to call it
+                // speech -- which is what keeps the device out of the state
+                // where it discards a turn the server is busy answering.
                 deviceState = PROCESSING;
                 i2sInputFlushScheduled = true;
-                Serial.printf("PTT: %lums but silent (avg %u, peak %d), discarded\n",
-                              held, level, (int)peak);
+                Serial.printf("PTT: %lums but only %ums voiced (avg %u, peak %d), discarded\n",
+                              held, voicedMs, level, (int)peak);
                 transitionToIdle();
             } else if (PTT_SEND_EXPLICIT_COMMIT) {
                 deviceState = PROCESSING;
                 i2sInputFlushScheduled = true;
                 userSpokeThisSession = true;
                 webSocket.sendTXT("{\"type\":\"instruction\",\"msg\":\"end_of_speech\"}");
-                Serial.printf("PTT: end_of_speech sent after %lums (avg %u, peak %d)\n",
-                              held, level, (int)peak);
+                Serial.printf("PTT: end_of_speech sent after %lums (%ums voiced, avg %u, peak %d)\n",
+                              held, voicedMs, level, (int)peak);
             } else {
                 // Stay in LISTENING so the mic keeps feeding the server a
                 // little silence, which is what its VAD needs to close a turn.
                 userSpokeThisSession = true;
                 pttTailUntil = millis() + PTT_VAD_TAIL_MS;
-                Serial.printf("PTT: %lums captured (avg %u, peak %d), %lums VAD tail\n",
-                              held, level, (int)peak, PTT_VAD_TAIL_MS);
+                Serial.printf("PTT: %lums captured (%ums voiced, avg %u, peak %d), %lums VAD tail\n",
+                              held, voicedMs, level, (int)peak, PTT_VAD_TAIL_MS);
             }
         }
     }

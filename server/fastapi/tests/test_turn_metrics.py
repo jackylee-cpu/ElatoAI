@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pipecat.frames.frames import (  # noqa: E402
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    InputTransportMessageFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -25,6 +26,7 @@ from pipecat.frames.frames import (  # noqa: E402
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import (  # noqa: E402
@@ -65,6 +67,13 @@ def push(observer, frame, at_ms, direction=FrameDirection.DOWNSTREAM):
                 timestamp=at_ms * MS,
             )
         )
+    )
+
+
+def release():
+    """The `end_of_speech` websocket message, as the transport pushes it."""
+    return InputTransportMessageFrame(
+        message={"type": "instruction", "msg": "end_of_speech"}
     )
 
 
@@ -238,6 +247,157 @@ def test_the_same_frame_is_only_counted_at_its_first_hop():
 
     assert rows[0]["stt_ms"] == 240, rows[0]["stt_ms"]
     print("  ok: de-duplication keeps the first sighting")
+
+
+def test_the_clock_starts_at_the_release_message_not_the_frame_behind_it():
+    """The button is the websocket message. Everything after it is pipeline.
+
+    RealtimeInputControlProcessor pushes up to 1.5s of trailing silence and a
+    finalize before it pushes UserStoppedSpeakingFrame, so the derived frame is
+    strictly later than the release it stands for. Anchoring on it charges the
+    recognizer for work that happened before it was asked anything.
+    """
+    rows = []
+    observer = make_observer(rows)
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(observer, release(), 100)              # button up
+    push(observer, UserStoppedSpeakingFrame(), 180)  # after the silence flush
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 340)
+    push(observer, LLMTextFrame(text="Hi!"), 690)
+    push(observer, BotStartedSpeakingFrame(), 980)
+    push(observer, BotStoppedSpeakingFrame(), 3200)
+
+    assert rows[0]["stt_ms"] == 240, rows[0]["stt_ms"]   # 340 - 100, not 160
+    assert rows[0]["detail"]["stt_anchor"] == "commit", rows[0]["detail"]
+    print("  ok: stt is measured from the release, not the frame derived from it")
+
+
+def test_a_late_release_cannot_be_billed_to_the_next_turn():
+    """The nine second STT, reproduced.
+
+    The child says something short and keeps holding the button. VAD closes the
+    turn on the silence, the toy answers, the turn is written. Only then does
+    the thumb come up -- and that release used to land on the fresh, empty turn
+    and sit there until the child spoke again, timing the next turn from a
+    button press seconds before it.
+    """
+    rows = []
+    observer = make_observer(rows)
+    # Turn one: a short sentence, then the button stays down.
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(observer, VADUserStoppedSpeakingFrame(), 1600)
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 1800)
+    push(observer, LLMTextFrame(text="Hello!"), 2100)
+    push(observer, BotStartedSpeakingFrame(), 2400)
+    push(observer, BotStoppedSpeakingFrame(), 5000)
+    # The thumb finally comes up, four seconds after the turn was written.
+    push(observer, release(), 9000)
+    push(observer, UserStoppedSpeakingFrame(), 9080)
+    # Turn two, nine seconds later still.
+    push(observer, UserStartedSpeakingFrame(), 17000)
+    push(observer, release(), 18000)
+    push(observer, UserStoppedSpeakingFrame(), 18080)
+    push(observer, TranscriptionFrame(text="and then?", user_id="u", timestamp=""), 18300)
+    push(observer, LLMTextFrame(text="Then..."), 18600)
+    push(observer, BotStartedSpeakingFrame(), 18900)
+    push(observer, BotStoppedSpeakingFrame(), 20000)
+
+    assert len(rows) == 2, [r["stt_ms"] for r in rows]
+    assert rows[0]["stt_ms"] == 200, rows[0]["stt_ms"]      # 1800 - 1600, on VAD
+    assert rows[0]["detail"]["stt_anchor"] == "vad", rows[0]["detail"]
+    assert rows[1]["stt_ms"] == 300, rows[1]["stt_ms"]      # 18300 - 18000
+    assert rows[1]["detail"]["stt_anchor"] == "commit", rows[1]["detail"]
+    print("  ok: a stray release does not become the next turn's start")
+
+
+def test_a_release_into_an_empty_turn_leaves_the_span_missing_not_wrong():
+    """The nine-second STT, with nothing to reset the stray mark.
+
+    The previous turn was closed by VAD and written out while the button was
+    still down. The release then arrives into a turn nobody has spoken in yet.
+    Before, it sat there as the start mark until a transcript turned up --
+    however many seconds later -- and the row claimed that as STT. A span this
+    observer cannot vouch for is reported missing.
+    """
+    rows = []
+    observer = make_observer(rows)
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(observer, VADUserStoppedSpeakingFrame(), 1600)
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 1800)
+    push(observer, LLMTextFrame(text="Hello!"), 2100)
+    push(observer, BotStartedSpeakingFrame(), 2400)
+    push(observer, BotStoppedSpeakingFrame(), 5000)   # turn written, turn reset
+    push(observer, release(), 9000)                   # thumb finally comes up
+    push(observer, UserStoppedSpeakingFrame(), 9080)
+    # A transcript with no started-speaking frame in front of it -- the shape
+    # that used to leave the stray mark standing.
+    push(observer, TranscriptionFrame(text="and then?", user_id="u", timestamp=""), 18000)
+    push(observer, LLMTextFrame(text="Then..."), 18300)
+    push(observer, BotStartedSpeakingFrame(), 18600)
+    push(observer, BotStoppedSpeakingFrame(), 20000)
+
+    assert len(rows) == 2, [r["stt_ms"] for r in rows]
+    assert rows[1]["stt_ms"] is None, rows[1]["stt_ms"]        # was 9000
+    assert rows[1]["total_ms"] is None, rows[1]["total_ms"]
+    assert rows[1]["detail"]["speech_started"] is False, rows[1]["detail"]
+    assert rows[1]["detail"]["late_release"] is True, rows[1]["detail"]
+    print("  ok: an unclaimable release leaves the span missing, and says so")
+
+
+def test_a_release_after_the_transcript_does_not_move_the_mark():
+    """The turn closed on VAD mid-hold; the release belongs to nothing here."""
+    rows = []
+    observer = make_observer(rows)
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(observer, VADUserStoppedSpeakingFrame(), 1600)
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 1800)
+    push(observer, release(), 4000)              # still holding until now
+    push(observer, LLMTextFrame(text="Hello!"), 2100)
+    push(observer, BotStartedSpeakingFrame(), 2400)
+    push(observer, BotStoppedSpeakingFrame(), 5000)
+
+    assert rows[0]["stt_ms"] == 200, rows[0]["stt_ms"]
+    assert rows[0]["total_ms"] == 800, rows[0]["total_ms"]   # 2400 - 1600, not negative
+    assert rows[0]["detail"]["late_release"] is True, rows[0]["detail"]
+    print("  ok: a late release is flagged, not folded into the span")
+
+
+def test_the_release_still_beats_a_pause_while_the_button_is_held():
+    """A thinking pause mid-hold must not start the STT clock."""
+    rows = []
+    observer = make_observer(rows)
+    push(observer, VADUserStartedSpeakingFrame(), 0)
+    push(observer, VADUserStoppedSpeakingFrame(), 700)   # pause, still holding
+    push(observer, release(), 2000)                  # button up
+    push(observer, UserStoppedSpeakingFrame(), 2080)
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 2300)
+    push(observer, LLMTextFrame(text="Hi!"), 2600)
+    push(observer, BotStartedSpeakingFrame(), 2900)
+    push(observer, BotStoppedSpeakingFrame(), 4000)
+
+    assert rows[0]["stt_ms"] == 300, rows[0]["stt_ms"]
+    assert rows[0]["detail"]["stt_anchor"] == "commit", rows[0]["detail"]
+    print("  ok: the release outranks the pause that came before it")
+
+
+def test_an_unrelated_control_message_is_not_a_release():
+    """INTERRUPT travels the same way and must not touch the mark."""
+    rows = []
+    observer = make_observer(rows)
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(
+        observer,
+        InputTransportMessageFrame(message={"type": "instruction", "msg": "INTERRUPT"}),
+        50,
+    )
+    push(observer, release(), 100)
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 340)
+    push(observer, LLMTextFrame(text="Hi!"), 690)
+    push(observer, BotStartedSpeakingFrame(), 980)
+    push(observer, BotStoppedSpeakingFrame(), 3200)
+
+    assert rows[0]["stt_ms"] == 240, rows[0]["stt_ms"]
+    print("  ok: only end_of_speech is a release")
 
 
 def test_upstream_frames_are_ignored():
@@ -420,6 +580,12 @@ def main():
         test_the_push_to_talk_frame_wins_over_the_later_vad_frame,
         test_an_explicit_commit_overwrites_an_earlier_vad_pause,
         test_a_vad_only_turn_still_anchors,
+        test_the_clock_starts_at_the_release_message_not_the_frame_behind_it,
+        test_a_late_release_cannot_be_billed_to_the_next_turn,
+        test_a_release_into_an_empty_turn_leaves_the_span_missing_not_wrong,
+        test_a_release_after_the_transcript_does_not_move_the_mark,
+        test_the_release_still_beats_a_pause_while_the_button_is_held,
+        test_an_unrelated_control_message_is_not_a_release,
         test_the_same_frame_is_only_counted_at_its_first_hop,
         test_upstream_frames_are_ignored,
         test_the_last_transcript_before_the_llm_is_the_one_timed,

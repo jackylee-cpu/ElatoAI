@@ -197,6 +197,19 @@ declare global {
             leading_silence_secs: number;
         }[];
         processing?: { processor: string; model: string | null; secs: number }[];
+        /**
+         * What stt_ms and total_ms are measured from. "commit" is the client's
+         * own end_of_speech -- the button coming up, which is the only anchor
+         * that means what the column header says. "stopped" is the frame the
+         * server derives from it a few hops later, "vad" is the recognizer's
+         * silence detector standing in for a client that never said it was
+         * done, and null is a turn with no start mark at all.
+         */
+        stt_anchor?: "commit" | "stopped" | "vad" | null;
+        /** Was the child ever heard to start speaking in this turn. */
+        speech_started?: boolean;
+        /** A release arrived for a turn that had already been transcribed. */
+        late_release?: boolean;
     }
 
     /** One model as OpenRouter's /api/v1/models lists it. */

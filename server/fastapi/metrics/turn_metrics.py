@@ -11,16 +11,31 @@ pipeline. It cannot hold, reorder or delay a frame, so it cannot distort the
 very numbers it is here to record. `on_push_frame` hands it the pipeline
 clock's timestamp for every hop, which is all the timing it needs.
 
-Why not pipecat's own UserBotLatencyObserver: it anchors the turn on
-VADUserStoppedSpeakingFrame (user_bot_latency_observer.py:244). Both clients
-here are push-to-talk -- the client sends `end_of_speech`, and
-RealtimeInputControlProcessor pushes UserStoppedSpeakingFrame straight away.
-The VAD frame is a different event: Silero fires it after `stop_secs` of
-quiet, which on a held button is a mid-sentence pause, and after the mic
-closes is several hundred milliseconds later than the release. Anchoring
-there would either start the clock too early (a pause while holding) or too
-late (VAD catching up after commit). The PTT frame is the start when it
-exists; VAD is only the fallback for hands-free.
+Where the clock starts. Both clients here are push-to-talk, and the button
+coming up is the only honest start for `stt_ms`: the child has finished
+speaking and is now waiting. That moment reaches the server as the
+`end_of_speech` websocket message, and the transport pushes it as an
+InputTransportMessageFrame before anything else in the pipeline reacts to it
+-- ahead of the trailing silence, the finalize, and the UserStoppedSpeakingFrame
+RealtimeInputControlProcessor derives from it. So that frame is the anchor,
+and the frames downstream of it can only fill a mark it left empty.
+
+Why not pipecat's own UserBotLatencyObserver: it anchors on
+VADUserStoppedSpeakingFrame (user_bot_latency_observer.py:244). The VAD stop is
+a different event -- Silero fires it after `stop_secs` of quiet, which on a held
+button is a mid-sentence pause, and after the mic closes is several hundred
+milliseconds later than the release. It is the fallback for hands-free and
+nothing more.
+
+A mark is only ever taken from the turn the release arrived in, and never
+after that turn has been transcribed. Without that rule a child who says
+something short and then keeps holding the button gets their release billed
+to whatever turn happened to be open when their thumb came up -- which, once
+the answer had played and the turn had been flushed, was the *next* turn.
+That is how a nine second STT gets into the table on a streaming recognizer
+that finalizes in under half a second. Every row now carries the anchor it
+used in `detail.stt_anchor`, so a number like that can be read rather than
+guessed at.
 
 Every span is milliseconds, and every one of them is allowed to be None: a turn
 can be cut short by barge-in, a dropped socket or an LLM error, and a
@@ -38,6 +53,7 @@ from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
+    InputTransportMessageFrame,
     InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
@@ -66,6 +82,13 @@ from metrics import store
 # The pipeline clock counts nanoseconds since the task started.
 _NS_PER_MS = 1_000_000
 
+# How faithful each anchor is to the button actually coming up. The client's
+# own end_of_speech is the button; the UserStoppedSpeakingFrame derived from
+# it is a few pipeline hops later; the VAD stop is a different event
+# altogether and only stands in for hands-free. A better source may replace
+# a worse one, never the other way round, and never itself.
+_RELEASE_RANK = {None: -1, "vad": 0, "stopped": 1, "commit": 2}
+
 
 def _ms(start: int | None, end: int | None) -> int | None:
     """Span between two pipeline-clock readings, or None if either is missing.
@@ -85,6 +108,9 @@ class _Turn:
 
     def __init__(self) -> None:
         self.user_stop: int | None = None
+        self.user_stop_source: str | None = None
+        self.speech_started: bool = False
+        self.late_release: bool = False
         self.transcript: int | None = None
         self.stt_done_at: str | None = None
         self.turn_closed: int | None = None
@@ -194,21 +220,38 @@ class TurnMetricsObserver(BaseObserver):
                 self._flush()
             else:
                 self._turn = _Turn()
+            # Whether the child was ever heard in this turn. A release that
+            # lands on a turn nobody spoke in is a stray, and a turn that is
+            # transcribed without one is an anomaly worth seeing on the row
+            # rather than silently averaging in.
+            self._turn.speech_started = True
+            return
+
+        if isinstance(frame, InputTransportMessageFrame):
+            # The button coming up, as early as the server can see it. The
+            # transport pushes this the instant it reads the websocket text
+            # frame -- ahead of the trailing silence, the finalize, and the
+            # UserStoppedSpeakingFrame that RealtimeInputControlProcessor
+            # derives from it further down. Anchoring here is what makes
+            # stt_ms "since the child let go" rather than "since some frame
+            # the pipeline got round to emitting afterwards".
+            message = frame.message if isinstance(frame.message, dict) else {}
+            if message.get("type") == "instruction" and message.get("msg") == "end_of_speech":
+                self._mark_release(timestamp, "commit")
             return
 
         if isinstance(frame, UserStoppedSpeakingFrame):
-            # The client's commit is the PTT clock start, even if VAD already
-            # fired on a pause while the button was still down. First-wins
-            # with VAD would bill the rest of the utterance to STT.
-            turn.user_stop = timestamp
+            # The commit's own frame, or -- for a client that closes turns some
+            # other way -- the only stop there is. Either way it is a worse
+            # mark than the message above and cannot displace it.
+            self._mark_release(timestamp, "stopped")
             return
 
         if isinstance(frame, VADUserStoppedSpeakingFrame):
             # Hands-free never sends end_of_speech; VAD is all there is.
-            # After an explicit commit this frame is a late echo and must
-            # not move the mark.
-            if turn.user_stop is None:
-                turn.user_stop = timestamp
+            # On a held button this frame is either a mid-sentence pause or a
+            # late echo of the commit, so it only ever fills an empty mark.
+            self._mark_release(timestamp, "vad")
             return
 
         if isinstance(frame, TranscriptionFrame):
@@ -276,6 +319,42 @@ class TurnMetricsObserver(BaseObserver):
         if isinstance(frame, MetricsFrame):
             self._collect_metrics(frame)
             return
+
+    def _mark_release(self, timestamp: int, source: str) -> None:
+        """Put the STT clock's start mark down -- or refuse to move it.
+
+        The refusal is the half that matters. A release that arrives when this
+        turn has already been transcribed does not belong to it: the VAD closed
+        the turn on a pause, the answer is already on its way, and the child is
+        only now taking their thumb off the button. Letting it through dated a
+        turn to a moment after its own transcript, which `_ms` then threw away
+        as negative -- and once the answer had finished and the turn had been
+        flushed, the same stray release landed on the *next*, empty turn and sat
+        there until somebody spoke again. That turn was then timed from a button
+        press several seconds before its own speech: the nine second STT that
+        started this. A mark is only ever taken from the turn it arrived in.
+        """
+        turn = self._turn
+        if not turn.speech_started:
+            # Nobody has been heard in this turn yet, so nothing in it can have
+            # been released. This is the thumb coming up long after the VAD
+            # closed the last turn and the answer finished playing: the mark
+            # would sit in the empty turn unclaimed and then date whatever the
+            # child said next. Leaving stt_ms missing says that; keeping the
+            # mark would have said nine seconds.
+            turn.late_release = True
+            return
+        if turn.transcript is not None:
+            # Whoever let go, they let go of a turn that was already read.
+            turn.late_release = True
+            return
+        if _RELEASE_RANK[source] <= _RELEASE_RANK[turn.user_stop_source]:
+            # Same source twice is the frame being re-emitted downstream, and a
+            # worse source cannot displace a better one. The first sighting of
+            # the best source available is the mark.
+            return
+        turn.user_stop = timestamp
+        turn.user_stop_source = source
 
     def _collect_metrics(self, frame: MetricsFrame) -> None:
         """Keep what each service says about itself, alongside what we measured.
@@ -345,6 +424,18 @@ class TurnMetricsObserver(BaseObserver):
                 "ttfb": turn.ttfb,
                 "ttfa": turn.ttfa,
                 "processing": turn.processing,
+                # What stt_ms is actually measured from, so a surprising row can
+                # be read instead of guessed at. "commit" is the client's own
+                # end_of_speech -- the button. "stopped" is the frame derived
+                # from it, "vad" is the recognizer's silence detector standing
+                # in for a client that never said it was done, and None is a
+                # turn with no start mark at all.
+                "stt_anchor": turn.user_stop_source,
+                # A turn transcribed without the child ever being heard to
+                # start, or a release for a turn already read. Neither is
+                # normal, and both change what the number above means.
+                "speech_started": turn.speech_started,
+                "late_release": turn.late_release,
             },
         }
         # PostgREST rejects an empty string where a uuid is expected, so these
@@ -355,14 +446,28 @@ class TurnMetricsObserver(BaseObserver):
             row["chat_group_id"] = self._chat_group_id
 
         logger.info(
-            "Turn {} metrics: stt={}ms turn_close={}ms llm_ttfb={}ms tts_ttfb={}ms "
-            "total={}ms model={}",
+            "Turn {} metrics: stt={}ms (from {}) turn_close={}ms llm_ttfb={}ms "
+            "tts_ttfb={}ms total={}ms model={}",
             self._turn_index,
             row["stt_ms"],
+            turn.user_stop_source or "nothing",
             row["turn_close_ms"],
             row["llm_ttfb_ms"],
             row["tts_ttfb_ms"],
             row["total_ms"],
             self._llm_model or "default",
         )
+        if turn.late_release or (turn.transcript is not None and not turn.speech_started):
+            # Say it once, on the turn it happened to, with the numbers next to
+            # it. An anchor that came from the wrong event is invisible in an
+            # average and obvious here.
+            logger.warning(
+                "Turn {} anchor is suspect: anchor={} speech_started={} late_release={} "
+                "stt={}ms -- the release and the speech may belong to different turns",
+                self._turn_index,
+                turn.user_stop_source,
+                turn.speech_started,
+                turn.late_release,
+                row["stt_ms"],
+            )
         self._sink(row)

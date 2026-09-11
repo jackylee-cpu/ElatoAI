@@ -232,6 +232,26 @@ const LatencyTab: React.FC<LatencyTabProps> = ({ rows }) => {
                                     </TableCell>
                                     <TableCell className="text-right tabular-nums whitespace-nowrap">
                                         {formatMs(row.stt_ms)}
+                                        {/* An STT span is only "since the child
+                                            let go" when the client's own
+                                            end_of_speech anchored it. Anything
+                                            else is measured from a different
+                                            event, and a surprising number here
+                                            is usually the anchor rather than
+                                            the recognizer. */}
+                                        {row.stt_ms !== null &&
+                                            row.detail?.stt_anchor !== undefined &&
+                                            row.detail.stt_anchor !== "commit" && (
+                                                <Badge
+                                                    variant="outline"
+                                                    className="ml-2 text-[10px] px-1 py-0"
+                                                    title={`Measured from ${
+                                                        row.detail.stt_anchor ?? "no release"
+                                                    }, not the button coming up`}
+                                                >
+                                                    {row.detail.stt_anchor ?? "no anchor"}
+                                                </Badge>
+                                            )}
                                     </TableCell>
                                     <TableCell className="text-right tabular-nums whitespace-nowrap">
                                         {formatMs(row.llm_ttfb_ms)}
