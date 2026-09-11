@@ -1,11 +1,12 @@
 """Checks on how a turn is timed.
 
 The one that matters is the push-to-talk anchor. Both clients close their own
-turn with an explicit end_of_speech, and the VAD frame for the same turn shows
-up several hundred milliseconds later, once the synthetic silence has run past
-stop_secs. Anchoring on the VAD frame -- which is what pipecat's own
-UserBotLatencyObserver does -- would silently shorten every measurement, and
-nothing about the symptom would point at this file.
+turn with an explicit end_of_speech. VAD for the same turn can fire earlier
+(a pause while the button is held) or later (idle timeout after the mic
+closes). The commit is the start when it exists; VAD is only the fallback
+for hands-free. Anchoring on VAD the way pipecat's UserBotLatencyObserver
+does would bill a thinking pause to STT, and nothing about the symptom
+would point at this file.
 """
 import asyncio
 import os
@@ -182,7 +183,28 @@ def test_the_push_to_talk_frame_wins_over_the_later_vad_frame():
 
     assert rows[0]["stt_ms"] == 240, rows[0]["stt_ms"]
     assert rows[0]["total_ms"] == 880, rows[0]["total_ms"]
-    print("  ok: the anchor is whichever stop frame arrived first")
+    print("  ok: a VAD stop after commit does not move the mark")
+
+
+def test_an_explicit_commit_overwrites_an_earlier_vad_pause():
+    """VAD fires on a thinking pause while the button is still held.
+
+    First-wins would start STT at that pause and bill the rest of the
+    sentence to the recognizer. The commit is when they actually let go.
+    """
+    rows = []
+    observer = make_observer(rows)
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(observer, VADUserStoppedSpeakingFrame(), 700)   # pause, still holding
+    push(observer, UserStoppedSpeakingFrame(), 2000)     # button up
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 2300)
+    push(observer, LLMTextFrame(text="Hi!"), 2600)
+    push(observer, BotStartedSpeakingFrame(), 2900)
+    push(observer, BotStoppedSpeakingFrame(), 4000)
+
+    assert rows[0]["stt_ms"] == 300, rows[0]["stt_ms"]        # 2300 - 2000
+    assert rows[0]["total_ms"] == 900, rows[0]["total_ms"]    # 2900 - 2000
+    print("  ok: a VAD pause while holding does not start the STT clock")
 
 
 def test_a_vad_only_turn_still_anchors():
@@ -396,6 +418,7 @@ def main():
     tests = [
         test_a_complete_turn_measures_every_span,
         test_the_push_to_talk_frame_wins_over_the_later_vad_frame,
+        test_an_explicit_commit_overwrites_an_earlier_vad_pause,
         test_a_vad_only_turn_still_anchors,
         test_the_same_frame_is_only_counted_at_its_first_hop,
         test_upstream_frames_are_ignored,

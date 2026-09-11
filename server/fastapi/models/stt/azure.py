@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 
 from loguru import logger
+from pipecat.frames.frames import Frame
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.azure.stt import AzureSTTService
 from pipecat.transcriptions.language import Language
+
+from models.stt.finalize import STTFinalizeFrame
 
 _LANGUAGE_ALIASES = {
     "AUTO": None,
@@ -96,32 +101,25 @@ def create_service(**kwargs):
     if endpoint_id:
         init_kwargs["endpoint_id"] = endpoint_id
 
-    return _tune_low_latency(AzureSTTService(**init_kwargs))
+    return _tune_low_latency(FinalizingAzureSTTService(**init_kwargs))
 
 
-# Azure finalizes a phrase after this much trailing silence. A push-to-talk
-# client stops sending audio the moment it commits, so this silence is written
-# for it (bot.py) -- which means the number is paid, in full, on every turn.
+# Azure finalizes a phrase after this much trailing silence. That is still
+# what ends a hands-free turn, and what stops a mid-sentence pause from
+# becoming two user turns while the button is held.
 #
-# 2000 is deliberately far above what transcription needs, and lowering it is
-# not the free win it looks like. Azure's endpointer runs on *stream* time, so a
-# short timeout finalizes a phrase in the middle of the utterance, seconds
-# before the child lets go of the button. Measured 2026-09-10 against the live
-# recogniser on a sentence with a 700ms thinking pause, at a 500ms timeout:
+# 2000 is deliberately far above what transcription needs. Azure's endpointer
+# runs on *stream* time, so a short timeout finalizes a phrase in the middle
+# of the utterance, seconds before the child lets go of the button. Measured
+# 2026-09-10 against the live recogniser on a sentence with a 700ms thinking
+# pause, at a 500ms timeout:
 #
 #     fragment at commit -4215ms   我最喜歡的動物是。
 #     fragment at commit   +387ms   小熊貓，因為他們又懶又可愛。
 #
-# Every word is still recoverable, but nothing in the pipeline waits 4.6s to
-# collect them: ExternalUserTurnStopStrategy closes the turn 500ms after the
-# first fragment, which is while the child is still talking. The result is two
-# user turns, two LLM requests and two answers on top of each other -- observed
-# in a real session 2026-09-10 after exactly this change, and reverted.
-#
-# So the ~600ms this costs on every turn is not buyable by tuning this number.
-# It needs a stop strategy that refuses to close a push-to-talk turn until the
-# commit has arrived, and only then waits a short merge window. Until that
-# exists and is validated in the real pipeline, this stays where it is.
+# Push-to-talk no longer pays this number. On commit the recognizer is told
+# to emit the current phrase (STTFinalizeFrame / close the push stream) instead
+# of being fed 2.9s of synthetic silence.
 _DEFAULT_SILENCE_MS = 2000
 _MIN_SILENCE_MS = 300
 
@@ -141,19 +139,14 @@ def _silence_timeout_ms() -> str:
     return str(max(_MIN_SILENCE_MS, min(value, 5000)))
 
 
-# How much further past its own timeout Azure has to be pushed before it will
-# emit a final result. Measured 2026-09-08 with the timeout at 600ms: 800ms of
-# trailing silence produced nothing and 1200ms produced the final, so the
-# property is not honoured to the millisecond. The margin is free -- the flush is
-# written to the stream as fast as the queue takes it, and the Silero VAD it
-# passes through on the way costs 18ms for 2.9s of silence (measured
-# 2026-09-10) -- and being under the real threshold costs the whole turn.
-_FLUSH_MARGIN_MS = 900
-
-
 def flush_silence_ms() -> int:
-    """Trailing silence that reliably ends a phrase, for push-to-talk commits."""
-    return int(_silence_timeout_ms()) + _FLUSH_MARGIN_MS
+    """Trailing silence for push-to-talk commits.
+
+    Azure is force-finalized on commit, so this is zero. Providers that still
+    need synthetic silence declare a positive number; bot.py skips the flush
+    when the value is 0.
+    """
+    return 0
 
 
 def _tune_low_latency(service: AzureSTTService) -> AzureSTTService:
@@ -181,3 +174,54 @@ def _tune_low_latency(service: AzureSTTService) -> AzureSTTService:
 
     logger.info("Azure STT low-latency silence_ms={}", silence_ms)
     return service
+
+
+class FinalizingAzureSTTService(AzureSTTService):
+    """Azure STT that can be told a push-to-talk turn is over.
+
+    Closing the push stream is Azure's end-of-audio. That emits the current
+    phrase without waiting for ``Speech_SegmentationSilenceTimeoutMs``, then
+    recognition is restarted so the next press has a live recognizer.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._finalize_lock = asyncio.Lock()
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        if isinstance(frame, STTFinalizeFrame):
+            await FrameProcessor.process_frame(self, frame, direction)
+            await self.finalize_utterance()
+            return
+        await super().process_frame(frame, direction)
+
+    async def finalize_utterance(self) -> None:
+        """Emit the current phrase, then reopen the recognizer for the next turn."""
+        async with self._finalize_lock:
+            recognizer = self._speech_recognizer
+            stream = self._audio_stream
+            if recognizer is None or stream is None:
+                return
+
+            logger.info("Azure STT explicit finalize")
+            loop = asyncio.get_running_loop()
+
+            def _close_then_stop() -> None:
+                # End-of-stream first: that is what makes Azure emit the
+                # current phrase instead of waiting out the silence timeout.
+                # stop_continuous_recognition then waits until the SDK has
+                # drained the result, so the recognized callback is queued
+                # before we reconnect.
+                try:
+                    stream.close()
+                except Exception as exc:  # noqa: BLE001 - never fail a commit
+                    logger.warning("Azure STT push stream close: {}", exc)
+                try:
+                    recognizer.stop_continuous_recognition()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Azure STT stop_continuous_recognition: {}", exc)
+
+            await loop.run_in_executor(None, _close_then_stop)
+            self._speech_recognizer = None
+            self._audio_stream = None
+            await self._connect()

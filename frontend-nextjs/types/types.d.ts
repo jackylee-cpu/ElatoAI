@@ -165,8 +165,9 @@ declare global {
         // turn up against the conversation and the server log.
         stt_done_at: string | null;
         // final transcript -> user turn closed. Dead time waiting on
-        // ExternalUserTurnStopStrategy's transcript-merge timer, still counted
-        // inside llm_ttfb_ms; subtract it for the model's own latency.
+        // ExternalUserTurnStopStrategy's transcript-merge timer (~80ms after
+        // an explicit commit), still counted inside llm_ttfb_ms; subtract it
+        // for the model's own latency.
         turn_close_ms: number | null;
         // final transcript -> first LLM token (turn_close_ms included)
         llm_ttfb_ms: number | null;

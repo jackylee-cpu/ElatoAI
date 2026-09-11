@@ -17,7 +17,7 @@
  */
 export const LATENCY_STAGES = [
     { key: "stt_ms", label: "STT", hint: "commit → transcript" },
-    { key: "turn_close_ms", label: "Turn close", hint: "transcript → LLM released" },
+    { key: "turn_close_ms", label: "Turn close", hint: "transcript → LLM released (~80ms merge)" },
     { key: "llm_ttfb_ms", label: "LLM", hint: "transcript → first token (turn close included)" },
     { key: "tts_ttfb_ms", label: "TTS", hint: "first token → first audio" },
     { key: "total_ms", label: "Total", hint: "commit → first audio out" },

@@ -22,11 +22,12 @@ from pipecat.turns.user_turn_controller import UserTurnController
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.asyncio.task_manager import TaskManager
 
-from voice_pipeline import build_user_turn_strategies
+from voice_pipeline import PTT_TRANSCRIPT_MERGE_SECS, build_user_turn_strategies
 
-# ExternalUserTurnStopStrategy merges consecutive transcripts on a 0.5s timer, so
-# a commit that lands before the transcript finalizes takes that long to close.
-TIMER_ALLOWANCE = 1.5
+# ExternalUserTurnStopStrategy merges consecutive transcripts on a short timer
+# after commit (PTT_TRANSCRIPT_MERGE_SECS). A commit that lands before the
+# transcript finalizes takes that long, plus the helper's 0.2s "STT lag".
+TIMER_ALLOWANCE = 0.4
 
 
 async def _run_turn(strategies, *, commit, commit_first=False, settle=2.0):
@@ -73,9 +74,21 @@ async def test_commit_after_transcript_closes_immediately():
 
 async def test_commit_before_transcript_still_closes():
     """Releasing the button before STT finalizes must not lose the turn."""
-    elapsed = await _run_turn(build_user_turn_strategies(), commit=True, commit_first=True)
+    elapsed = await _run_turn(
+        build_user_turn_strategies(),
+        commit=True,
+        commit_first=True,
+        settle=0.5,
+    )
     assert elapsed is not None, "a commit that arrived before the transcript lost the turn"
+    # 200ms of fake STT lag in the helper, then the short merge window.
     assert elapsed < TIMER_ALLOWANCE * 1000, f"took {elapsed:.0f}ms"
+    # The old 500ms merge would land around 700ms here. If this is over 450ms
+    # the timeout was not wired through.
+    assert elapsed < 450, (
+        f"took {elapsed:.0f}ms after commit+transcript; merge looks like 500ms "
+        f"(expected ~{200 + PTT_TRANSCRIPT_MERGE_SECS * 1000:.0f}ms)"
+    )
 
 
 async def test_open_mic_turn_is_not_closed_by_the_external_strategy():

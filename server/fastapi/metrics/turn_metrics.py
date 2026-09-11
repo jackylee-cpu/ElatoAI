@@ -14,12 +14,13 @@ clock's timestamp for every hop, which is all the timing it needs.
 Why not pipecat's own UserBotLatencyObserver: it anchors the turn on
 VADUserStoppedSpeakingFrame (user_bot_latency_observer.py:244). Both clients
 here are push-to-talk -- the client sends `end_of_speech`, and
-RealtimeInputControlProcessor pushes UserStoppedSpeakingFrame straight away,
-*then* feeds the recognizer synthetic silence so it will finalize. The VAD
-frame only appears once that silence has run past `stop_secs`, several hundred
-milliseconds after the button actually came up. Anchoring there would quietly
-shorten every measurement. So the anchor here is whichever of the two arrives
-first.
+RealtimeInputControlProcessor pushes UserStoppedSpeakingFrame straight away.
+The VAD frame is a different event: Silero fires it after `stop_secs` of
+quiet, which on a held button is a mid-sentence pause, and after the mic
+closes is several hundred milliseconds later than the release. Anchoring
+there would either start the clock too early (a pause while holding) or too
+late (VAD catching up after commit). The PTT frame is the start when it
+exists; VAD is only the fallback for hands-free.
 
 Every span is milliseconds, and every one of them is allowed to be None: a turn
 can be cut short by barge-in, a dropped socket or an LLM error, and a
@@ -195,9 +196,17 @@ class TurnMetricsObserver(BaseObserver):
                 self._turn = _Turn()
             return
 
-        if isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
-            # First one wins: for push-to-talk that is the client's explicit
-            # end_of_speech, which is the moment the child let go of the button.
+        if isinstance(frame, UserStoppedSpeakingFrame):
+            # The client's commit is the PTT clock start, even if VAD already
+            # fired on a pause while the button was still down. First-wins
+            # with VAD would bill the rest of the utterance to STT.
+            turn.user_stop = timestamp
+            return
+
+        if isinstance(frame, VADUserStoppedSpeakingFrame):
+            # Hands-free never sends end_of_speech; VAD is all there is.
+            # After an explicit commit this frame is a late echo and must
+            # not move the mark.
             if turn.user_stop is None:
                 turn.user_stop = timestamp
             return
@@ -222,9 +231,9 @@ class TurnMetricsObserver(BaseObserver):
             # The user aggregator pushes the context the instant the turn
             # closes, which is the instant the LLM may begin. Between this and
             # the final transcript sits ExternalUserTurnStopStrategy's
-            # transcript-merge timer -- 502ms, measured 2026-09-10 against the
-            # real strategies -- and without this anchor that wait is billed to
-            # the LLM, which never saw it.
+            # transcript-merge timer (PTT_TRANSCRIPT_MERGE_SECS, 80ms) --
+            # without this anchor that wait is billed to the LLM, which
+            # never saw it.
             if turn.turn_closed is None:
                 turn.turn_closed = timestamp
             return

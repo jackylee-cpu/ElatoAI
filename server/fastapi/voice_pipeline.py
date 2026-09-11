@@ -24,6 +24,14 @@ from pipecat.turns.user_turn_strategies import (
     default_user_turn_stop_strategies,
 )
 
+# After an explicit commit, wait this long for a trailing Azure fragment
+# before closing the turn. Pipecat's default is 0.5s, a flat tax on every
+# push-to-talk turn (measured 2026-09-10). 80ms is enough to catch a
+# punctuation revision, not another sentence. Hands-free is unaffected:
+# UserTurnController ignores this strategy until VAD stop or the client's
+# UserStoppedSpeakingFrame, so a short timer cannot close a held utterance.
+PTT_TRANSCRIPT_MERGE_SECS = 0.08
+
 
 def build_user_turn_strategies() -> UserTurnStrategies:
     """Turn strategies for a pipeline serving both push-to-talk and open-mic clients."""
@@ -49,7 +57,10 @@ def build_user_turn_strategies() -> UserTurnStrategies:
     # stop or the client's explicit frame clears that.
     return UserTurnStrategies(
         start=default_user_turn_start_strategies(),
-        stop=[ExternalUserTurnStopStrategy(), *default_user_turn_stop_strategies()],
+        stop=[
+            ExternalUserTurnStopStrategy(timeout=PTT_TRANSCRIPT_MERGE_SECS),
+            *default_user_turn_stop_strategies(),
+        ],
     )
 
 
@@ -148,9 +159,8 @@ def build_voice_pipeline(
     )
 
     stt = create_stt_service(stt_provider)
-    # A push-to-talk commit has to end the phrase for the recognizer, and how
-    # much trailing silence that takes is the recognizer's property, not the
-    # transport's. See models/stt/azure.py for the measurement.
+    # Azure force-finalizes on commit (flush_silence_ms=0). Other recognizers
+    # still need trailing silence written in; see models/stt/azure.py.
     input_processor.set_flush_silence_ms(flush_silence_ms(stt_provider))
     # Only pass what was actually chosen. models/_unsupported.py forwards
     # `model` straight into the service's Settings, so handing it None would

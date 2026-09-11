@@ -14,6 +14,7 @@ import uuid
 from typing import Any, Literal
 
 from app_settings import fetch_voice_settings
+from models.stt.finalize import STTFinalizeFrame
 from voice_pipeline import build_voice_pipeline, resolve_voice_stack
 from dotenv import load_dotenv
 from metrics.turn_metrics import TurnMetricsObserver
@@ -117,8 +118,11 @@ def _user_transcript_payload(state: TranscriptSessionState, frame: Frame, *, fin
     if elapsed_ms is not None:
         payload["elapsed_ms"] = elapsed_ms
     payload.update(_azure_timing(frame))
-    if "latency_ms" not in payload and elapsed_ms is not None:
-        payload["latency_ms"] = elapsed_ms
+    # Do not copy elapsed_ms into latency_ms. elapsed is speech-start → now
+    # (utterance duration included). latency_ms is Azure's own
+    # RecognitionLatencyMs (last audio → result). Mixing them made the
+    # transcript bubble's 「首字」 look like STT when Azure omitted the
+    # property, usually on interims.
     return payload
 
 
@@ -313,19 +317,10 @@ class TranscriptForwardProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-# Silence pushed into STT when a push-to-talk client commits its turn.
-#
-# Streaming recognizers end a phrase on trailing silence *in the audio stream*,
-# not on wall-clock time -- and a push-to-talk client stops sending the instant
-# the button comes up, so that silence never arrives and the final transcript
-# never comes. Measured with Azure on hardware: one utterance stayed
-# unfinalized for thirteen seconds until an interrupt happened to shake it
-# loose. Feeding it the trailing silence the client stopped sending is what
-# closes the phrase.
-#
-# It costs nothing to send: the recognizer's endpointer runs on stream time, so
-# these zeros go in as fast as the queue takes them -- 1500ms of audio in about
-# 1ms of wall clock -- and the phrase finalizes immediately.
+# Silence pushed into STT when a push-to-talk client commits, for recognizers
+# that have no explicit "finish now". Azure does (STTFinalizeFrame closes the
+# push stream), so its provider declares flush_silence_ms=0 and this loop is
+# skipped. Deepgram / Whisper still need the zeros.
 #
 # How much is a property of the recognizer, so the STT provider declares it
 # (models/stt/flush_silence_ms) and the pipeline hands the number over. This is
@@ -399,10 +394,14 @@ class RealtimeInputControlProcessor(FrameProcessor):
                     # silently. Both clients now commit the instant the button
                     # comes up instead of holding the mic open for the VAD.
                     #
-                    # Order matters: the silence has to reach STT before the
-                    # frame that closes the turn, or the aggregator finishes a
-                    # turn whose transcript has not been emitted yet.
+                    # Order matters: any trailing silence, then the explicit
+                    # finalize, then the frame that closes the turn. Azure
+                    # handles STTFinalizeFrame by closing its push stream so
+                    # the current phrase emits without waiting out the
+                    # silence timeout. The aggregator still has to wait for
+                    # that transcript; ExternalUserTurnStopStrategy does.
                     await self._flush_stt_with_silence()
+                    await self.push_frame(STTFinalizeFrame(), FrameDirection.DOWNSTREAM)
                     await self.push_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
                 return
 
