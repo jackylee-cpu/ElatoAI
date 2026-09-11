@@ -216,3 +216,35 @@ def test_an_explicit_websocket_url_wins():
         )
     finally:
         del os.environ["MINIMAX_WS_URL"]
+
+
+async def test_the_hook_and_the_backstop_do_not_recycle_twice():
+    """Barge-in fires both paths; between them they must cost one socket, not two.
+
+    on_audio_context_interrupted runs first and replaces the socket, then the
+    cancelled generator's finally runs. If that second path recycled blindly it
+    would throw away the replacement that the next turn is about to speak on.
+    """
+    speech = b"\x05\x06" * 4000
+    socket = _FakeSocket([[audio_message(speech), audio_message(b"\x07\x08" * 10, final=True)]])
+    service = build(socket)
+
+    replacements = []
+
+    async def fake_connect():
+        service._websocket = _FakeSocket([])
+        replacements.append(service._websocket)
+
+    service._connect_websocket = fake_connect
+
+    generator = service.run_tts("很長的一句話", "ctx")
+    await generator.__anext__()
+    await service.on_audio_context_interrupted("ctx")   # the hook
+    while service._recycle_task:
+        await asyncio.sleep(0)
+    replaced = service._websocket
+    await generator.aclose()                            # the backstop
+    await asyncio.sleep(0)
+
+    assert len(replacements) == 1, f"recycled {len(replacements)} times, expected 1"
+    assert service._websocket is replaced, "the backstop discarded the replacement"

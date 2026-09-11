@@ -497,6 +497,7 @@ class _WebsocketMiniMaxTTSService(WebsocketTTSService):
         """
         frame_bytes = max(2, int(self.sample_rate * _FRAME_SECONDS) * 2)
         completed = False
+        websocket = None
         try:
             async with self._send_lock:
                 if not self._websocket or self._websocket.state is not State.OPEN:
@@ -541,9 +542,13 @@ class _WebsocketMiniMaxTTSService(WebsocketTTSService):
             yield ErrorFrame(error=f"Unknown error occurred: {exc}", exception=exc)
         finally:
             await self.stop_ttfb_metrics()
-            if not completed:
-                # Left mid-sentence, by an interruption or an error. The rest of
-                # this sentence is still on its way, so the socket is spent.
+            # Left mid-sentence, by an interruption or an error: the rest of
+            # this sentence is still on its way, so that socket is spent. The
+            # identity check matters because on barge-in
+            # `on_audio_context_interrupted` has usually recycled it already --
+            # without it, a `finally` that ran late would throw away the
+            # replacement instead of the socket it was actually reading.
+            if not completed and websocket is not None and self._websocket is websocket:
                 await self._recycle_websocket()
 
 
