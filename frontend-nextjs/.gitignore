@@ -1,7 +1,11 @@
 node_modules
+# Glob, not the three exact names this used to list. `.env.local.bak-admin` --
+# a hand-made backup carrying a live JWT_SECRET_KEY and the Supabase keys --
+# matched none of them and was staged for commit on 2026-09-11. Any suffix,
+# any backup, any variant is ignored now; the example file stays tracked.
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
 .next
 
 # Incremental typecheck cache, rewritten on every `tsc` run.
