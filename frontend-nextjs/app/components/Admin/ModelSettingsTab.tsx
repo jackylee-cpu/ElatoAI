@@ -164,7 +164,7 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
 
     return (
         <div className="flex flex-col gap-4">
-            <Card>
+            <Card className="rounded-2xl border-0 bg-white/80 shadow-sm">
                 <CardHeader>
                     <CardTitle className="text-lg">OpenRouter model</CardTitle>
                     <CardDescription>
@@ -420,7 +420,7 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
                 </CardContent>
             </Card>
 
-            <Card>
+            <Card className="rounded-2xl border-0 bg-white/80 shadow-sm">
                 <CardHeader>
                     <CardTitle className="text-base">When this takes effect</CardTitle>
                 </CardHeader>

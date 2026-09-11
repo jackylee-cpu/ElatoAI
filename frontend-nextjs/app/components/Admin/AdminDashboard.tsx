@@ -1,10 +1,14 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
+import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ModelSettingsTab from "./ModelSettingsTab";
 import LatencyTab from "./LatencyTab";
 import CharactersTab from "./CharactersTab";
+import { playgroundAssets } from "../Playground/playgroundAssets";
+import { cn } from "@/lib/utils";
 
 interface AdminDashboardProps {
     settings: IVoiceStackSettings;
@@ -12,40 +16,87 @@ interface AdminDashboardProps {
     personalities: IAdminPersonality[];
 }
 
+const tabTriggerClass = cn(
+    "rounded-full py-2.5 text-sm font-medium text-gray-400 shadow-none",
+    "data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm",
+    "md:text-base"
+);
+
 const AdminDashboard: React.FC<AdminDashboardProps> = ({
     settings,
     turnMetrics,
     personalities,
 }) => {
     return (
-        <div className="flex flex-col gap-4 py-2">
-            <div className="flex flex-col gap-1">
-                <h1 className="text-2xl font-semibold">Admin</h1>
-                <p className="text-sm text-muted-foreground">
-                    Settings here apply to every session, on the web app and on
-                    the toys.
-                </p>
+        <div className="relative h-dvh w-full overflow-hidden bg-[#d4e8f8]">
+            <Image
+                src={playgroundAssets.bg}
+                alt=""
+                fill
+                priority
+                sizes="100vw"
+                className="object-cover object-top"
+            />
+
+            <div className="relative z-10 mx-auto flex h-full w-full max-w-5xl flex-col px-4 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-8 md:pt-8">
+                <header className="relative mb-3 flex h-14 shrink-0 items-center justify-center md:h-16">
+                    <Link
+                        href="/home"
+                        aria-label="Back to playground"
+                        className="absolute left-0 top-1/2 -translate-y-1/2 transition-transform hover:scale-105 active:scale-95"
+                    >
+                        <Image
+                            src={playgroundAssets.back}
+                            alt=""
+                            width={40}
+                            height={40}
+                            className="h-10 w-10 object-contain"
+                            priority
+                        />
+                    </Link>
+                    <h1 className="font-fredoka text-[28px] font-semibold tracking-tight text-gray-900 md:text-[32px]">
+                        Admin
+                    </h1>
+                </header>
+
+                <Tabs
+                    defaultValue="model"
+                    className="flex min-h-0 flex-1 flex-col"
+                >
+                    <TabsList className="mx-auto mb-5 grid h-auto w-full max-w-lg grid-cols-3 rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)]">
+                        <TabsTrigger value="model" className={tabTriggerClass}>
+                            Model
+                        </TabsTrigger>
+                        <TabsTrigger value="latency" className={tabTriggerClass}>
+                            Latency
+                        </TabsTrigger>
+                        <TabsTrigger
+                            value="characters"
+                            className={tabTriggerClass}
+                        >
+                            Characters
+                        </TabsTrigger>
+                    </TabsList>
+
+                    <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto pb-8">
+                        <div className="rounded-[24px] bg-white/90 p-4 shadow-[0_8px_24px_rgba(80,120,180,0.08)] backdrop-blur-sm md:p-6">
+                            <p className="mb-4 text-sm text-gray-500">
+                                Settings here apply to every session, on the web
+                                app and on the toys.
+                            </p>
+                            <TabsContent value="model" className="mt-0">
+                                <ModelSettingsTab settings={settings} />
+                            </TabsContent>
+                            <TabsContent value="latency" className="mt-0">
+                                <LatencyTab rows={turnMetrics} />
+                            </TabsContent>
+                            <TabsContent value="characters" className="mt-0">
+                                <CharactersTab personalities={personalities} />
+                            </TabsContent>
+                        </div>
+                    </div>
+                </Tabs>
             </div>
-
-            <Tabs defaultValue="model" className="w-full">
-                <TabsList className="grid w-full max-w-md grid-cols-3">
-                    <TabsTrigger value="model">Model</TabsTrigger>
-                    <TabsTrigger value="latency">Latency</TabsTrigger>
-                    <TabsTrigger value="characters">Characters</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="model" className="mt-4">
-                    <ModelSettingsTab settings={settings} />
-                </TabsContent>
-
-                <TabsContent value="latency" className="mt-4">
-                    <LatencyTab rows={turnMetrics} />
-                </TabsContent>
-
-                <TabsContent value="characters" className="mt-4">
-                    <CharactersTab personalities={personalities} />
-                </TabsContent>
-            </Tabs>
         </div>
     );
 };

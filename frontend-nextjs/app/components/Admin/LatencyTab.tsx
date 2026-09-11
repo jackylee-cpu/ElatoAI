@@ -58,7 +58,7 @@ const LatencyTab: React.FC<LatencyTabProps> = ({ rows }) => {
 
     if (rows.length === 0) {
         return (
-            <Card>
+            <Card className="rounded-2xl border-0 bg-white/80 shadow-sm">
                 <CardHeader>
                     <CardTitle className="text-lg">No turns recorded yet</CardTitle>
                     <CardDescription>
@@ -110,7 +110,7 @@ const LatencyTab: React.FC<LatencyTabProps> = ({ rows }) => {
                 {LATENCY_STAGES.map((stage) => {
                     const stats = statsForStage(filtered, stage.key);
                     return (
-                        <Card key={stage.key}>
+                        <Card key={stage.key} className="rounded-2xl border-0 bg-white/80 shadow-sm">
                             <CardHeader className="pb-2">
                                 <CardTitle className="text-sm font-medium">
                                     {stage.label}
@@ -132,7 +132,7 @@ const LatencyTab: React.FC<LatencyTabProps> = ({ rows }) => {
                 })}
             </div>
 
-            <Card>
+            <Card className="rounded-2xl border-0 bg-white/80 shadow-sm">
                 <CardHeader>
                     <CardTitle className="text-base">By model</CardTitle>
                     <CardDescription>
@@ -184,7 +184,7 @@ const LatencyTab: React.FC<LatencyTabProps> = ({ rows }) => {
                 </CardContent>
             </Card>
 
-            <Card>
+            <Card className="rounded-2xl border-0 bg-white/80 shadow-sm">
                 <CardHeader>
                     <CardTitle className="text-base">Recent turns</CardTitle>
                     <CardDescription>

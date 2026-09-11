@@ -24,12 +24,10 @@ export default async function AdminPage() {
     ]);
 
     return (
-        <div className="pb-4 flex flex-col gap-2">
-            <AdminDashboard
-                settings={settings}
-                turnMetrics={turnMetrics}
-                personalities={personalities}
-            />
-        </div>
+        <AdminDashboard
+            settings={settings}
+            turnMetrics={turnMetrics}
+            personalities={personalities}
+        />
     );
 }

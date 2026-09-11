@@ -90,7 +90,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
                 </Button>
             </div>
 
-            <Card>
+            <Card className="rounded-2xl border-0 bg-white/80 shadow-sm">
                 <CardHeader className="pb-2">
                     <CardTitle className="text-base">Characters</CardTitle>
                     <CardDescription>

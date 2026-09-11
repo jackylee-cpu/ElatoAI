@@ -15,7 +15,9 @@ export function HomeShell({
 }) {
     const pathname = usePathname();
     const isNewHomeUi =
-        pathname === "/home" || pathname === "/home/settings";
+        pathname === "/home" ||
+        pathname === "/home/settings" ||
+        pathname === "/home/admin";
 
     if (isNewHomeUi) {
         return (
