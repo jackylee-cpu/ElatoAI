@@ -434,11 +434,30 @@ void setup() {
   audioPacketQueueSetup();
 
   // Pin audio tasks to Core 1 (application core)
+  // Priority 1, with the display task, and for the same reason: this loop sets
+  // a static colour from deviceState every 20ms and a late colour change is
+  // invisible. It used to be 5, above both the task that feeds the speaker DMA
+  // (3) and the one that decodes into it (2), which is the wrong way round on
+  // principle.
+  //
+  // It is only principle, though -- this was changed to buy back the gap
+  // between decode CPU time and decode wall time, and measured on hardware it
+  // buys nothing: 8672us wall against 7609us CPU per packet before, 8578us
+  // against 7729us after, which is noise. Nor should it have: the loop below
+  // wakes every 20ms, writes one colour and sleeps, so even at priority 5 it
+  // can only ever steal microseconds.
+  //
+  // The gap is audioStreamTask doing its job. It wakes every 1ms, so it runs
+  // about eight times during one packet's decode, and 849us spread over eight
+  // passes is ~106us each -- which is what a copier.copy() of up to 1024 bytes
+  // plus an I2S write costs. That time is the speaker being fed; there is no
+  // preemption here to reclaim, and a buffer sized for decode wall time has to
+  // include it.
   xTaskCreatePinnedToCore(ledTask,    // Function
                           "LED Task", // Name
                           4096,       // Stack size
                           NULL,       // Parameters
-                          5,          // Priority
+                          1,          // Priority
                           NULL,       // Handle
                           1           // Core 1 (application core)
   );
