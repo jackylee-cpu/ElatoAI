@@ -384,20 +384,42 @@ static volatile bool packetQueueFlushScheduled = false;
 // playing at the exact rate the network delivers, and every jitter spike then
 // becomes a gap -- a run of those gaps is the stutter.
 static volatile bool playbackPrimed = false;
-// ~85ms at 24kHz mono s16, out of the 416ms ring. Costs that much at the start
-// of a turn and buys a matching cushion against network jitter for the rest of
-// it.
+// ~21ms at 24kHz mono s16, out of the 416ms ring.
 //
-// Was 8192 (~170ms) while the server sent 120ms Opus frames, where the ring
-// filled two packets at a time and there was no point asking for a cushion
-// finer than one of them. The server now sends 40ms frames, so jitter arrives
-// in 1920-byte steps and half the cushion covers the same number of late
-// packets. That halving comes straight off the time to the first spoken word.
+// This was 8192 (~170ms), then 4096 on the argument that 40ms frames make
+// jitter arrive in finer steps. Both numbers were reasoned, not measured. Swept
+// on hardware 2026-09-11, one greeting turn each, everything else identical:
 //
-// This is the knob to turn back up if playback stutters: raise it and watch
-// the starvation figure transitionToIdle() logs go to zero. A turn reporting
-// more than a few ms of starvation wants a bigger cushion, not a smaller one.
-static const size_t PLAYBACK_PRIME_BYTES = 4096;
+//   prime   cushion   first audio out   worst starvation run   glitches
+//    4096      85ms            +136ms                    9ms          0
+//    2048      42ms             +52ms                   13ms          0
+//    1024      21ms             +12ms                   10ms          0
+//       0       0ms             +14ms                   11ms          0
+//
+// The cushion costs up to 120ms of time-to-first-word and buys nothing back:
+// starvation is flat across the whole sweep, inside its own run-to-run spread
+// (0-14ms across every turn measured that day). It was redundant. The jitter it
+// was meant to absorb is already absorbed twice over -- by the 64KB packet
+// queue upstream of the decoder, and by the 64ms of I2S DMA downstream of the
+// ring -- and the server pushes at twice real time, so the ring refills faster
+// than it drains anyway.
+//
+// 1024 rather than 0 because 0 is the same latency for less margin: the two are
+// within noise of each other on first audio, so there is no reason to give up
+// the last packet of cushion.
+//
+// The safety check is that a starvation *run* has to exceed the DMA depth
+// before anything reaches the amplifier, and the worst run anywhere in the
+// sweep was 13ms against 64ms of DMA. If playback ever does stutter this is
+// still the knob -- raise it and watch that figure -- but raise it on a
+// measurement, not on the argument that more buffer must be safer.
+//
+// Overridable at build time so the floor can be swept without editing this
+// file: PLATFORMIO_BUILD_FLAGS="-DAUDIO_PLAYBACK_PRIME_BYTES=2048" etc.
+#ifndef AUDIO_PLAYBACK_PRIME_BYTES
+#define AUDIO_PLAYBACK_PRIME_BYTES 1024
+#endif
+static const size_t PLAYBACK_PRIME_BYTES = AUDIO_PLAYBACK_PRIME_BYTES;
 // ...but never wait longer than this for it. A reply shorter than
 // PLAYBACK_PRIME_BYTES of PCM (85ms) would otherwise never reach the
 // threshold, and playback would never start at all: the audio just sits in the
