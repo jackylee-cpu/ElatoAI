@@ -1,7 +1,7 @@
 import Image from "next/image";
 import { cn, getPersonalityImageSrc } from "@/lib/utils";
 import { EmojiComponent } from "./EmojiImage";
-import { playgroundAssets } from "./playgroundAssets";
+import { CheckIcon } from "./icons";
 
 interface CharacterSectionProps {
     allPersonalities: IPersonality[];
@@ -90,13 +90,7 @@ const CharacterSection = ({
                                     )}
                                 </div>
                                 {isCurrentPersonality && (
-                                    <Image
-                                        src={playgroundAssets.check}
-                                        alt=""
-                                        width={28}
-                                        height={28}
-                                        className="absolute -right-0.5 -top-0.5 z-10 h-7 w-7 object-contain"
-                                    />
+                                    <CheckIcon className="absolute -right-0.5 -top-0.5 z-10 h-7 w-7" />
                                 )}
                             </div>
                             <span className="mt-3 max-w-full truncate text-center text-[11px] font-medium tracking-[0.04em] text-[#7A8AA0] md:text-xs">

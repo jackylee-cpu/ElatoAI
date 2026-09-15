@@ -13,6 +13,7 @@ import App from "../Realtime/App";
 import { defaultPersonalityId } from "@/lib/data";
 import UserPersonalities from "./UserPersonalities";
 import { playgroundAssets } from "./playgroundAssets";
+import { PlusIcon } from "./icons";
 import { PlaygroundBottomNav } from "./PlaygroundBottomNav";
 import { PlaygroundMicButton } from "./PlaygroundMicButton";
 import { SlidersHorizontal } from "lucide-react";
@@ -98,14 +99,7 @@ const Playground: React.FC<PlaygroundProps> = ({
                                 className="absolute right-0 top-1/2 -translate-y-1/2 transition-transform hover:scale-105 active:scale-95"
                                 aria-label="Create character"
                             >
-                                <Image
-                                    src={playgroundAssets.plus}
-                                    alt=""
-                                    width={44}
-                                    height={44}
-                                    className="h-10 w-10 object-contain md:h-11 md:w-11"
-                                    priority
-                                />
+                                <PlusIcon className="h-10 w-10 md:h-11 md:w-11" />
                             </Link>
                         </header>
 

@@ -10,6 +10,7 @@ import { dbInsertTranscriptItem } from "@/db/conversations";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { EmojiComponent } from "../../Playground/EmojiImage";
 import { playgroundAssets } from "../../Playground/playgroundAssets";
+import { CloseIcon, MicIcon } from "../../Playground/icons";
 import { SheetClose } from "@/components/ui/sheet";
 import { Loader2 } from "lucide-react";
 
@@ -204,13 +205,7 @@ function Transcript({
             aria-label="Close chat"
             className="shrink-0 transition-transform hover:scale-105 active:scale-95"
           >
-            <Image
-              src={playgroundAssets.close}
-              alt=""
-              width={40}
-              height={40}
-              className="h-10 w-10 object-contain"
-            />
+            <CloseIcon className="h-10 w-10" />
           </button>
         </SheetClose>
       </div>
@@ -295,13 +290,7 @@ function Transcript({
             (!canHoldToTalk || holdDisabled) && "cursor-not-allowed opacity-70"
           )}
         >
-          <Image
-            src={playgroundAssets.mic}
-            alt=""
-            width={56}
-            height={56}
-            className="h-full w-full object-contain"
-          />
+          <MicIcon className="h-full w-full" />
           {holdDisabled && (
             <span className="absolute inset-0 flex items-center justify-center rounded-full bg-indigo-600/40">
               <Loader2 className="h-6 w-6 animate-spin text-white" />

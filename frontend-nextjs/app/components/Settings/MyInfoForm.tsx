@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import { createClient } from "@/utils/supabase/client";
 import { updateUser } from "@/db/users";
 import { useToast } from "@/components/ui/use-toast";
-import { playgroundAssets } from "../Playground/playgroundAssets";
+import { ChevronDownIcon, UsFlagIcon } from "../Playground/icons";
 import {
     Select,
     SelectContent,
@@ -35,13 +34,7 @@ function LanguageFlag({
 }) {
     if (code === "en-US") {
         return (
-            <Image
-                src={playgroundAssets.usFlag}
-                alt=""
-                width={24}
-                height={24}
-                className="h-6 w-6 shrink-0 rounded-full object-cover"
-            />
+            <UsFlagIcon className="h-6 w-6 shrink-0" />
         );
     }
 
@@ -160,13 +153,7 @@ export default function MyInfoForm({
                             <span className="min-w-0 flex-1 truncate text-left text-base text-gray-900">
                                 {languageSelected?.name ?? "English"}
                             </span>
-                            <Image
-                                src={playgroundAssets.chevronDown}
-                                alt=""
-                                width={16}
-                                height={16}
-                                className="h-4 w-4 shrink-0 object-contain opacity-70"
-                            />
+                            <ChevronDownIcon className="h-4 w-4 shrink-0 opacity-70" />
                         </SelectTrigger>
                         <SelectContent className="rounded-2xl">
                             {allLanguages.map((item) => (

@@ -7,6 +7,7 @@ import AppSettings from "./AppSettings";
 import MemorySection from "./MemorySection";
 import MyInfoForm from "./MyInfoForm";
 import { playgroundAssets } from "../Playground/playgroundAssets";
+import { BackIcon } from "../Playground/icons";
 import { cn } from "@/lib/utils";
 
 interface SettingsDashboardProps {
@@ -40,14 +41,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                         aria-label="Back to playground"
                         className="absolute left-0 top-1/2 -translate-y-1/2 transition-transform hover:scale-105 active:scale-95"
                     >
-                        <Image
-                            src={playgroundAssets.back}
-                            alt=""
-                            width={40}
-                            height={40}
-                            className="h-10 w-10 object-contain"
-                            priority
-                        />
+                        <BackIcon className="h-10 w-10" />
                     </Link>
                     <h1 className="font-fredoka text-[28px] font-semibold tracking-tight text-gray-900 md:text-[32px]">
                         {tab === "info" ? "My Info" : "Setting"}

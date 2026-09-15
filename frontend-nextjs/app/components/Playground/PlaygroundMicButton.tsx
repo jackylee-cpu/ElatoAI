@@ -1,9 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import { Loader2 } from "lucide-react";
 import { SessionStatus } from "@/app/components/Realtime/types";
-import { playgroundAssets } from "./playgroundAssets";
+import { MicIcon } from "./icons";
 import { cn } from "@/lib/utils";
 
 export function PlaygroundMicButton({
@@ -32,14 +31,7 @@ export function PlaygroundMicButton({
                 isDisabled ? "cursor-not-allowed opacity-80" : "hover:scale-105 active:scale-95"
             )}
         >
-            <Image
-                src={playgroundAssets.mic}
-                alt=""
-                width={80}
-                height={80}
-                className="h-full w-full object-contain"
-                priority
-            />
+            <MicIcon className="h-full w-full" />
             {isConnecting && (
                 <span className="absolute inset-0 flex items-center justify-center rounded-full bg-indigo-600/40">
                     <Loader2 className="h-7 w-7 animate-spin text-white" />

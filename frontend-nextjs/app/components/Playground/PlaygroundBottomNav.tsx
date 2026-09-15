@@ -1,8 +1,7 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
-import { playgroundAssets } from "./playgroundAssets";
+import { CharactersIcon, SettingsIcon } from "./icons";
 import { cn } from "@/lib/utils";
 
 export function PlaygroundBottomNav({
@@ -27,7 +26,7 @@ export function PlaygroundBottomNav({
                 <NavItem
                     href="/home"
                     label="Characters"
-                    iconSrc={playgroundAssets.characters}
+                    icon={CharactersIcon}
                     active
                 />
                 <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[42%]">
@@ -36,7 +35,7 @@ export function PlaygroundBottomNav({
                 <NavItem
                     href="/home/settings"
                     label="Setting"
-                    iconSrc={playgroundAssets.settings}
+                    icon={SettingsIcon}
                 />
             </div>
         </nav>
@@ -46,12 +45,12 @@ export function PlaygroundBottomNav({
 function NavItem({
     href,
     label,
-    iconSrc,
+    icon: Icon,
     active = false,
 }: {
     href: string;
     label: string;
-    iconSrc: string;
+    icon: React.ComponentType<{ className?: string }>;
     active?: boolean;
 }) {
     return (
@@ -59,13 +58,7 @@ function NavItem({
             href={href}
             className="flex min-w-[72px] flex-col items-center gap-1"
         >
-            <Image
-                src={iconSrc}
-                alt=""
-                width={28}
-                height={28}
-                className="h-7 w-7 object-contain"
-            />
+            <Icon className="h-7 w-7" />
             <span
                 className={cn(
                     "text-[11px] leading-none",
