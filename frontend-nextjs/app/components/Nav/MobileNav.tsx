@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 export function MobileNav({
@@ -10,7 +11,7 @@ export function MobileNav({
     const pathname = usePathname();
 
     const primaryItem = (item: SidebarNavItem) => {
-        return <a
+        return <Link
             key={item.href}
             href={item.href}
             className="relative flex flex-col items-center justify-center p-2 text-sm bg-yellow-500 hover:bg-yellow-400 rounded-full -mt-4 shadow-xl hover:shadow-2xl w-16 h-16"
@@ -23,7 +24,7 @@ export function MobileNav({
             >
                 {item.icon}
             </div>
-        </a>
+        </Link>
     }
 
     return (
@@ -31,7 +32,7 @@ export function MobileNav({
             <div className="flex justify-around items-center h-14">
                 {items.map((item) => (
                    
-                   <a
+                   <Link
                    key={item.href}
                    href={item.href}
                    className="relative flex flex-col items-center p-2 text-sm"
@@ -49,7 +50,7 @@ export function MobileNav({
                    >
                        {item.title}
                    </span>
-               </a>
+               </Link>
                 ))}
             </div>
         </nav>

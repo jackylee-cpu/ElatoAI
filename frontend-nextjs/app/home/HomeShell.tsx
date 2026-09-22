@@ -1,8 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { SidebarNav } from "../components/Nav/SidebarNavItems";
 import { MobileNav } from "../components/Nav/MobileNav";
+import { playgroundAssets } from "../components/Playground/playgroundAssets";
 
 export function HomeShell({
     children,
@@ -20,8 +22,20 @@ export function HomeShell({
         pathname === "/home/admin";
 
     if (isNewHomeUi) {
+        // The background lives here rather than in each page, so switching
+        // between Playground, Settings and Admin keeps the same <Image>
+        // mounted instead of tearing down and repainting a 440KB backdrop on
+        // every navigation. Pages render only their own z-10 content column.
         return (
-            <div className="flex min-h-0 w-full flex-1 flex-col">
+            <div className="relative h-dvh w-full overflow-hidden bg-[#d4e8f8]">
+                <Image
+                    src={playgroundAssets.bg}
+                    alt=""
+                    fill
+                    priority
+                    sizes="100vw"
+                    className="object-cover object-top"
+                />
                 {children}
             </div>
         );

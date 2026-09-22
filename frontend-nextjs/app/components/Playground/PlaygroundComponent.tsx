@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/utils/supabase/client";
 import { updateUser } from "@/db/users";
@@ -12,7 +11,6 @@ import { EventProvider } from "../Realtime/contexts/EventContext";
 import App from "../Realtime/App";
 import { defaultPersonalityId } from "@/lib/data";
 import UserPersonalities from "./UserPersonalities";
-import { playgroundAssets } from "./playgroundAssets";
 import { PlusIcon } from "./icons";
 import { PlaygroundBottomNav } from "./PlaygroundBottomNav";
 import { PlaygroundMicButton } from "./PlaygroundMicButton";
@@ -70,16 +68,7 @@ const Playground: React.FC<PlaygroundProps> = ({
     return (
         <TranscriptProvider>
             <EventProvider>
-                <div className="relative h-dvh w-full overflow-hidden bg-[#d4e8f8]">
-                    <Image
-                        src={playgroundAssets.bg}
-                        alt=""
-                        fill
-                        priority
-                        sizes="100vw"
-                        className="object-cover object-top"
-                    />
-
+                <>
                     <div className="relative z-10 mx-auto flex h-full w-full max-w-5xl flex-col px-4 pt-[max(1.25rem,env(safe-area-inset-top))] md:px-8 md:pt-8">
                         <header className="relative flex h-14 shrink-0 items-center justify-center md:h-16">
                             {isAdmin && (
@@ -149,7 +138,7 @@ const Playground: React.FC<PlaygroundProps> = ({
                             )}
                         />
                     </PlaygroundBottomNav>
-                </div>
+                </>
             </EventProvider>
         </TranscriptProvider>
     );
