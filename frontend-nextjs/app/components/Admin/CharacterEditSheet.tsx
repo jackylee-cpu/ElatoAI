@@ -15,7 +15,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/use-toast";
-import { Loader2 } from "lucide-react";
+import { ImagePlus, Loader2, X } from "lucide-react";
+import Image from "next/image";
+import { createClient } from "@/utils/supabase/client";
+import { getPersonalityImageSrc } from "@/lib/utils";
+import {
+    uploadCharacterImage,
+    MAX_CHARACTER_IMAGE_BYTES,
+} from "@/db/personalities";
 import {
     createPersonalityAction,
     updatePersonalityAction,
@@ -31,6 +38,7 @@ const EMPTY: Partial<IPersonality> = {
     voice_prompt: "",
     oai_voice: "Friendly_Person",
     provider: "openrouter",
+    image_url: null,
     is_child_voice: false,
     is_story: false,
     is_hidden: false,
@@ -53,12 +61,67 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
         personality ?? EMPTY,
     );
     const [saving, setSaving] = useState(false);
+    const [uploading, setUploading] = useState(false);
 
     // Remount on a different character rather than syncing in an effect: the
     // sheet holds a whole form of local edits and there is no sensible merge
     // between those and a new row.
     const set = <K extends keyof IPersonality>(field: K, value: IPersonality[K]) =>
         setDraft((current) => ({ ...current, [field]: value }));
+
+    // Uploaded straight from the browser rather than through a server action:
+    // the storage policies already allow an authenticated user to write to
+    // their own folder, and a server action would have to carry the whole file
+    // through the 1MB action body limit to gain nothing.
+    const onPickImage = async (file: File | null) => {
+        if (!file) {
+            return;
+        }
+        if (!file.type.startsWith("image/")) {
+            toast({
+                title: "Not an image",
+                description: "Pick a PNG, JPEG or WebP file.",
+            });
+            return;
+        }
+        if (file.size > MAX_CHARACTER_IMAGE_BYTES) {
+            toast({
+                title: "Image too large",
+                description: "Please pick an image under 5MB.",
+            });
+            return;
+        }
+
+        setUploading(true);
+        try {
+            const supabase = createClient();
+            const {
+                data: { user },
+            } = await supabase.auth.getUser();
+            if (!user) {
+                throw new Error("No signed-in user");
+            }
+            const url = await uploadCharacterImage(supabase, user.id, file);
+            set("image_url", url);
+        } catch (error) {
+            console.error("Could not upload the character image", error);
+            toast({
+                title: "Upload failed",
+                description: "The image could not be uploaded.",
+            });
+        } finally {
+            setUploading(false);
+        }
+    };
+
+    // An uploaded picture wins; a built-in with none still has the artwork
+    // bundled with the frontend under /personality, which is worth showing so
+    // an admin can see there is already an image before replacing it.
+    const bundledImage =
+        !creating && personality.creator_id === null && draft.key
+            ? getPersonalityImageSrc(draft.key)
+            : null;
+    const previewImage = draft.image_url ?? bundledImage;
 
     const onSave = async () => {
         setSaving(true);
@@ -116,6 +179,73 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                                 value={draft.title ?? ""}
                                 onChange={(event) => set("title", event.target.value)}
                             />
+                        </Field>
+
+                        <Field
+                            label="Image"
+                            hint="Shown on the Playground tile. Without one a user-made character falls back to an emoji."
+                        >
+                            <div className="flex flex-row items-center gap-4">
+                                <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-full border bg-muted">
+                                    {previewImage ? (
+                                        <Image
+                                            src={previewImage}
+                                            alt={draft.title || "Character"}
+                                            fill
+                                            unoptimized
+                                            className="object-cover object-top"
+                                        />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                                            <ImagePlus className="h-6 w-6" />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    <label
+                                        htmlFor="adminCharacterImage"
+                                        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-medium shadow-sm hover:bg-accent"
+                                    >
+                                        {uploading ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <ImagePlus className="h-4 w-4" />
+                                        )}
+                                        {uploading
+                                            ? "Uploading…"
+                                            : previewImage
+                                              ? "Replace image"
+                                              : "Upload image"}
+                                    </label>
+                                    <input
+                                        id="adminCharacterImage"
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        disabled={uploading}
+                                        onChange={(event) => {
+                                            void onPickImage(
+                                                event.target.files?.[0] ?? null,
+                                            );
+                                            // Let the same file be picked again
+                                            // after clearing it.
+                                            event.target.value = "";
+                                        }}
+                                    />
+                                    {draft.image_url && (
+                                        <button
+                                            type="button"
+                                            onClick={() => set("image_url", null)}
+                                            className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                                        >
+                                            <X className="h-3 w-3" /> Remove
+                                        </button>
+                                    )}
+                                    <span className="text-xs text-muted-foreground">
+                                        PNG, JPEG or WebP, up to 5MB
+                                    </span>
+                                </div>
+                            </div>
                         </Field>
 
                         <Field label="Subtitle">

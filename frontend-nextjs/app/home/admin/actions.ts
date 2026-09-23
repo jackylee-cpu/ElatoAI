@@ -98,6 +98,7 @@ const EDITABLE_FIELDS = [
     "voice_prompt",
     "oai_voice",
     "provider",
+    "image_url",
     "is_hidden",
     "is_child_voice",
     "is_story",

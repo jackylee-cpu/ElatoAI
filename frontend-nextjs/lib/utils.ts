@@ -35,6 +35,23 @@ export const getPersonalityImageSrc = (title: string) => {
     return `/personality/${title.toLowerCase().replace(/\s+/g, "_")}.jpeg`;
 };
 
+/**
+ * The artwork to draw for a character, or null when it has none and the caller
+ * should fall back to the emoji. An uploaded picture wins; otherwise only
+ * built-in characters (creator_id null) have a bundled image under /personality
+ * -- asking for one for a user-made character 404s.
+ */
+export const getPersonalityAvatarSrc = (
+    personality: IPersonality,
+): string | null => {
+    if (personality.image_url) {
+        return personality.image_url;
+    }
+    return personality.creator_id === null
+        ? getPersonalityImageSrc(personality.key)
+        : null;
+};
+
 export function removeEmojis(text: string): string {
     const emojiPattern: RegExp =
         /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2702}-\u{27B0}\u{24C2}-\u{1F251}]/gu;

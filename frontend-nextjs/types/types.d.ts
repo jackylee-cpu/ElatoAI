@@ -391,6 +391,10 @@ declare global {
         first_message_prompt: string;
         creator_id: string | null;
         pitch_factor: number;
+        // Public URL of the uploaded artwork. Null means the character has
+        // none: a built-in falls back to the bundled /personality image, a
+        // user-made one to the emoji derived from its id.
+        image_url?: string | null;
         // Retired from the picker without being deleted. The row has to stay:
         // users.personality_id references it, and deleting one silently moves
         // every child using it back to the Elato default.

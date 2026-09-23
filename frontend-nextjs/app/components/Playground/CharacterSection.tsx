@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { cn, getPersonalityImageSrc } from "@/lib/utils";
+import { cn, getPersonalityAvatarSrc } from "@/lib/utils";
 import { EmojiComponent } from "./EmojiImage";
 import { CheckIcon } from "./icons";
 
@@ -11,6 +11,9 @@ interface CharacterSectionProps {
     title: string;
     disableButtons: boolean;
     selectedFilters: PersonalityFilter[];
+    // The tabs categorise the built-in catalogue. A character someone made
+    // themselves is listed whatever tab is open, so it never goes missing.
+    ignoreFilters?: boolean;
 }
 
 const formatCharacterName = (personality: IPersonality) =>
@@ -23,12 +26,15 @@ const CharacterSection = ({
     title,
     disableButtons,
     selectedFilters,
+    ignoreFilters = false,
 }: CharacterSectionProps) => {
-    const filteredPersonalities = allPersonalities.filter((personality) => {
-        return selectedFilters.every((filter) => {
-            return personality[filter] === true;
-        });
-    });
+    const filteredPersonalities = ignoreFilters
+        ? allPersonalities
+        : allPersonalities.filter((personality) => {
+              return selectedFilters.every((filter) => {
+                  return personality[filter] === true;
+              });
+          });
 
     if (filteredPersonalities.length === 0) {
         return null;
@@ -47,6 +53,7 @@ const CharacterSection = ({
                 {filteredPersonalities.map((personality) => {
                     const isCurrentPersonality =
                         personalityIdState === personality.personality_id;
+                    const avatarSrc = getPersonalityAvatarSrc(personality);
                     return (
                         <button
                             key={personality.personality_id}
@@ -70,11 +77,9 @@ const CharacterSection = ({
                         >
                             <div className="relative mx-auto h-[110px] w-[110px] shrink-0 sm:h-[124px] sm:w-[124px] md:h-[140px] md:w-[140px]">
                                 <div className="absolute inset-0 overflow-hidden rounded-full bg-[#f3f6fb]">
-                                    {personality.creator_id === null ? (
+                                    {avatarSrc ? (
                                         <Image
-                                            src={getPersonalityImageSrc(
-                                                personality.key
-                                            )}
+                                            src={avatarSrc}
                                             alt={personality.title}
                                             fill
                                             sizes="(max-width: 640px) 40vw, (max-width: 1024px) 22vw, 160px"

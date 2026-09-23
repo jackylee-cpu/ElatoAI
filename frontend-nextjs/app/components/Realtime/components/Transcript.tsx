@@ -5,7 +5,7 @@ import { TranscriptItem, VoiceTurnStatus } from "@/app/components/Realtime/types
 import { MicMode } from "@/app/components/Realtime/lib/micMode";
 import Image from "next/image";
 import { useTranscript } from "@/app/components/Realtime/contexts/TranscriptContext";
-import { cn, getPersonalityImageSrc } from "@/lib/utils";
+import { cn, getPersonalityAvatarSrc } from "@/lib/utils";
 import { dbInsertTranscriptItem } from "@/db/conversations";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { EmojiComponent } from "../../Playground/EmojiImage";
@@ -164,9 +164,9 @@ function Transcript({
 
       <div className="relative z-10 flex items-center gap-3 bg-white/90 px-4 py-3 backdrop-blur-sm">
         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-gray-100">
-          {personality.creator_id === null ? (
+          {getPersonalityAvatarSrc(personality) ? (
             <Image
-              src={getPersonalityImageSrc(personality.key)}
+              src={getPersonalityAvatarSrc(personality)!}
               alt={personality.title}
               width={48}
               height={48}

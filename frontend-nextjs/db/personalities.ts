@@ -1,4 +1,45 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { v4 as uuidv4 } from "uuid";
+
+export const CHARACTER_IMAGE_BUCKET = "character-images";
+/** Storage rejects anything larger, and a character tile is 140px wide. */
+export const MAX_CHARACTER_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Puts the picture in the public bucket and hands back its URL, for storing in
+ * personalities.image_url.
+ *
+ * `folder` has to be the uploader's own user id: the bucket's RLS policies
+ * allow writes nowhere else. An admin editing someone else's character still
+ * files the image under their own id -- the path is only a path, and the row it
+ * ends up on is a separate decision.
+ */
+export const uploadCharacterImage = async (
+    supabase: SupabaseClient,
+    folder: string,
+    file: File,
+): Promise<string> => {
+    const extension = file.name.split(".").pop()?.toLowerCase() || "png";
+    const path = `${folder}/${uuidv4()}.${extension}`;
+
+    const { error } = await supabase.storage
+        .from(CHARACTER_IMAGE_BUCKET)
+        .upload(path, file, {
+            contentType: file.type || undefined,
+            upsert: false,
+        });
+
+    if (error) {
+        console.error("Error uploading character image:", error);
+        throw error;
+    }
+
+    const { data } = supabase.storage
+        .from(CHARACTER_IMAGE_BUCKET)
+        .getPublicUrl(path);
+
+    return data.publicUrl;
+};
 
 export const createPersonality = async (
     supabase: SupabaseClient,

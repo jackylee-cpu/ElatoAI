@@ -52,7 +52,9 @@ const [isSubmitting, setIsSubmitting] = useState(false);
         voice_prompt: "",
         is_doctor: false,
         is_child_voice: false,
-        is_story: false,
+        // This modal has no category picker, and a character with all three
+        // flags false is listed under no playground tab at all.
+        is_story: true,
         key: form.name.toLowerCase().replace(/ /g, '_') + "_" + uuidv4(),
         creator_id: selectedUser.user_id,
         short_description: "",

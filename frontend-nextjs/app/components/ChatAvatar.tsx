@@ -1,7 +1,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
     getAssistantAvatar,
-    getPersonalityImageSrc,
+    getPersonalityAvatarSrc,
     getUserAvatar,
 } from "@/lib/utils";
 
@@ -17,7 +17,9 @@ const ChatAvatar: React.FC<ChatAvatarProps> = ({
     const imageSrc: string =
         role === "input"
             ? getUserAvatar(user.avatar_url)
-            : `/personality/${user.personality?.key}.jpeg`;
+            : (user.personality
+                  ? getPersonalityAvatarSrc(user.personality)
+                  : null) ?? "";
 
     return (
         <Avatar className="h-10 w-10">

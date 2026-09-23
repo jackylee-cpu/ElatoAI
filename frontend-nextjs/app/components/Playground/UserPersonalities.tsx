@@ -19,10 +19,13 @@ const UserPersonalities: React.FC<UserPersonalitiesProps> = ({
     selectedFilters,
     myPersonalities,
 }) => {
-    const hasVisibleCharacters = [...myPersonalities, ...allPersonalities].some(
-        (personality) =>
+    // My Characters ignore the tabs, so having any of them is enough for the
+    // screen to have something on it.
+    const hasVisibleCharacters =
+        myPersonalities.length > 0 ||
+        allPersonalities.some((personality) =>
             selectedFilters.every((filter) => personality[filter] === true)
-    );
+        );
 
     if (!hasVisibleCharacters) {
         return (
@@ -43,6 +46,7 @@ const UserPersonalities: React.FC<UserPersonalitiesProps> = ({
                     onPersonalityPicked={onPersonalityPicked}
                     title={"My Characters"}
                     disableButtons={disableButtons}
+                    ignoreFilters
                 />
             )}
             <CharacterSection

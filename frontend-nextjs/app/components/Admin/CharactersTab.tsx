@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/use-toast";
 import { Eye, EyeOff, Pencil, Plus } from "lucide-react";
+import Image from "next/image";
+import { getPersonalityAvatarSrc } from "@/lib/utils";
 import CharacterEditSheet from "./CharacterEditSheet";
 import { setPersonalityHiddenAction } from "@/app/home/admin/actions";
 
@@ -118,6 +120,17 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
                                 >
                                     <TableCell className="font-medium">
                                         <div className="flex flex-row items-center gap-2">
+                                            <div className="relative h-7 w-7 shrink-0 overflow-hidden rounded-full border bg-muted">
+                                                {getPersonalityAvatarSrc(entry) && (
+                                                    <Image
+                                                        src={getPersonalityAvatarSrc(entry)!}
+                                                        alt=""
+                                                        fill
+                                                        unoptimized
+                                                        className="object-cover object-top"
+                                                    />
+                                                )}
+                                            </div>
                                             {entry.title || "—"}
                                             {entry.is_hidden && (
                                                 <Badge

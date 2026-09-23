@@ -7,8 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, ArrowRight, Check, Volume2, Plus } from "lucide-react";
-import { createPersonality } from "@/db/personalities";
+import { ArrowLeft, ArrowRight, Check, Volume2, Plus, ImagePlus, X } from "lucide-react";
+import {
+  createPersonality,
+  uploadCharacterImage,
+  MAX_CHARACTER_IMAGE_BYTES,
+} from "@/db/personalities";
 import { v4 as uuidv4 } from 'uuid';
 import { toast } from "@/components/ui/use-toast";
 import { useRouter } from "next/navigation";
@@ -25,8 +29,18 @@ interface SettingsDashboardProps {
   allLanguages: ILanguage[];
 }
 
+const categoryOptions: { value: PersonalityFilter; label: string; description: string }[] = [
+  { value: "is_story", label: "Story", description: "Storytelling characters" },
+  { value: "is_child_voice", label: "Children", description: "Voices for kids" },
+  { value: "is_doctor", label: "Caregiver", description: "Care and companionship" },
+];
+
 const formSchema = z.object({
   provider: z.enum(["openai", "gemini", "grok", "openrouter", "boson"]),
+  // Which playground tab the character lives under. The picker shows one tab at
+  // a time and requires the flag to be true, so a character without a category
+  // would be listed nowhere.
+  category: z.enum(["is_story", "is_child_voice", "is_doctor"]),
   title: z.string().min(1, "Title is required").max(50, "Maximum 50 characters"),
   description: z.string().max(200, "Maximum 200 characters"),
   prompt: z.string().max(1000, "Maximum 1000 characters"),
@@ -45,6 +59,7 @@ type FormErrorKey = keyof FormData | "features";
 
 const personalityStepSchema = formSchema.pick({
   provider: true,
+  category: true,
   title: true,
   description: true,
   prompt: true,
@@ -73,8 +88,12 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   const [currentStep, setCurrentStep] = useState<'personality' | 'voice'>('personality');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+
   const [formData, setFormData] = useState({
     provider: 'openai' as ModelProvider,
+    category: 'is_story' as PersonalityFilter,
     title: '',
     description: '',
     prompt: '',
@@ -162,6 +181,49 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   };
 
 
+  const handleImagePicked = (file: File | null) => {
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Not an image",
+        description: "Pick a PNG, JPEG or WebP file.",
+        variant: "destructive",
+        duration: 3000,
+      });
+      return;
+    }
+    if (file.size > MAX_CHARACTER_IMAGE_BYTES) {
+      toast({
+        title: "Image too large",
+        description: "Please pick an image under 5MB.",
+        variant: "destructive",
+        duration: 3000,
+      });
+      return;
+    }
+    // Revoke the previous preview so replacing the picture repeatedly does not
+    // leak object URLs.
+    setImagePreview((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous);
+      }
+      return URL.createObjectURL(file);
+    });
+    setImageFile(file);
+  };
+
+  const clearImage = () => {
+    setImagePreview((previous) => {
+      if (previous) {
+        URL.revokeObjectURL(previous);
+      }
+      return null;
+    });
+    setImageFile(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -191,6 +253,17 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     }
 
     try {
+      // Uploaded before the insert on purpose: a failed upload should leave no
+      // character behind, whereas an orphaned image costs nothing.
+      let imageUrl: string | null = null;
+      if (imageFile) {
+        imageUrl = await uploadCharacterImage(
+          supabase,
+          selectedUser.user_id,
+          imageFile,
+        );
+      }
+
       const personality = await createPersonality(supabase, selectedUser.user_id, {
         provider: formData.provider as ModelProvider,
         title: formData.title,
@@ -198,9 +271,10 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
         character_prompt: formData.prompt,
         oai_voice: formData.voice,
         voice_prompt: formData.voiceCharacteristics.features + "\nThe voice should be " + formData.voiceCharacteristics.emotion,
-        is_doctor: false,
-        is_child_voice: false,
-        is_story: false,
+        image_url: imageUrl,
+        is_doctor: formData.category === "is_doctor",
+        is_child_voice: formData.category === "is_child_voice",
+        is_story: formData.category === "is_story",
         key: formData.title.toLowerCase().replace(/ /g, '_') + "_" + uuidv4(),
         creator_id: selectedUser.user_id,
         short_description: formData.description,
@@ -457,6 +531,87 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 </div>
               </div>
 
+            </div>
+
+            {/* Character image */}
+            <div className="space-y-2">
+              <Label htmlFor="characterImage">Character image</Label>
+              <p className="text-sm text-gray-500">
+                Optional. Without one your character shows up as an emoji.
+              </p>
+              <div className="flex flex-row items-center gap-4">
+                <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-full border border-gray-200 bg-gray-50">
+                  {imagePreview ? (
+                    <Image
+                      src={imagePreview}
+                      alt="Character preview"
+                      fill
+                      unoptimized
+                      className="object-cover object-top"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-gray-400">
+                      <ImagePlus className="h-7 w-7" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label
+                    htmlFor="characterImage"
+                    className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium shadow-sm hover:bg-gray-50"
+                  >
+                    <ImagePlus className="h-4 w-4" />
+                    {imageFile ? "Change image" : "Upload image"}
+                  </label>
+                  <input
+                    id="characterImage"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleImagePicked(e.target.files?.[0] ?? null);
+                      // Let the same file be picked again after clearing it.
+                      e.target.value = "";
+                    }}
+                  />
+                  {imageFile && (
+                    <button
+                      type="button"
+                      onClick={clearImage}
+                      className="inline-flex w-fit items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                    >
+                      <X className="h-3 w-3" /> Remove
+                    </button>
+                  )}
+                  <span className="text-xs text-gray-400">PNG, JPEG or WebP, up to 5MB</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Category */}
+            <div className="space-y-2">
+              <Label>Category</Label>
+              <p className="text-sm text-gray-500">
+                Which playground tab your character is listed under.
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {categoryOptions.map((category) => (
+                  <button
+                    key={category.value}
+                    type="button"
+                    onClick={() =>
+                      setFormData((prev) => ({ ...prev, category: category.value }))
+                    }
+                    className={`rounded-lg border p-3 text-center transition-all ${formData.category === category.value
+                      ? "border-2 border-blue-500 bg-blue-50 shadow-sm"
+                      : "border-gray-200 hover:border-gray-300"
+                      }`}
+                  >
+                    <span className="block text-sm font-medium">{category.label}</span>
+                    <span className="block text-xs text-gray-500">{category.description}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="space-y-2">
