@@ -10,12 +10,15 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const remotePatterns = [];
 if (supabaseUrl) {
     try {
-        const { protocol, hostname, port } = new URL(supabaseUrl);
+        // Keep the URL's own path: production serves Supabase under a prefix
+        // (https://<host>/supabase-api), and a pattern without it rejects every
+        // uploaded picture with a 400 while working fine locally.
+        const { protocol, hostname, port, pathname } = new URL(supabaseUrl);
         remotePatterns.push({
             protocol: protocol.replace(":", ""),
             hostname,
             port: port || "",
-            pathname: "/storage/v1/object/public/**",
+            pathname: `${pathname.replace(/\/+$/, "")}/storage/v1/object/public/**`,
         });
     } catch {
         console.warn("NEXT_PUBLIC_SUPABASE_URL is not a valid URL, remote images disabled");
