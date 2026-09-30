@@ -3,8 +3,21 @@
 #include "DecodeStats.h"
 #include "Chime.h"
 #include "PitchShift.h"
+#include "Codec.h"
+#include "IoExpander.h"
+#include "LEDHandler.h"
+#if BOARD_MIC_DOWNSAMPLE_3_2
+#include "Downsample.h"
+#endif
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+
+// libopus' pseudo-stack (celt/stack_alloc.h, NONTHREADSAFE_PSEUDOSTACK). Seeded
+// by decodeTask on boards without PSRAM; see kOpusScratchBytes.
+extern "C" {
+extern char *global_stack;
+extern char *scratch_ptr;
+}
 #include <soc/soc_memory_types.h>
 #include <freertos/message_buffer.h>
 
@@ -41,9 +54,17 @@ void noteActivity() { lastActivityAt = millis(); }
 // do not just tell it the turn is over.
 static unsigned long pttTailUntil = 0;
 
-// True while the button is down or the tail is still running -- i.e. while the
-// device, not the server, owns the mic.
-static bool pttOwnsMic() { return pttHeld || pttTailUntil != 0; }
+// Set when a press ran past PTT_MAX_CAPTURE_MS. The button is still physically
+// down, but the device has already closed the turn, so every "the button is
+// held" rule below has to stop applying to it.
+static bool pttCapped = false;
+
+// True while the button is down and the press still owns the turn.
+static bool pttCapturing() { return pttHeld && !pttCapped; }
+
+// True while the press or the tail is still running -- i.e. while the device,
+// not the server, owns the mic.
+static bool pttOwnsMic() { return pttCapturing() || pttTailUntil != 0; }
 
 // The server opens every websocket session with a greeting, which is what we
 // want after a boot or a deliberate reset -- but an idle link that drops and
@@ -90,12 +111,21 @@ void applyVolume(int volumePercent) {
 // control authoritative: the server sends a volume in every auth frame, and a
 // character switch forces a reconnect, so without this a button press would be
 // undone seconds later.
-void nudgeVolume(int delta) {
+bool nudgeVolume(int delta) {
+    const int before = currentVolume;
     applyVolume(currentVolume + delta);
+    if (currentVolume == before) {
+        // Already at the limit. A held button repeats every 160ms for as long
+        // as it is held, so persisting and logging here would be an NVS open,
+        // write and close plus a serial line six times a second, forever, for
+        // a value that did not change. The caller acknowledges instead.
+        return false;
+    }
     audioPrefs.begin("audio", false);
     audioPrefs.putInt("volume", currentVolume);
     audioPrefs.end();
     Serial.printf("Volume %+d -> %d\n", delta, currentVolume);
+    return true;
 }
 float currentPitchFactor = 1.0f;
 const int CHANNELS = 1;         // Mono
@@ -258,6 +288,31 @@ struct ScratchResult {
 };
 ScratchResult scratchResult = {false, false, 0, 0};
 
+// Without PSRAM (the xmini-c3) libopus' default 60KB scratch would cost a
+// quarter of the chip's RAM, and with it gone the radio and TLS do not fit. It
+// is sized for the *encoder*; this firmware only decodes. Measured on the host
+// 2026-09-23 with this library's own opus_config.h (FIXED_POINT, mono): over
+// 405 encoder configurations -- 16/24/48kHz input, VOIP/AUDIO/LOWDELAY, 6 to
+// 64kbps, 2.5 to 120ms frames, plus PLC and FEC decodes -- the decoder's peak
+// pseudo-stack use was 6880 bytes, at 16kHz output and at 24kHz alike. 16KB is
+// that with more than 2x to spare, and audioMemoryReport() prints the on-device
+// high-water mark so the margin is checked on real traffic, not assumed.
+//
+// libopus never bounds-checks this stack, so an overflow would be silent
+// corruption; the report is the guard.
+#ifndef BOARD_HAS_PSRAM
+constexpr size_t kOpusScratchBytes = 16 * 1024;
+constexpr uint8_t kOpusScratchFill = 0xA5;
+char *opusScratch = nullptr;
+
+size_t opusScratchHighWater() {
+    if (opusScratch == nullptr) return 0;
+    size_t i = kOpusScratchBytes;
+    while (i > 0 && (uint8_t)opusScratch[i - 1] == kOpusScratchFill) i--;
+    return i;
+}
+#endif
+
 void notePlacement(const char *what, void *address, size_t bytes) {
     if (placementCount >= (sizeof(placements) / sizeof(placements[0]))) return;
     placements[placementCount++] = {what, address, bytes,
@@ -311,6 +366,13 @@ void audioMemoryReport() {
         Serial.printf("Audio memory | %-14s %6u B at %p -> %s\n", p.what,
                       (unsigned)p.bytes, p.address, p.internalRam ? "INTERNAL" : "psram");
     }
+#ifndef BOARD_HAS_PSRAM
+    if (opusScratch != nullptr) {
+        Serial.printf("Audio memory | %-14s %6u B at %p -> INTERNAL (high water %u B)\n",
+                      "opus scratch", (unsigned)kOpusScratchBytes, opusScratch,
+                      (unsigned)opusScratchHighWater());
+    } else
+#endif
     if (scratchResult.decided) {
         // Not steered by kPreferInternalRam: it is always PSRAM now, on
         // measured evidence. See decodeTask().
@@ -371,6 +433,18 @@ volatile bool i2sOutputFlushScheduled = false;
 // because the transitions that raise it run well before decodeTask is defined.
 static volatile bool packetQueueFlushScheduled = false;
 
+// Raised by audioStreamTask once the I2S port is up. Only meaningful where the
+// codecs share one port: micTask cannot install a driver of its own there, so
+// it has to wait for the output side to install the one they both use.
+static volatile bool i2sBusReady = false;
+
+// These transitions all call boardSetSpeakerAmp(), which does different things
+// on the two boards. On the Waveshare board it really does gate the NS4150B,
+// through the I2C expander, so the amplifier is off whenever the device is not
+// speaking. On the breadboard kit it drives the spare GPIO below and mutes
+// nothing, which is the behaviour everything after this comment was written
+// for, and the reason silence still has to be written rather than switched off.
+//
 // The MAX98357A's SD pin is not broken out on this kit (see Config.cpp), so
 // I2S_SD_OUT drives a spare GPIO and mutes nothing: the amplifier is live from
 // power-on and plays whatever the I2S DMA holds. Silence has to be written,
@@ -502,7 +576,7 @@ void transitionToSpeaking() {
     decodeStatsBeginTurn();
 
     deviceState = SPEAKING;
-    digitalWrite(I2S_SD_OUT, HIGH);
+    boardSetSpeakerAmp(true);
     noteActivity();
     speakingStartTime = millis();
     Serial.printf("Speaking: heap %u | largest block %u | buffered %d\n",
@@ -542,7 +616,7 @@ void transitionToListening() {
     }
 
     deviceState = LISTENING;
-    digitalWrite(I2S_SD_OUT, LOW);
+    boardSetSpeakerAmp(false);
     noteActivity();
     Serial.println("Mic open -- listening");
 }
@@ -560,7 +634,7 @@ void transitionToIdle() {
         return;
     }
     deviceState = IDLE;
-    digitalWrite(I2S_SD_OUT, LOW);
+    boardSetSpeakerAmp(false);
     i2sInputFlushScheduled = true;
     i2sOutputFlushScheduled = true;
     packetQueueFlushScheduled = true;
@@ -593,9 +667,10 @@ void transitionToIdle() {
 // The handover buffer is deliberately generous and deliberately in PSRAM. Opus
 // packets are compressed, latency-insensitive bytes -- nobody waits on them the
 // way the I2S DMA waits on the PCM ring -- which is exactly what external RAM
-// is for. 64KB holds around twenty seconds of audio at the current frame
-// duration and bitrate, so in practice the backlog the server builds up lives
-// here and networkTask never blocks at all.
+// is for. 64KB holds around twelve seconds of audio at the server's 40kbps
+// (it was twenty at 24kbps), so in practice most of the backlog the server
+// builds up lives here and networkTask rarely blocks. When it does, it waits
+// for the decoder to free one 40ms packet, not for the whole backlog.
 //
 // If it ever does overflow, the send blocks -- and it blocks inside
 // webSocketEvent(), which holds wsMutex, so that is the old stall in miniature.
@@ -655,7 +730,16 @@ void decodeTask(void *parameter) {
     // server sends, and 120ms is the longest packet Opus can express. Kept at
     // 16384 for that, and for headroom if AUDIO_OUTPUT_SAMPLE_RATE is ever
     // raised. Do not shrink this to fit the current frame size.
+    //
+    // Without PSRAM (the xmini-c3) those 16KB come out of the same internal RAM
+    // as the radio and TLS, so it is sized to exactly the 120ms worst case at
+    // the board's own output rate instead -- 3840 bytes at 16kHz -- which
+    // still honours the rule above.
+#ifdef BOARD_HAS_PSRAM
     cfg.max_buffer_size = 16384;
+#else
+    cfg.max_buffer_size = SAMPLE_RATE * 120 / 1000 * CHANNELS * (BITS_PER_SAMPLE / 8);
+#endif
 
     // No wsMutex any more: this task is the only thing that touches the
     // decoder. It used to be shared with networkTask, which is precisely the
@@ -692,6 +776,17 @@ void decodeTask(void *parameter) {
     // The before/after is still measured, because "where did 60KB go" is worth
     // one line in the boot log even when the answer is never going to change.
     const size_t internalBefore = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+
+#ifndef BOARD_HAS_PSRAM
+    // Hand libopus its pseudo-stack before the warmup below would malloc the
+    // 60KB default: ALLOC_STACK only allocates while global_stack is null. See
+    // kOpusScratchBytes.
+    opusScratch = (char *)heap_caps_malloc(kOpusScratchBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (opusScratch != nullptr) {
+        memset(opusScratch, kOpusScratchFill, kOpusScratchBytes);
+        scratch_ptr = global_stack = opusScratch;
+    }
+#endif
 
     const uint8_t opusWarmupPacket[1] = {0x08};
     opusDecoder.write(opusWarmupPacket, sizeof(opusWarmupPacket));
@@ -807,13 +902,33 @@ void decodeTask(void *parameter) {
 void audioStreamTask(void *parameter) {
     Serial.println("Starting I2S stream pipeline...");
     
-    pinMode(I2S_SD_OUT, OUTPUT);
-
     audioBuffer.setReadMaxWait(0);
     
     queue.begin();
 
+    // RXTX_MODE where the two codecs share BCLK and LRCK: one driver, one set
+    // of clocks, data out to the ES8311 on pin_data and data in from the
+    // ES7210 on pin_data_rx. micTask reads from this same object rather than
+    // installing a second driver on the port.
+#if BOARD_SHARED_I2S_BUS
+    auto config = i2s.defaultConfig(RXTX_MODE);
+    config.pin_data_rx = I2S_SD;
+    // One config serves both directions here, and the default of
+    // I2S_CHANNEL_FMT_RIGHT_LEFT is wrong for the read side: with channels=1
+    // audio-tools would satisfy it by reading twice as many bytes into a
+    // variable-length array on micTask's stack and averaging the two ES7210
+    // channels down to one. That is a 1KB stack allocation per 512-byte copy
+    // and a comb filter across two spaced microphones.
+    //
+    // ONLY_LEFT makes isNoChannelConversion() true, so both directions go
+    // straight to i2s_read()/i2s_write() with no conversion at all: the mic
+    // side captures the left slot, which is the ES7210's microphone 1, and the
+    // speaker side puts mono samples in the left slot, which is what the mono
+    // ES8311 reads. It is also what the breadboard kit's mic port already did.
+    config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+#else
     auto config = i2s.defaultConfig(TX_MODE);
+#endif
     config.bits_per_sample = BITS_PER_SAMPLE;
     config.sample_rate = SAMPLE_RATE;
     config.channels = CHANNELS;
@@ -841,12 +956,37 @@ void audioStreamTask(void *parameter) {
     // first, and the output clock is then wrong. The speaker self-test was
     // clean precisely because it ran one port with APLL off. Voice at these
     // rates has no need of the fractional accuracy APLL buys.
+#if BOARD_SHARED_I2S_BUS
+    // The single-APLL argument above does not apply here: there is only one
+    // port, so nothing can retune the PLL out from under it. A codec wants an
+    // exact MCLK -- the ES8311 locks a DLL to it -- and APLL is what makes
+    // 4.096MHz exact rather than the nearest fractional divider to it. The C3
+    // has no APLL, so there it is the fractional divider regardless.
+    config.use_apll = BOARD_I2S_USE_APLL;
+    // Left at the driver default, which is 256 x the sample rate. Both
+    // coefficient tables in Codec.cpp are indexed on that multiple, so
+    // changing it here means changing them too.
+    config.pin_mck = I2S_MCLK_OUT;
+#else
     config.use_apll = false;
+#endif
 
     config.copyFrom(info);  
     bool i2sStarted = i2s.begin(config);  
     Serial.printf("I2S out %s | heap %u | dma %u\n", i2sStarted ? "ok" : "FAILED",
                   ESP.getFreeHeap(), heap_caps_get_free_size(MALLOC_CAP_DMA));
+
+    // Order matters: the ES8311 locks its internal DLL to MCLK, and MCLK does
+    // not exist until the driver above is running. Configuring the codecs
+    // first would leave both chips clocked from nothing.
+    codecBegin(SAMPLE_RATE, BITS_PER_SAMPLE);
+    i2sBusReady = true;
+
+    // Only now is it safe to unmute: the amplifier is downstream of a DAC that
+    // has just been powered up, and enabling it earlier puts that step through
+    // the speaker. On the breadboard kit this falls back to the spare GPIO and
+    // changes nothing.
+    boardSetSpeakerAmp(true);
 
     // Initialize both volume streams once
     auto vcfg = volume.defaultConfig();
@@ -939,6 +1079,22 @@ static volatile uint64_t micLevelSum = 0;
 static volatile uint32_t micLevelCount = 0;
 static volatile int32_t micLevelPeak = 0;
 static volatile uint32_t micVoicedMs = 0;
+// millis() of the last block that counted as speech, or 0 if this press has
+// not caught any yet. micTask writes it, networkTask reads it to tell a press
+// that is still a turn from one the child is only leaning on.
+// The standing offset the last block was centred on. Diagnostic only.
+static volatile int32_t micLevelDc = 0;
+
+// How the current press got onto the socket: frames, bytes, time spent in
+// sendMicFrame() (waiting for wsMutex plus the TLS write), the worst single
+// frame, and the lowest free internal heap seen while sending. A press whose
+// send time approaches its own length is backing up on the device -- memory
+// or wifi -- and its end_of_speech queues behind the backlog. Diagnostic only.
+static volatile uint32_t micSendFrames = 0;
+static volatile uint32_t micSendBytes = 0;
+static volatile uint64_t micSendUs = 0;
+static volatile uint32_t micSendMaxUs = 0;
+static volatile uint32_t micSendMinHeap = UINT32_MAX;
 
 // Mean magnitude of one block, above which that block counts as speech. Mean
 // within the block rather than peak, for the reason the old whole-press mean
@@ -947,26 +1103,87 @@ static volatile uint32_t micVoicedMs = 0;
 // transcribe. The number is the one the old whole-press threshold used, which
 // was tuned against this mic -- a block of real speech sits well above it, a
 // block of a quiet room below.
+//
+// Per board, because it is a level and the boards' mics are nothing alike. On
+// the xmini-c3 (one ES8311, analog PGA 30dB) a silent 1.1s press measured avg
+// 465 at 30dB digital gain -- every block over 150, so silence was committed
+// as speech and the device sat in THINKING waiting for an answer to nothing
+// (2026-09-24). The gain is now 24dB, which halves both: silence ~230, speech
+// ~530 averaged over a press with its pauses, its words well above that.
+#ifndef MIC_VOICE_LEVEL_OVERRIDE
+#if defined(BOARD_XMINI_C3)
+static const int32_t MIC_VOICE_LEVEL = 450;
+#else
 static const int32_t MIC_VOICE_LEVEL = 150;
+#endif
+#else
+static const int32_t MIC_VOICE_LEVEL = MIC_VOICE_LEVEL_OVERRIDE;
+#endif
 
 static void resetMicLevel() {
     micLevelSum = 0;
     micLevelCount = 0;
     micLevelPeak = 0;
     micVoicedMs = 0;
+    micSendFrames = 0;
+    micSendBytes = 0;
+    micSendUs = 0;
+    micSendMaxUs = 0;
+    micSendMinHeap = UINT32_MAX;
+}
+
+// micTask -> wsStream.write() -> sendMicFrame()
+static void sendMicFrame(const uint8_t *data, size_t length) {
+    const int64_t t0 = esp_timer_get_time();
+    xSemaphoreTake(wsMutex, portMAX_DELAY);
+    webSocket.sendBIN(data, length);
+    xSemaphoreGive(wsMutex);
+    const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+    micSendFrames++;
+    micSendBytes += length;
+    micSendUs += us;
+    if (us > micSendMaxUs) micSendMaxUs = us;
+    const uint32_t heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (heap < micSendMinHeap) micSendMinHeap = heap;
+}
+
+// networkTask, at the end of a press.
+static void logMicUplink(unsigned long held) {
+    const uint32_t frames = micSendFrames;
+    Serial.printf("PTT uplink | %u frames, %u B (%ums of 16kHz audio) in %lums held | "
+                  "send total %ums, max %ums | min free heap %u\n",
+                  (unsigned)frames, (unsigned)micSendBytes,
+                  (unsigned)(micSendBytes / 32), held,
+                  (unsigned)(micSendUs / 1000), (unsigned)(micSendMaxUs / 1000),
+                  frames ? (unsigned)micSendMinHeap : 0u);
 }
 
 static void accumulateMicLevel(const uint8_t *buffer, size_t size) {
     const int16_t *samples = (const int16_t *)buffer;
     size_t count = size / sizeof(int16_t);
     if (count == 0) return;
+    // Magnitude has to be measured around this block's own mean, not around
+    // zero. This mic sits on a standing offset of a few hundred LSB, and
+    // |sample| against zero measures that offset and nothing else: a silent
+    // room and a spoken word came back with the same average, so every block
+    // counted as speech and every level threshold downstream was dead. The
+    // mean over one block -- 16ms at MIC_SAMPLE_RATE -- also takes out slow
+    // rumble, and leaves everything in the speech band alone.
+    int64_t dc = 0;
+    for (size_t i = 0; i < count; i++) dc += samples[i];
+    const int32_t mean = (int32_t)(dc / (int64_t)count);
     uint64_t sum = 0;
     int32_t peak = 0;
     for (size_t i = 0; i < count; i++) {
-        int32_t magnitude = samples[i] < 0 ? -(int32_t)samples[i] : (int32_t)samples[i];
+        int32_t centred = (int32_t)samples[i] - mean;
+        int32_t magnitude = centred < 0 ? -centred : centred;
         sum += magnitude;
         if (magnitude > peak) peak = magnitude;
     }
+    // Kept for the release log: it is what told us the offset was there, and
+    // it is the first thing to look at if these thresholds ever go strange on
+    // a different board or a different mic.
+    micLevelDc = mean;
     micLevelSum += sum;
     micLevelCount += count;
     if (peak > micLevelPeak) micLevelPeak = peak;
@@ -985,6 +1202,20 @@ static uint32_t micAverageLevel() {
     uint32_t count = micLevelCount;
     return count == 0 ? 0 : (uint32_t)(micLevelSum / count);
 }
+
+// 64 bytes meant a websocket frame every 2ms: 500 sends per second, each one
+// taking wsMutex and driving a separate TLS write on the task that also
+// decodes audio. 512 costs 16ms of extra latency and an eighth of the churn.
+const int MIC_COPY_SIZE = 512;
+
+#if BOARD_MIC_DOWNSAMPLE_3_2
+// micTask only: written in wsStream.write(), reset where micTask flushes the
+// mic, so it needs no lock.
+static Downsample3to2 micDownsampler;
+// StreamCopy's whole buffer (1024 bytes) in one piece, so a normal write is
+// one websocket frame; anything longer is simply done in more than one.
+static constexpr size_t kMicChunkSamples = 512;
+#endif
 
 class WebsocketStream : public Print {
 public:
@@ -1008,10 +1239,32 @@ public:
 
         accumulateMicLevel(buffer, size);
 
-        xSemaphoreTake(wsMutex, portMAX_DELAY);
-        webSocket.sendBIN(buffer, size);
-        xSemaphoreGive(wsMutex);
+#if BOARD_MIC_DOWNSAMPLE_3_2
+        // The capture rate is the speaker's; the server's STT wants 16kHz.
+        //
+        // Any size has to be taken. copyBytes(MIC_COPY_SIZE) does not cap the
+        // write at MIC_COPY_SIZE: with check_available on it reads whatever is
+        // available up to StreamCopy's own 1024-byte buffer. A first version
+        // refused anything over 512 bytes, StreamCopy retried and gave up,
+        // and not one sample of a press reached the server (2026-09-30). It
+        // does round to whole samples, so size is even.
+        static int16_t downsampled[kMicChunkSamples * 2 / 3 + 2];
+        const int16_t *in = (const int16_t *)buffer;
+        size_t remaining = size / sizeof(int16_t);
+        while (remaining > 0) {
+            const size_t n = remaining < kMicChunkSamples ? remaining : kMicChunkSamples;
+            const size_t outSamples = micDownsampler.process(in, n, downsampled);
+            if (outSamples > 0) {
+                sendMicFrame((const uint8_t *)downsampled, outSamples * sizeof(int16_t));
+            }
+            in += n;
+            remaining -= n;
+        }
         return size;
+#else
+        sendMicFrame(buffer, size);
+        return size;
+#endif
     }
 };
 
@@ -1019,12 +1272,21 @@ WebsocketStream wsStream; //guard with wsMutex
 I2SStream i2sInput; //access from micTask only
 StreamCopy micToWsCopier(wsStream, i2sInput);
 volatile bool i2sInputFlushScheduled = false;
-// 64 bytes meant a websocket frame every 2ms: 500 sends per second, each one
-// taking wsMutex and driving a separate TLS write on the task that also
-// decodes audio. 512 costs 16ms of extra latency and an eighth of the churn.
-const int MIC_COPY_SIZE = 512;
 
 void micTask(void *parameter) {
+#if BOARD_SHARED_I2S_BUS
+    // Nothing to configure: the ES7210 is on the port audioStreamTask installs,
+    // and a second i2s_driver_install() on it would simply fail. Wait for that
+    // port, then read from the same object. i2s_read() and i2s_write() take
+    // separate DMA channels and the driver locks each independently, so the two
+    // tasks sharing this object do not need a mutex between them.
+    while (!i2sBusReady) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    micToWsCopier.begin(wsStream, i2s);
+    Serial.printf("Mic sharing I2S port %d with the speaker at %luHz\n",
+                  (int)I2S_PORT_IN, (unsigned long)MIC_SAMPLE_RATE);
+#else
     // Configure and start I2S input stream.
     auto i2sConfig = i2sInput.defaultConfig(RX_MODE);
     i2sConfig.bits_per_sample = BITS_PER_SAMPLE;
@@ -1040,13 +1302,21 @@ void micTask(void *parameter) {
     // Same single-APLL problem seen from the other side: see audioStreamTask.
     i2sConfig.use_apll = false;
     i2sInput.begin(i2sConfig);
+#endif
 
     micToWsCopier.setDelayOnNoData(0);
 
     while (1) {
         if (i2sInputFlushScheduled) {
             i2sInputFlushScheduled = false;
+#if BOARD_MIC_DOWNSAMPLE_3_2
+            micDownsampler.reset();  // do not start a press on the last one's tail
+#endif
+#if BOARD_SHARED_I2S_BUS
+            i2s.flush();
+#else
             i2sInput.flush();
+#endif
         }
 
         if (deviceState == LISTENING && webSocket.isConnected()) {
@@ -1176,7 +1446,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                     Serial.println("Ignoring AUDIO.COMMITTED while speaking");
                 } else if (!pttOwnsMic()) {
                     deviceState = PROCESSING;
-                } else if (pttTailUntil != 0 && !pttHeld) {
+                } else if (pttTailUntil != 0 && !pttCapturing()) {
                     // The turn is closed, so the tail has done its job. Keeping
                     // the mic open past this point only risks the VAD hearing a
                     // noise and interrupting the answer we are waiting for.
@@ -1328,8 +1598,97 @@ static const bool PTT_SEND_EXPLICIT_COMMIT = true;
 // closes. Give it double the longest setting.
 static const unsigned long PTT_VAD_TAIL_MS = 1600;
 
+// The longest one press may hold the mic, whatever it hears while it does.
+// Nothing else ever ends a press: a child who says nothing and keeps holding
+// streams a silent minute to the recognizer, and no release ever comes. This
+// also covers a button stuck down or a toy pressed against the inside of a
+// bag, which is why it is a plain duration and not a silence rule -- an
+// earlier version cut the turn once the mic had heard nothing for a minute,
+// and measuring that on the device turned out not to work. The level metric
+// it needed was reading the mic's DC offset rather than the room (see
+// accumulateMicLevel), so every block counted as speech, the silence never
+// arrived, and the rule could not fire. A duration depends on none of that:
+// no mic gain, no noise floor, no board. If cutting a turn short on real
+// silence is ever wanted, the server already runs Silero VAD over this same
+// stream and is where it belongs.
+#ifdef PTT_MAX_CAPTURE_MS_OVERRIDE
+static const unsigned long PTT_MAX_CAPTURE_MS = PTT_MAX_CAPTURE_MS_OVERRIDE;
+#else
+static const unsigned long PTT_MAX_CAPTURE_MS = 60000;
+#endif
+
+// Close the turn a press opened, and decide what to do with what it caught.
+// Called when the button comes up, and when a press runs past
+// PTT_MAX_CAPTURE_MS with the button still down -- both want this same
+// decision made on the same numbers.
+static void endPttCapture(unsigned long held) {
+    uint32_t level = micAverageLevel();
+    uint32_t voicedMs = micVoicedMs;
+    int32_t peak = micLevelPeak;
+    if (held < PTT_MIN_CAPTURE_MS) {
+        deviceState = PROCESSING;
+        i2sInputFlushScheduled = true;
+        Serial.printf("PTT: %lums tap, treated as interrupt only\n", held);
+        transitionToIdle();
+    } else if (voicedMs < MIC_MIN_VOICED_MS) {
+        // Nothing worth transcribing, so close the mic without a tail: the
+        // server's VAD never sees a turn and stays quiet. The two agree on
+        // this press -- neither heard enough to call it speech -- which is
+        // what keeps the device out of the state where it discards a turn the
+        // server is busy answering.
+        deviceState = PROCESSING;
+        i2sInputFlushScheduled = true;
+        Serial.printf("PTT: %lums but only %ums voiced (avg %u, peak %d, dc %d), discarded\n",
+                      held, voicedMs, level, (int)peak, (int)micLevelDc);
+        transitionToIdle();
+    } else if (PTT_SEND_EXPLICIT_COMMIT) {
+        deviceState = PROCESSING;
+        i2sInputFlushScheduled = true;
+        userSpokeThisSession = true;
+        webSocket.sendTXT("{\"type\":\"instruction\",\"msg\":\"end_of_speech\"}");
+        Serial.printf("PTT: end_of_speech sent after %lums (%ums voiced, avg %u, peak %d, dc %d)\n",
+                      held, voicedMs, level, (int)peak, (int)micLevelDc);
+        logMicUplink(held);
+    } else {
+        // Stay in LISTENING so the mic keeps feeding the server a little
+        // silence, which is what its VAD needs to close a turn.
+        userSpokeThisSession = true;
+        pttTailUntil = millis() + PTT_VAD_TAIL_MS;
+        Serial.printf("PTT: %lums captured (%ums voiced, avg %u, peak %d), %lums VAD tail\n",
+                      held, voicedMs, level, (int)peak, PTT_VAD_TAIL_MS);
+    }
+}
+
+// How long the device waits in PROCESSING (THINKING on the display) for the
+// server to start answering before it gives up and goes back to IDLE. A turn
+// the server has nothing to say to -- a commit whose audio held no words --
+// gets no RESPONSE.* at all, and nothing else ever leaves the state: the idle
+// sleep used to, two minutes later, and a board with idle sleep off (the
+// xmini-c3) stayed on THINKING for good. Long enough that a slow first answer
+// is not cut off; if one does arrive later, RESPONSE.CREATED still plays it.
+static const unsigned long PROCESSING_TIMEOUT_MS = 15000;
+
+static void checkProcessingTimeout() {
+    static unsigned long processingSince = 0;
+    if (deviceState != PROCESSING) {
+        processingSince = 0;
+        return;
+    }
+    if (processingSince == 0) {
+        processingSince = millis();
+        return;
+    }
+    if (millis() - processingSince >= PROCESSING_TIMEOUT_MS) {
+        processingSince = 0;
+        Serial.printf("No answer after %lus, back to idle\n", PROCESSING_TIMEOUT_MS / 1000);
+        transitionToIdle();
+    }
+}
+
 // networkTask -> processPushToTalk(), with wsMutex already held.
 static void processPushToTalk() {
+    checkProcessingTimeout();
+
     if (conversationResetRequested) {
         conversationResetRequested = false;
         // The server builds a fresh LLMContext per websocket session, so
@@ -1341,15 +1700,20 @@ static void processPushToTalk() {
         i2sInputFlushScheduled = true;
         i2sOutputFlushScheduled = true;
         webSocket.disconnect();
+        // The button may still be down, and this press no longer has a turn
+        // behind it. Restart its clock so the cap below measures the press
+        // rather than firing on the one the reset just threw away.
+        pttPressedAt = millis();
         pttPressRequested = false;
         pttReleaseRequested = false;
+        pttCapped = false;
         return;
     }
 
     // A press during the tail cancels it: the user is talking again.
-    if (pttTailUntil != 0 && (pttHeld || millis() >= pttTailUntil)) {
+    if (pttTailUntil != 0 && (pttCapturing() || millis() >= pttTailUntil)) {
         pttTailUntil = 0;
-        if (!pttHeld && deviceState == LISTENING) {
+        if (!pttCapturing() && deviceState == LISTENING) {
             deviceState = PROCESSING;
             i2sInputFlushScheduled = true;
             Serial.println("Mic closed, waiting for the server to answer");
@@ -1360,6 +1724,7 @@ static void processPushToTalk() {
         pttPressRequested = false;
         pttPressedAt = millis();
         pttTailUntil = 0;
+        pttCapped = false;
         resetMicLevel();
         if (webSocket.isConnected()) {
             // Pressing while the bot holds the floor is a barge-in: drop the
@@ -1372,44 +1737,37 @@ static void processPushToTalk() {
         }
     }
 
+    // A press nobody ended. Close the turn ourselves and latch it: from here
+    // the press behaves as if the button were already up, so the mic shuts,
+    // the upload stops, and an answer to whatever was said can play while the
+    // button is still down.
+    if (pttCapturing() && millis() - pttPressedAt >= PTT_MAX_CAPTURE_MS) {
+        const unsigned long held = millis() - pttPressedAt;
+        pttCapped = true;
+        // The button is still down and nothing is going to play if this press
+        // caught no speech, so the flash is the only way the child is told the
+        // device stopped listening. ledFlash() only stores a deadline, so it
+        // is safe from this task.
+        ledFlash(400);
+        Serial.printf("PTT: %lums held, capping the turn at %lums\n",
+                      held, PTT_MAX_CAPTURE_MS);
+        if (webSocket.isConnected() && deviceState == LISTENING) {
+            endPttCapture(held);
+        } else {
+            transitionToIdle();
+        }
+    }
+
     if (pttReleaseRequested) {
         pttReleaseRequested = false;
-        if (webSocket.isConnected() && deviceState == LISTENING) {
-            unsigned long held = millis() - pttPressedAt;
-            uint32_t level = micAverageLevel();
-            uint32_t voicedMs = micVoicedMs;
-            int32_t peak = micLevelPeak;
-            if (held < PTT_MIN_CAPTURE_MS) {
-                deviceState = PROCESSING;
-                i2sInputFlushScheduled = true;
-                Serial.printf("PTT: %lums tap, treated as interrupt only\n", held);
-                transitionToIdle();
-            } else if (voicedMs < MIC_MIN_VOICED_MS) {
-                // Nothing worth transcribing, so close the mic without a tail:
-                // the server's VAD never sees a turn and stays quiet. The two
-                // agree on this press -- neither heard enough to call it
-                // speech -- which is what keeps the device out of the state
-                // where it discards a turn the server is busy answering.
-                deviceState = PROCESSING;
-                i2sInputFlushScheduled = true;
-                Serial.printf("PTT: %lums but only %ums voiced (avg %u, peak %d), discarded\n",
-                              held, voicedMs, level, (int)peak);
-                transitionToIdle();
-            } else if (PTT_SEND_EXPLICIT_COMMIT) {
-                deviceState = PROCESSING;
-                i2sInputFlushScheduled = true;
-                userSpokeThisSession = true;
-                webSocket.sendTXT("{\"type\":\"instruction\",\"msg\":\"end_of_speech\"}");
-                Serial.printf("PTT: end_of_speech sent after %lums (%ums voiced, avg %u, peak %d)\n",
-                              held, voicedMs, level, (int)peak);
-            } else {
-                // Stay in LISTENING so the mic keeps feeding the server a
-                // little silence, which is what its VAD needs to close a turn.
-                userSpokeThisSession = true;
-                pttTailUntil = millis() + PTT_VAD_TAIL_MS;
-                Serial.printf("PTT: %lums captured (%ums voiced, avg %u, peak %d), %lums VAD tail\n",
-                              held, voicedMs, level, (int)peak, PTT_VAD_TAIL_MS);
-            }
+        if (pttCapped) {
+            // The cap already closed this turn, so the button coming up now
+            // has nothing left to commit -- it only clears the latch for the
+            // next press.
+            pttCapped = false;
+            Serial.println("PTT: button up after the cap closed the turn");
+        } else if (webSocket.isConnected() && deviceState == LISTENING) {
+            endPttCapture(millis() - pttPressedAt);
         }
     }
 }

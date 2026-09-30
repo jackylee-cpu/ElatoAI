@@ -10,6 +10,7 @@
 #include "AsyncJson.h"
 #include "ArduinoJson.h"
 #include <WiFi.h>
+#include <DNSServer.h>
 #include <Preferences.h>
 #include <Config.h>
 
@@ -143,11 +144,67 @@ void wifiTask(void* param) {
   const TickType_t xDelay = 10000 / portTICK_PERIOD_MS;
   WIFIMANAGER * wifimanager = (WIFIMANAGER *) param;
 
+  UBaseType_t worstStack = UINT32_MAX;
   for(;;) {
     yield();
     wifimanager->loop();
     yield();
+    // The device registration HTTPS request and its TLS handshake run on this
+    // task (loop() -> startSessionIfReady() -> isDeviceRegistered()), so this
+    // is the number to trim WIFI_TASK_STACK_BYTES against.
+    UBaseType_t stackLeft = uxTaskGetStackHighWaterMark(NULL);
+    if (stackLeft < worstStack) {
+      worstStack = stackLeft;
+      Serial.printf("[WIFI] Task stack headroom: %u bytes\n", (unsigned)stackLeft);
+    }
     vTaskDelay(xDelay);
+  }
+}
+
+/**
+ * Captive portal DNS. While the SoftAP is up, every name resolves to the AP's
+ * own address, so the connectivity probe a phone sends on joining (Apple's
+ * captive.apple.com/hotspot-detect.html, Android's /generate_204, Windows'
+ * connecttest.txt) lands on our web server instead of the internet. The
+ * catch-all in main.cpp answers it with a redirect to the setup page, and the
+ * phone takes "not the expected answer" as a captive portal and pops the page
+ * up on its own -- no typing 192.168.4.1.
+ *
+ * A task of its own because DNSServer is polled, and wifiTask is not a place
+ * to poll from: it sleeps 10s between passes and can block for seconds inside
+ * tryConnect(). It also owns start() and stop(), following the AP up and
+ * down, so no other task ever touches the DNSServer object.
+ */
+// Bytes, not words: ESP-IDF's FreeRTOS takes the stack depth in bytes. 4096
+// was enough on the S3, but on the C3 the registration request's TLS
+// handshake overflowed it on every connect -- "stack overflow in task
+// WifiManager", a boot loop the moment WiFi came up (2026-09-23).
+#if CONFIG_IDF_TARGET_ESP32C3
+#define WIFI_TASK_STACK_BYTES 8192
+#else
+#define WIFI_TASK_STACK_BYTES 4096
+#endif
+
+static void captiveDnsTask(void *param) {
+  DNSServer dns;
+  bool running = false;
+  for (;;) {
+    const bool apUp = (WiFi.getMode() & WIFI_MODE_AP) != 0;
+    if (apUp && !running) {
+      running = dns.start(53, "*", WiFi.softAPIP());
+      Serial.printf("[WIFI] Captive DNS %s on %s\n", running ? "started" : "FAILED",
+                    WiFi.softAPIP().toString().c_str());
+    } else if (!apUp && running) {
+      dns.stop();
+      running = false;
+      Serial.println("[WIFI] Captive DNS stopped");
+    }
+    if (running) {
+      dns.processNextRequest();
+      vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(500));
+    }
   }
 }
 
@@ -169,7 +226,7 @@ void WIFIMANAGER::startBackgroundTask(String softApName, String softApPass) {
   BaseType_t taskCreated = xTaskCreatePinnedToCore(
     wifiTask,
     "WifiManager",
-    4096,   // Stack size in words
+    WIFI_TASK_STACK_BYTES,
     this,   // Task input parameter
     1,      // Priority of the task
     &WifiCheckTask,  // Task handle.
@@ -178,6 +235,10 @@ void WIFIMANAGER::startBackgroundTask(String softApName, String softApPass) {
 
   if (taskCreated != pdPASS) {
     logMessage("[ERROR] WifiManager: Error creating background task\n");
+  }
+
+  if (xTaskCreatePinnedToCore(captiveDnsTask, "Captive DNS", 3072, NULL, 1, NULL, 0) != pdPASS) {
+    logMessage("[ERROR] WifiManager: Error creating captive DNS task\n");
   }
 }
 

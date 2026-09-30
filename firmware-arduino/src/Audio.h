@@ -43,7 +43,9 @@ extern int currentVolume;
 // Volume control. nudgeVolume() is what the hardware buttons call; it persists
 // the level so it survives a reboot and stops the server overwriting it.
 void applyVolume(int volumePercent);
-void nudgeVolume(int delta);
+// Returns false when the level was already at its limit and nothing changed,
+// so the caller can acknowledge the press rather than appearing dead.
+bool nudgeVolume(int delta);
 bool hasLocalVolumeOverride();
 void loadStoredVolume();
 extern const int CHANNELS;         // Mono
@@ -56,7 +58,19 @@ extern const int BITS_PER_SAMPLE; // 16-bit audio
 // mid-write. A server still sending the old 120ms frames decodes to 5760
 // bytes and is equally fine here. Keep this above 2x the frame size if
 // SAMPLE_RATE is ever raised again.
+#ifdef BOARD_HAS_PSRAM
 constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 20;     // total bytes in the buffer (~416ms @ 24kHz)
+#else
+// Without PSRAM (the xmini-c3) this comes out of the same internal RAM as
+// TLS and lwIP. At 20KB, once that board went to 24kHz, free heap while
+// speaking fell to 11.9KB with a 2KB largest block, long push-to-talk presses
+// dropped the websocket, and a reconnect failed with "SSL - Memory allocation
+// failed" (2026-09-30). The jitter cushion there is the Opus packet queue
+// (8KB, ~1.6s at 40kbps), so this only has to ride out decode scheduling:
+// 12KB is 256ms at 24kHz, still two of the 5760-byte 120ms frames the rule
+// above asks for.
+constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 12;
+#endif
 constexpr size_t AUDIO_CHUNK_SIZE  = 1024;         // ideal read/write chunk size
 // Subclassed in Audio.cpp so its state buffer can be pinned to internal RAM;
 // see the memory notes there.

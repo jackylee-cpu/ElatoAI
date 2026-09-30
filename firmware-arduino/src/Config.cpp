@@ -102,6 +102,146 @@ String authTokenGlobal;
 volatile DeviceState deviceState = IDLE;
 
 // I2S and Audio parameters
+#if defined(BOARD_XMINI_C3)
+
+// One ES8311 on one full-duplex bus, so the Waveshare argument applies: one
+// LRCK, one rate. Unlike the Waveshare board there is no ES7210 to hold it to
+// 16kHz, so it runs at 24kHz, as xiaozhi runs it: the server's stream then
+// plays at the rate it was synthesised at, rather than losing everything above
+// 8kHz. Picked by ear against 16kHz on the same clip (2026-09-30).
+//
+// It costs no CPU. With the server's 40kbps CELT stream, decoding to 24kHz
+// measured 8284us per 40ms packet on this core against 8256us to 16kHz --
+// 20.7% either way. The microphone has to capture at 24kHz too, and
+// Downsample.h brings it to the 16kHz the server expects
+// (BOARD_MIC_DOWNSAMPLE_3_2), so the server needs no change.
+const uint32_t SAMPLE_RATE = 24000;
+const uint32_t MIC_SAMPLE_RATE = 24000;
+
+// ----------------- Pin Definitions -----------------
+// The C3 has one I2S peripheral.
+const i2s_port_t I2S_PORT_IN = I2S_NUM_0;
+const i2s_port_t I2S_PORT_OUT = I2S_NUM_0;
+
+// No status LED on this board (BOARD_HAS_STATUS_LED is 0, so LEDHandler
+// drives nothing). Kept out of the GPIO range like the Waveshare selectors so
+// a stray digitalWrite() cannot land on a real pin -- in particular not on
+// GPIO2, which the open-source xiaozhi config calls the LED but which is the
+// battery divider here.
+const int BLUE_LED_PIN = 202;
+const int RED_LED_PIN = 200;
+const int GREEN_LED_PIN = 201;
+const int LED_RING_PIN = -1;
+
+// Battery sense divider on ADC1 channel 2, and the charger's status output,
+// high while charging. Both read out of the vendor firmware; see Battery.cpp.
+const int BATTERY_ADC_PIN = 2;
+const int CHARGE_DETECT_PIN = 12;
+
+const int I2S_MCLK_OUT = 10;
+
+const int I2S_SD = 7;    // ES8311 ADC out -> ESP32
+const int I2S_WS = 6;    // shared LRCK
+const int I2S_SCK = 8;   // shared BCLK
+
+const int I2S_WS_OUT = 6;
+const int I2S_BCK_OUT = 8;
+const int I2S_DATA_OUT = 5;  // ESP32 -> ES8311 SDIN
+
+// Speaker amplifier enable, active high, on a real GPIO this time. GPIO11 is
+// the C3's VDD_SPI pad and only works as a GPIO once the VDD_SPI_AS_GPIO efuse
+// is burnt; the xiaozhi firmware this board shipped with burns it on its first
+// boot, so it is already set. boardSetSpeakerAmp() drives it.
+const int I2S_SD_OUT = 11;
+
+// BOOT. Push-to-talk, and the light-sleep wake source (see BoardConfig.h).
+const gpio_num_t BUTTON_PIN = GPIO_NUM_9;
+
+const gpio_num_t VOLUME_UP_PIN = GPIO_NUM_NC;
+const gpio_num_t VOLUME_DOWN_PIN = GPIO_NUM_NC;
+const gpio_num_t TOUCH_PAD_PIN = GPIO_NUM_NC;
+
+// ES8311 at 0x18 and the SSD1306 at 0x3C.
+const int I2C_SDA_PIN = 3;
+const int I2C_SCL_PIN = 4;
+
+#elif defined(BOARD_WAVESHARE_S3_AUDIO)
+
+// The ES7210 and the ES8311 hang off one I2S bus and share its BCLK and LRCK,
+// so the microphone and the speaker cannot run at different rates the way they
+// do on the breadboard kit -- there is one LRCK and it belongs to both.
+//
+// 16kHz is what that one rate has to be. Both codecs derive their clocks from
+// MCLK, the I2S driver emits MCLK at 256 x the sample rate, and 16kHz is the
+// only voice rate for which both coefficient tables have a 256 x fs entry:
+// the ES7210 can only do 24kHz at 512 x fs. See Codec.cpp.
+//
+// Running the whole pipeline at 16kHz rather than 24kHz costs nothing anywhere
+// else. Opus decodes to whatever rate it is asked for, so the 24kHz stream the
+// server sends decodes straight to 16kHz inside libopus with no resampling of
+// ours; the uplink is 16kHz either way, which is what ESP32_INPUT_SAMPLE_RATE
+// already defaults to, so the server needs no change; and two thirds of the
+// bytes move through the ring buffer and the I2S DMA. What it costs is
+// playback bandwidth above 8kHz.
+const uint32_t SAMPLE_RATE = 16000;
+const uint32_t MIC_SAMPLE_RATE = 16000;
+
+// ----------------- Pin Definitions -----------------
+// One port, full duplex: RX from the ES7210, TX to the ES8311.
+const i2s_port_t I2S_PORT_IN = I2S_NUM_0;
+const i2s_port_t I2S_PORT_OUT = I2S_NUM_0;
+
+// Not GPIOs. The status LED on this board is a seven-pixel WS2812 ring on a
+// single data line, so these are channel selectors that LEDHandler's pin shim
+// turns into ring colours. They are deliberately outside the GPIO range: a
+// call that escaped the shim would fail visibly rather than quietly drive a
+// real pin that belongs to the camera bus.
+const int BLUE_LED_PIN = 202;
+const int RED_LED_PIN = 200;
+const int GREEN_LED_PIN = 201;
+const int LED_RING_PIN = 38;
+
+const int BATTERY_ADC_PIN = -1;
+const int CHARGE_DETECT_PIN = -1;
+
+// The shared I2S bus. BCLK and LRCK are common to both codecs; only the data
+// lines are separate, and even those are one pin each rather than a pair.
+const int I2S_MCLK_OUT = 12;
+
+const int I2S_SD = 15;   // ES7210 SDOUT -> ESP32 (mics 1 and 2)
+const int I2S_WS = 14;   // shared LRCK
+const int I2S_SCK = 13;  // shared BCLK
+
+const int I2S_WS_OUT = 14;   // same LRCK as above
+const int I2S_BCK_OUT = 13;  // same BCLK as above
+const int I2S_DATA_OUT = 16; // ESP32 -> ES8311 SDIN
+
+// The NS4150B enable is not on a GPIO at all: it is P10 on the TCA9555
+// expander. -1 keeps anything that still wants a pin from touching one, and
+// boardSetSpeakerAmp() in IoExpander.cpp is what actually switches the
+// amplifier.
+const int I2S_SD_OUT = -1;
+
+// Boot button. GPIO0 is RTC IO, which esp_sleep_enable_ext0_wakeup() requires,
+// and it is the only key on this board that is: the other three are behind the
+// expander and cannot wake the chip.
+const gpio_num_t BUTTON_PIN = GPIO_NUM_0;
+
+// Volume and the touch pad have no GPIO here. KEY1 and KEY2 on the expander
+// stand in for the volume rocker and KEY3 for the touch pad; main.cpp polls
+// them over I2C instead of attaching a Button to a pin.
+const gpio_num_t VOLUME_UP_PIN = GPIO_NUM_NC;
+const gpio_num_t VOLUME_DOWN_PIN = GPIO_NUM_NC;
+const gpio_num_t TOUCH_PAD_PIN = GPIO_NUM_NC;
+
+// One I2C bus for the whole board: ES8311 0x18, ES7210 0x40, TCA9555 0x20,
+// PCF85063 0x51, and an SSD1306 at 0x3C if one is wired to the header. No
+// address clashes, so the display shares the bus rather than needing its own.
+const int I2C_SDA_PIN = 11;
+const int I2C_SCL_PIN = 10;
+
+#else  // BOARD_ELATO_BREADBOARD
+
 // Output pipeline rate. Opus will decode to whatever rate we ask for, but the
 // servers encode at 24kHz, so asking for 48kHz is pure upsampling: no fidelity
 // to gain, and twice the bytes through the ring buffer and the I2S DMA. That
@@ -116,11 +256,19 @@ const i2s_port_t I2S_PORT_OUT = I2S_NUM_0;
 const int BLUE_LED_PIN = 13;
 const int RED_LED_PIN = 9;
 const int GREEN_LED_PIN = 8;
+const int LED_RING_PIN = -1;
+
+const int BATTERY_ADC_PIN = -1;
+const int CHARGE_DETECT_PIN = -1;
 
 // Pins follow the xiaozhi `bread-compact-wifi` wiring, which is what this kit
 // shipped with: a raw I2S mic and a MAX98357A on separate pin sets (simplex
 // I2S), so the two I2S ports above stay independent and can run at different
 // rates (mic 16kHz, speaker 48kHz).
+//
+// Neither part needs a master clock, so nothing drives one.
+const int I2S_MCLK_OUT = -1;
+
 const int I2S_SD = 6;   // mic DIN
 const int I2S_WS = 4;   // mic WS
 const int I2S_SCK = 5;  // mic SCK
@@ -148,6 +296,8 @@ const gpio_num_t TOUCH_PAD_PIN = GPIO_NUM_47;
 // Status display. Nothing else on this board claims these two.
 const int I2C_SDA_PIN = 41;
 const int I2C_SCL_PIN = 42;
+
+#endif
 
 
 // ----------------- SSL Certificates -----------------

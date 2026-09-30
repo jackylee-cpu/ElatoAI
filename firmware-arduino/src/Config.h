@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include "BoardConfig.h"
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
 #include <Preferences.h>
@@ -110,6 +111,20 @@ extern const int I2S_SD;
 extern const int I2S_WS;
 extern const int I2S_SCK;
 extern const i2s_port_t I2S_PORT_IN;
+
+// Master clock. Codecs derive their internal clocks from it and will not
+// produce a sample without one; -1 on boards whose mic and amplifier need no
+// MCLK at all.
+extern const int I2S_MCLK_OUT;
+
+// WS2812 ring data pin, or -1 where the status LED is a discrete RGB part
+// driven through RED/GREEN/BLUE_LED_PIN.
+extern const int LED_RING_PIN;
+
+// Battery sense ADC input and the charger's charging output, or -1 where the
+// board has neither (BOARD_HAS_BATTERY is 0).
+extern const int BATTERY_ADC_PIN;
+extern const int CHARGE_DETECT_PIN;
 
 // I2S Speaker pins
 extern const int I2S_WS_OUT;

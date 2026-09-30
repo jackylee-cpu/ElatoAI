@@ -1,4 +1,63 @@
 #include "LEDHandler.h"
+#include "LedRing.h"
+
+// This file was written for a discrete RGB LED on three GPIOs, which is what
+// the breadboard kit has. The Waveshare board has a seven-pixel WS2812 ring on
+// one data line instead, so the three primitives below redirect every call
+// into a single ring colour and the logic above them stays as it was.
+//
+// The two conventions this file already mixes are both preserved rather than
+// unified: ledPinWrite() is active-low, because the discrete LED is wired
+// common-anode and setStaticColor() drives LOW to light a channel, while
+// setLEDColor()'s ledPinAnalog() passes a straight intensity. Unifying them
+// would change what the discrete LED does, which is not what this change is
+// for.
+#if BOARD_HAS_WS2812_RING
+
+static uint8_t ringChannels[3] = {0, 0, 0};
+
+static inline int ringIndexFor(int pin) {
+    if (pin == RED_LED_PIN) return 0;
+    if (pin == GREEN_LED_PIN) return 1;
+    if (pin == BLUE_LED_PIN) return 2;
+    return -1;
+}
+
+static inline void ringPush() {
+    ledRingSet(ringChannels[0], ringChannels[1], ringChannels[2]);
+}
+
+static inline void ledPinMode(int) {}
+
+static inline void ledPinWrite(int pin, int level) {
+    const int index = ringIndexFor(pin);
+    if (index < 0) return;
+    ringChannels[index] = (level == LOW) ? 255 : 0;
+    ringPush();
+}
+
+static inline void ledPinAnalog(int pin, int value) {
+    const int index = ringIndexFor(pin);
+    if (index < 0) return;
+    ringChannels[index] = (uint8_t)value;
+    ringPush();
+}
+
+#elif !BOARD_HAS_STATUS_LED
+
+// Nothing to drive. The state logic below still runs; it just has no output.
+static inline void ledPinMode(int) {}
+static inline void ledPinWrite(int, int) {}
+static inline void ledPinAnalog(int, int) {}
+
+#else
+
+static inline void ledPinMode(int pin) { pinMode(pin, OUTPUT); }
+static inline void ledPinWrite(int pin, int level) { digitalWrite(pin, level); }
+static inline void ledPinAnalog(int pin, int value) { analogWrite(pin, value); }
+
+#endif
+
 
 int brightness = 0;
 int fadeAmount = 5;
@@ -7,9 +66,9 @@ static bool ledState = false;
 
 void setLEDColor(uint8_t r, uint8_t g, uint8_t b)
 {
-    analogWrite(RED_LED_PIN, r);
-    analogWrite(GREEN_LED_PIN, g);
-    analogWrite(BLUE_LED_PIN, b);
+    ledPinAnalog(RED_LED_PIN, r);
+    ledPinAnalog(GREEN_LED_PIN, g);
+    ledPinAnalog(BLUE_LED_PIN, b);
 }
 
 enum class StaticColor : uint8_t
@@ -57,29 +116,29 @@ void setStaticColor(StaticColor color)
         break;
     }
 
-    digitalWrite(RED_LED_PIN, colorMap.red);
-    digitalWrite(GREEN_LED_PIN, colorMap.green);
-    digitalWrite(BLUE_LED_PIN, colorMap.blue);
+    ledPinWrite(RED_LED_PIN, colorMap.red);
+    ledPinWrite(GREEN_LED_PIN, colorMap.green);
+    ledPinWrite(BLUE_LED_PIN, colorMap.blue);
 }
 
 void loopCyanPinkYellow()
 {
     // Cyan (Green + Blue)
-    digitalWrite(RED_LED_PIN, LOW);
-    digitalWrite(GREEN_LED_PIN, HIGH);
-    digitalWrite(BLUE_LED_PIN, HIGH);
+    ledPinWrite(RED_LED_PIN, LOW);
+    ledPinWrite(GREEN_LED_PIN, HIGH);
+    ledPinWrite(BLUE_LED_PIN, HIGH);
     delay(500);
 
     // Pink (Red + Blue)
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, LOW);
-    digitalWrite(BLUE_LED_PIN, HIGH);
+    ledPinWrite(RED_LED_PIN, HIGH);
+    ledPinWrite(GREEN_LED_PIN, LOW);
+    ledPinWrite(BLUE_LED_PIN, HIGH);
     delay(500);
 
     // Yellow (Red + Green)
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, HIGH);
-    digitalWrite(BLUE_LED_PIN, LOW);
+    ledPinWrite(RED_LED_PIN, HIGH);
+    ledPinWrite(GREEN_LED_PIN, HIGH);
+    ledPinWrite(BLUE_LED_PIN, LOW);
     delay(500);
 }
 
@@ -126,53 +185,56 @@ void pulseBlue()
 void blinkWhite()
 {
     int out = ledState ? HIGH : LOW;
-    digitalWrite(RED_LED_PIN, out);
-    digitalWrite(GREEN_LED_PIN, out);
-    digitalWrite(BLUE_LED_PIN, out);
+    ledPinWrite(RED_LED_PIN, out);
+    ledPinWrite(GREEN_LED_PIN, out);
+    ledPinWrite(BLUE_LED_PIN, out);
 }
 
 void blinkGreen()
 {
     int out = ledState ? HIGH : LOW;
-    digitalWrite(BLUE_LED_PIN, LOW);
-    digitalWrite(RED_LED_PIN, LOW);   
-    digitalWrite(GREEN_LED_PIN, out);    
+    ledPinWrite(BLUE_LED_PIN, LOW);
+    ledPinWrite(RED_LED_PIN, LOW);   
+    ledPinWrite(GREEN_LED_PIN, out);    
 }
 
 void blinkYellow()
 {
     int out = ledState ? HIGH : LOW;
-    digitalWrite(BLUE_LED_PIN, LOW);
-    digitalWrite(RED_LED_PIN, out);
-    digitalWrite(GREEN_LED_PIN, out);    
+    ledPinWrite(BLUE_LED_PIN, LOW);
+    ledPinWrite(RED_LED_PIN, out);
+    ledPinWrite(GREEN_LED_PIN, out);    
 }
 
 void turnOffLED()
 {
-    digitalWrite(RED_LED_PIN, LOW);
-    digitalWrite(GREEN_LED_PIN, LOW);
-    digitalWrite(BLUE_LED_PIN, LOW);
+    ledPinWrite(RED_LED_PIN, LOW);
+    ledPinWrite(GREEN_LED_PIN, LOW);
+    ledPinWrite(BLUE_LED_PIN, LOW);
 }
 
 void turnOnLED()
 {
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, HIGH);
-    digitalWrite(BLUE_LED_PIN, HIGH);
+    ledPinWrite(RED_LED_PIN, HIGH);
+    ledPinWrite(GREEN_LED_PIN, HIGH);
+    ledPinWrite(BLUE_LED_PIN, HIGH);
 }
 
 void setupRGBLED()
 {
-    pinMode(RED_LED_PIN, OUTPUT);
-    pinMode(GREEN_LED_PIN, OUTPUT);
-    pinMode(BLUE_LED_PIN, OUTPUT);
+    // No-op where the LED is discrete; brings up the RMT channel on a ring.
+    ledRingBegin();
+
+    ledPinMode(RED_LED_PIN);
+    ledPinMode(GREEN_LED_PIN);
+    ledPinMode(BLUE_LED_PIN);
     turnOffLED(); // Turn off the LED initially
 }
 
 void blinkCyanPulse()
 {
-    analogWrite(GREEN_LED_PIN, brightness);
-    analogWrite(BLUE_LED_PIN, brightness);
+    ledPinAnalog(GREEN_LED_PIN, brightness);
+    ledPinAnalog(BLUE_LED_PIN, brightness);
 
     brightness += fadeAmount;
     if (brightness <= 0 || brightness >= 255)
@@ -185,16 +247,16 @@ void blinkCyanPulse()
 void blinkBlue()
 {
     int out = ledState ? HIGH : LOW;
-    digitalWrite(GREEN_LED_PIN, LOW);
-    digitalWrite(RED_LED_PIN, LOW);   
-    digitalWrite(BLUE_LED_PIN, out); 
+    ledPinWrite(GREEN_LED_PIN, LOW);
+    ledPinWrite(RED_LED_PIN, LOW);   
+    ledPinWrite(BLUE_LED_PIN, out); 
 }
 
 void staticYellow()
 {
-    digitalWrite(BLUE_LED_PIN, LOW);
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, HIGH);
+    ledPinWrite(BLUE_LED_PIN, LOW);
+    ledPinWrite(RED_LED_PIN, HIGH);
+    ledPinWrite(GREEN_LED_PIN, HIGH);
 }
 
 static const uint8_t colorSequence[][3] = {
@@ -249,9 +311,9 @@ void loopCyanPinkYellowPulse(unsigned long currentTime)
     uint8_t b = startColor[2] + (endColor[2] - startColor[2]) * t;
 
     // Write these values to your LED pins
-    analogWrite(RED_LED_PIN, r);
-    analogWrite(GREEN_LED_PIN, g);
-    analogWrite(BLUE_LED_PIN, b);
+    ledPinAnalog(RED_LED_PIN, r);
+    ledPinAnalog(GREEN_LED_PIN, g);
+    ledPinAnalog(BLUE_LED_PIN, b);
 
     // Check if this transition has finished
     if (elapsed >= transitionDuration)
@@ -267,6 +329,10 @@ void loopCyanPinkYellowPulse(unsigned long currentTime)
     }
 }
 
+static volatile unsigned long flashUntilMs = 0;
+
+void ledFlash(unsigned ms) { flashUntilMs = millis() + ms; }
+
 void ledTask(void *parameter)
 {
     setupRGBLED();
@@ -274,6 +340,20 @@ void ledTask(void *parameter)
     while (1)
     {
         currentTime += 20; // Track time based on vTaskDelay
+
+        // Signed difference so a millis() rollover cannot leave the flash stuck
+        // on, and so the initial 0 reads as long expired rather than far future.
+        if ((long)(flashUntilMs - millis()) > 0)
+        {
+            // Every channel on, which is white on the ring and white on the
+            // discrete LED. LOW is what lights a channel here -- the part is
+            // common-anode, which is also why turnOffLED() below lights it.
+            ledPinWrite(RED_LED_PIN, LOW);
+            ledPinWrite(GREEN_LED_PIN, LOW);
+            ledPinWrite(BLUE_LED_PIN, LOW);
+            vTaskDelay(20 / portTICK_PERIOD_MS);
+            continue;
+        }
 
         // Toggle LED state every 200ms for blinking functions
         if (currentTime - lastToggle >= 200)

@@ -5,6 +5,8 @@
 #include "SoundData.h"
 #include <Arduino.h>
 #include <driver/i2s.h>
+#include "Codec.h"
+#include "IoExpander.h"
 
 namespace {
 
@@ -55,14 +57,21 @@ bool startI2S(int rate) {
     cfg.intr_alloc_flags = 0;
     cfg.dma_buf_count = 6;
     cfg.dma_buf_len = 256;
+#if BOARD_SHARED_I2S_BUS
+    // One port on this board, so there is nothing to fight over, and the
+    // ES8311 needs an exact MCLK. Matches audioStreamTask.
+    cfg.use_apll = BOARD_I2S_USE_APLL;
+    cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+#else
     // The mic port may be running at 16kHz alongside this one, and the chip has
     // a single APLL for the two of them to fight over. See audioStreamTask.
     cfg.use_apll = false;
+#endif
     cfg.tx_desc_auto_clear = true;
     if (i2s_driver_install(I2S_PORT_OUT, &cfg, 0, NULL) != ESP_OK) return false;
 
     i2s_pin_config_t pins = {};
-    pins.mck_io_num = I2S_PIN_NO_CHANGE;
+    pins.mck_io_num = (I2S_MCLK_OUT >= 0) ? I2S_MCLK_OUT : I2S_PIN_NO_CHANGE;
     pins.bck_io_num = I2S_BCK_OUT;
     pins.ws_io_num = I2S_WS_OUT;
     pins.data_out_num = I2S_DATA_OUT;
@@ -83,8 +92,12 @@ void playSample(const int16_t *pcm, unsigned frames, int rate) {
         return;
     }
 
-    pinMode(I2S_SD_OUT, OUTPUT);
-    digitalWrite(I2S_SD_OUT, HIGH);
+    // On a codec board there is no sound at all until the DAC has been
+    // configured, and it can only be configured once the MCLK above is
+    // running. On the breadboard kit this is a no-op and the amplifier is the
+    // spare GPIO going high, exactly as before.
+    codecBegin(rate, 16);
+    boardSetSpeakerAmp(true);
 
     // Open on zeros so the amplifier is not handed whatever the pads were last
     // driven to, and give the DMA a moment to be full of silence.
@@ -104,6 +117,10 @@ void playSample(const int16_t *pcm, unsigned frames, int rate) {
     // silence and not the tail of the sound repeated.
     writeSilence(120);
     i2s_zero_dma_buffer(I2S_PORT_OUT);
+    // Mute before the clocks stop, or the amplifier is left enabled across the
+    // gap until audioStreamTask reinstalls the port and hears whatever the
+    // floating DAC output does in between.
+    boardSetSpeakerAmp(false);
     i2s_driver_uninstall(I2S_PORT_OUT);
 }
 

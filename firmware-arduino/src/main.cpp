@@ -1,13 +1,19 @@
 #include "AudioSelfTest.h"
 #include "Button.h"
+#include "Battery.h"
 #include "Chime.h"
+#include "IoExpander.h"
 #include "Display.h"
 #include "FactoryReset.h"
 #include "LEDHandler.h"
 #include "OTA.h"
 #include "WifiManager.h"
+#if !BOARD_SLEEP_VIA_LIGHT_SLEEP
 #include <driver/rtc_io.h>
+#endif
+#ifdef TOUCH_MODE
 #include <driver/touch_sensor.h>
+#endif
 #include <esp_heap_caps.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
@@ -88,7 +94,7 @@ void enterSleep() {
   // The amp has no usable SD pin on this kit (Config.cpp), so drive the spare
   // line and the LEDs low rather than leaving them wherever the last state put
   // them: a pin left driven is current drawn for the whole sleep.
-  digitalWrite(I2S_SD_OUT, LOW);
+  boardSetSpeakerAmp(false);
   digitalWrite(BLUE_LED_PIN, LOW);
   digitalWrite(RED_LED_PIN, LOW);
   digitalWrite(GREEN_LED_PIN, LOW);
@@ -100,6 +106,29 @@ void enterSleep() {
   WiFi.mode(WIFI_OFF);
   esp_wifi_stop();
 
+#if BOARD_SLEEP_VIA_LIGHT_SLEEP
+  // No ext0 on this chip and BUTTON_PIN cannot wake it from deep sleep (see
+  // BoardConfig.h), so park in light sleep until it goes low and then restart.
+  // Everything above has already torn the device down the way deep sleep
+  // expects; the restart gives the same fresh boot a deep-sleep wake would.
+  for (int i = 0; i < 100 && gpio_get_level(BUTTON_PIN) == 0; i++) {
+    delay(50);
+  }
+  Serial.printf("Sleeping (light). Wake on GPIO%d going low. Button reads %d (expect 1)\n",
+                (int)BUTTON_PIN, gpio_get_level(BUTTON_PIN));
+  Serial.flush();
+  delay(50);
+  gpio_wakeup_enable(BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+  esp_light_sleep_start();
+  // Woken by the press itself. Restarting while it is still held would hand
+  // the fresh boot a push-to-talk press nobody meant, so wait for the release.
+  gpio_wakeup_disable(BUTTON_PIN);
+  for (int i = 0; i < 200 && gpio_get_level(BUTTON_PIN) == 0; i++) {
+    delay(10);
+  }
+  ESP.restart();
+#else
   // ext0 moves BUTTON_PIN onto the RTC mux, and the pull-up that pinMode() set
   // in the digital domain does not come with it. Without this the pad floats
   // through deep sleep, reads as the LOW we are waking on, and the device wakes
@@ -131,6 +160,7 @@ void enterSleep() {
 
   esp_deep_sleep_start();
   delay(1000);
+#endif
 }
 
 // Idle long enough and the device sleeps. Only from the two states that mean
@@ -142,12 +172,18 @@ void enterSleep() {
 // of waiting per attempt:
 //
 //   PLATFORMIO_BUILD_FLAGS="-D IDLE_SLEEP_SECONDS=15" pio run -t upload
+//
+// 0 turns idle sleep off entirely: the device, and its display, stay on until
+// the power goes. The xmini-c3 build sets that.
 #ifndef IDLE_SLEEP_SECONDS
 #define IDLE_SLEEP_SECONDS (2 * 60)
 #endif
 static const unsigned long IDLE_SLEEP_MS = IDLE_SLEEP_SECONDS * 1000UL;
 
 static void checkIdleTimeout() {
+  if (IDLE_SLEEP_SECONDS == 0) {
+    return;
+  }
   if (deviceState != IDLE && deviceState != PROCESSING) {
     return;
   }
@@ -213,13 +249,16 @@ static void onTouchLongPressCb(void *button_handle, void *usr_data) {
 
 static const int VOLUME_STEP = 10;
 
+// The flash is the only feedback at the limit: nothing moves, and on a board
+// whose keys are polled over I2C a press that does nothing is hard to tell
+// from a press that was not read.
 static void onVolumeUpCb(void *button_handle, void *usr_data) {
-  nudgeVolume(VOLUME_STEP);
+  if (!nudgeVolume(VOLUME_STEP)) ledFlash(120);
   noteActivity();
 }
 
 static void onVolumeDownCb(void *button_handle, void *usr_data) {
-  nudgeVolume(-VOLUME_STEP);
+  if (!nudgeVolume(-VOLUME_STEP)) ledFlash(120);
   noteActivity();
 }
 
@@ -227,6 +266,7 @@ static void onVolumeDownCb(void *button_handle, void *usr_data) {
 // needs, but it also enables an internal pulldown that would hold the line
 // active forever. GPIO0 gets away with it because the board pulls it up
 // externally; these two need the pull-up forced on.
+#if BOARD_HAS_GPIO_KEYS
 static Button *attachVolumeButton(gpio_num_t pin, callbackFunction cb) {
   Button *button = new Button(pin, false);
   gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
@@ -235,6 +275,92 @@ static Button *attachVolumeButton(gpio_num_t pin, callbackFunction cb) {
   button->attachLongPressHoldEventCb(cb, NULL);
   return button;
 }
+#endif
+
+#if BOARD_KEYS_VIA_EXPANDER
+// KEY1..KEY3 sit on the TCA9555, not on GPIOs, so there is no Button to attach
+// and no interrupt to attach it to -- the expander's INT line is not wired to
+// the ESP32 on this board. Polling stands in for both. 20ms is far inside the
+// shortest press a person can make, and each pass costs one two-byte I2C read
+// on a bus that is otherwise idle between turns.
+//
+// The three keys map onto what the breadboard kit puts on GPIOs: KEY1 and KEY2
+// are the volume rocker, and KEY3 stands in for the TTP223 pad, tap to reset
+// the conversation and hold to sleep. Push-to-talk stays on GPIO0, which is
+// the only key here that can wake the chip.
+static void expanderKeyTask(void *parameter) {
+  constexpr TickType_t kPollInterval = pdMS_TO_TICKS(20);
+  constexpr int kRepeatAfterTicks = 25;  // 500ms before a held volume key repeats
+  constexpr int kRepeatEveryTicks = 8;   // then every 160ms, so a hold ramps
+  constexpr int kLongPressTicks = 25;    // 500ms makes KEY3 a hold, not a tap
+  // Both volume keys together for two seconds reboots. Nothing else on this
+  // board can: GPIO0 is push-to-talk, so a long hold there is a long sentence,
+  // and KEY3 sleeps at half a second. Two keys that mean "louder" and
+  // "quieter" at once mean nothing on their own and are near impossible to
+  // hit with one finger, which is what makes the combination safe to overload.
+  //
+  // This is a convenience for a board in an enclosure, not a recovery path.
+  // The hardware RESET button is wired to EN and works even when the firmware
+  // has stopped scheduling this task; nothing here can match that.
+  constexpr int kRebootComboTicks = 100;  // 2s
+
+  bool wasDown[3] = {false, false, false};
+  int heldTicks[3] = {0, 0, 0};
+  int comboTicks = 0;
+  bool longPressFired = false;
+
+  while (true) {
+    bool down[3] = {false, false, false};
+    if (ioExpanderReadKeys(down[0], down[1], down[2])) {
+      for (int i = 0; i < 3; i++) {
+        heldTicks[i] = down[i] ? heldTicks[i] + 1 : 0;
+      }
+
+      // Holding both is the reboot gesture, not two volume presses. Whichever
+      // key landed first will already have moved the volume one step, which is
+      // 10% and is about to be irrelevant anyway.
+      const bool comboDown = down[0] && down[1];
+      comboTicks = comboDown ? comboTicks + 1 : 0;
+      if (comboTicks == kRebootComboTicks) {  // == so it fires once, not every tick
+        Serial.println("Both volume keys held -- rebooting");
+        // Mute before the clocks stop, same reason as the sleep path.
+        boardSetSpeakerAmp(false);
+        ledFlash(400);
+        vTaskDelay(pdMS_TO_TICKS(400));  // long enough for the flash to be seen
+        ESP.restart();
+      }
+
+      for (int i = 0; i < 2 && !comboDown; i++) {
+        const bool pressed = down[i] && !wasDown[i];
+        const bool repeating = down[i] && heldTicks[i] > kRepeatAfterTicks &&
+                               ((heldTicks[i] - kRepeatAfterTicks) % kRepeatEveryTicks) == 0;
+        if (pressed || repeating) {
+          if (i == 0) {
+            onVolumeUpCb(NULL, NULL);
+          } else {
+            onVolumeDownCb(NULL, NULL);
+          }
+        }
+      }
+
+      // The hold fires while the key is still down rather than on release, so
+      // it matches attachLongPressStartEventCb on the other board; the tap
+      // only fires on release, and only if the hold did not already claim it.
+      if (down[2] && !wasDown[2]) longPressFired = false;
+      if (down[2] && !longPressFired && heldTicks[2] >= kLongPressTicks) {
+        longPressFired = true;
+        onTouchLongPressCb(NULL, NULL);
+      }
+      if (!down[2] && wasDown[2] && !longPressFired) {
+        onTouchTapCb(NULL, NULL);
+      }
+
+      for (int i = 0; i < 3; i++) wasDown[i] = down[i];
+    }
+    vTaskDelay(kPollInterval);
+  }
+}
+#endif
 
 void getAuthTokenFromNVS() {
   preferences.begin("auth", false);
@@ -254,12 +380,21 @@ void setupWiFi() {
   webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->redirect("/wifi");
   });
+  // While the setup AP is up, anything we do not serve is a phone's
+  // connectivity probe arriving through the captive DNS (see WifiManager.cpp),
+  // and a redirect is what makes the phone open the setup page by itself.
+  // Absolute, because the request's Host is captive.apple.com or similar.
   webServer.onNotFound([](AsyncWebServerRequest *request) {
+    if (WiFi.getMode() & WIFI_MODE_AP) {
+      request->redirect("http://" + WiFi.softAPIP().toString() + "/wifi");
+      return;
+    }
     request->send(404, "text/plain", "Not found");
   });
   webServer.begin();
 }
 
+#ifdef TOUCH_MODE
 void touchTask(void *parameter) {
   touch_pad_init();
   touch_pad_config(TOUCH_PAD_NUM2);
@@ -301,6 +436,7 @@ void touchTask(void *parameter) {
   }
   vTaskDelete(NULL);
 }
+#endif
 
 void setupDeviceMetadata() {
   // factoryResetDevice();
@@ -396,20 +532,55 @@ void setup() {
 
   // SETUP
   setupDeviceMetadata();
+  // A binary semaphore on a single core, not a mutex. networkTask holds this
+  // across the whole of webSocket.loop(), and the TLS handshake inside it
+  // briefly takes some system lock that a priority-23 task then waits on.
+  // FreeRTOS only hands an inherited priority back once the holder has
+  // released *every* mutex it holds, so networkTask sat at 23 for the rest of
+  // the 1.2s handshake and the speaker got nothing (measured 2026-09-30:
+  // priority 23 from 4ms into the connect until the loop returned). A
+  // semaphore is not counted, so the boost ends with the lock that caused it.
+  // Nothing needs inheritance from this one here: the only other taker is
+  // micTask at 4, and there is no task between it and networkTask at 3.
+#if CONFIG_FREERTOS_UNICORE
+  wsMutex = xSemaphoreCreateBinary();
+  xSemaphoreGive(wsMutex);
+#else
   wsMutex = xSemaphoreCreateMutex();
+#endif
+
+  // Before every task that follows. On a codec board the amplifier enable and
+  // three of the four keys are on an I2C expander, and the codecs themselves
+  // are configured over the same bus, so nothing can make a sound or read a
+  // key until this has run. displaySetup() calls Wire.begin() too; the second
+  // call is harmless.
+  Serial.printf("Board: %s\n", BOARD_NAME);
+  boardI2CBegin();
 
 // INTERRUPT
 #ifdef TOUCH_MODE
   xTaskCreate(touchTask, "Touch Task", 4096, NULL, configMAX_PRIORITIES - 2,
               NULL);
 #else
+#if !BOARD_SLEEP_VIA_LIGHT_SLEEP
   getErr = esp_sleep_enable_ext0_wakeup(BUTTON_PIN, LOW);
   printOutESP32Error(getErr);
+#endif
   Button *btn = new Button(BUTTON_PIN, false);
+#if BOARD_SLEEP_VIA_LIGHT_SLEEP
+  // Button(pin, false) turns on a pulldown, which GPIO0 on the S3 boards
+  // survives because of its external pull-up. Whether GPIO9 has one on this
+  // board is not documented, so do not depend on it.
+  gpio_set_pull_mode(BUTTON_PIN, GPIO_PULLUP_ONLY);
+#endif
   btn->attachPressDownEventCb(&onPttDownCb, NULL);
   btn->attachPressUpEventCb(&onPttUpCb, NULL);
 #endif
 
+#if BOARD_KEYS_VIA_EXPANDER
+  xTaskCreate(expanderKeyTask, "Expander Keys", 3072, NULL,
+              configMAX_PRIORITIES - 2, NULL);
+#elif BOARD_HAS_GPIO_KEYS
   attachVolumeButton(VOLUME_UP_PIN, &onVolumeUpCb);
   attachVolumeButton(VOLUME_DOWN_PIN, &onVolumeDownCb);
 
@@ -423,8 +594,10 @@ void setup() {
   touchPad->attachLongPressStartEventCb(&onTouchLongPressCb, NULL);
   Serial.printf("Touch pad GPIO%d idle level: %d (expect 0)\n", (int)TOUCH_PAD_PIN,
                 gpio_get_level(TOUCH_PAD_PIN));
+#endif
 
   displaySetup();
+  batteryBegin();
   noteActivity();
 
   // Before the tasks, not inside one: networkTask is created at the highest
@@ -453,14 +626,16 @@ void setup() {
   // plus an I2S write costs. That time is the speaker being fed; there is no
   // preemption here to reclaim, and a buffer sized for decode wall time has to
   // include it.
+#if BOARD_HAS_STATUS_LED
   xTaskCreatePinnedToCore(ledTask,    // Function
                           "LED Task", // Name
                           4096,       // Stack size
                           NULL,       // Parameters
                           1,          // Priority
                           NULL,       // Handle
-                          1           // Core 1 (application core)
+                          APP_CORE    // Core 1 (application core); 0 on a single-core chip
   );
+#endif
 
   xTaskCreatePinnedToCore(audioStreamTask, // Function
                           "Speaker Task",  // Name
@@ -468,7 +643,7 @@ void setup() {
                           NULL,            // Parameters
                           3,                   // Priority
                           &speakerTaskHandle,  // Handle
-                          1                    // Core 1 (application core)
+                          APP_CORE             // Core 1 (application core)
   );
 
   // Opus decode, fed by networkTask over the queue allocated above.
@@ -496,7 +671,7 @@ void setup() {
                           NULL,              // Parameters
                           2,                 // Priority
                           &decodeTaskHandle, // Handle
-                          1                  // Core 1 (application core)
+                          APP_CORE           // Core 1 (application core)
   );
 
   xTaskCreatePinnedToCore(micTask,           // Function
@@ -505,7 +680,7 @@ void setup() {
                           NULL,              // Parameters
                           4,                 // Priority
                           &micTaskHandle,    // Handle
-                          1                  // Core 1 (application core)
+                          APP_CORE           // Core 1 (application core)
   );
 
   // Lowest priority on the application core: the audio tasks above must always
@@ -516,15 +691,30 @@ void setup() {
                           NULL,           // Parameters
                           1,              // Priority
                           NULL,           // Handle
-                          1               // Core 1 (application core)
+                          APP_CORE        // Core 1 (application core)
   );
 
   // Pin network task to Core 0 (protocol core)
+  //
+  // On a single core it cannot be the highest priority in the system: the
+  // websocket's TLS handshake runs inside webSocket.loop() and is ~1.3s of
+  // solid CPU on the C3, which at the top priority starved the speaker task
+  // for 1138ms and froze the boot sound mid-note (measured 2026-09-30). Level
+  // with the speaker task it still preempts decode, as it does on the S3,
+  // but the speaker gets its DMA refills within a tick. This alone was not
+  // enough: see wsMutex in setup() for the priority inheritance that kept it
+  // at 23 regardless. With both, the boot sound plays through the handshake
+  // untouched and the connect takes ~170ms longer.
+#if CONFIG_FREERTOS_UNICORE
+  const UBaseType_t networkTaskPriority = 3;
+#else
+  const UBaseType_t networkTaskPriority = configMAX_PRIORITIES - 1;
+#endif
   xTaskCreatePinnedToCore(networkTask,              // Function
                           "Websocket Task",         // Name
                           8192,                     // Stack size
                           NULL,                     // Parameters
-                          configMAX_PRIORITIES - 1, // Highest priority
+                          networkTaskPriority,      // See above
                           &networkTaskHandle,       // Handle
                           0                         // Core 0 (protocol core)
   );
@@ -542,6 +732,7 @@ void loop() {
     Serial.printf("(replay) %s\n", bootBanner);
     // Same reason as the banner: these are decided during setup, and the host
     // has not finished enumerating the CDC port by then.
+    boardReport();
     audioMemoryReport();
   }
   checkIdleTimeout();
