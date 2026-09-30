@@ -67,7 +67,19 @@ class RawPCMFrameSerializer(FrameSerializer):
 class OpusEncoder:
     sample_rate: int = 24000
     channels: int = 1
-    bit_rate: int = 24000
+    # 40kbps "audio", not 24kbps "voip". At 24kbps voip libopus codes this
+    # 24kHz speech as SILK+CELT hybrid, and on MiniMax's Cantonese voice that
+    # pulled some 20ms stretches up to 3.9dB under the source -- heard on the
+    # toy as syllables faintly swallowed. At 40kbps audio it is CELT only:
+    # worst stretch -0.8dB, waveform SNR 20.1dB against 10.8dB, and picked by
+    # ear over the old setting on the same clip (2026-09-30).
+    #
+    # It is also cheaper to *decode*. Measured on the xmini-c3 (single 160MHz
+    # core), same 12.6s clip, scheduler suspended per packet: 8256us per 40ms
+    # packet against 10287us, 20.6% of the core against 25.7%, and the libopus
+    # pseudo-stack peaked at 6288 bytes of the 16KB that board gives it. The
+    # cost is the websocket: ~38kbps of payload instead of ~21.
+    bit_rate: int = 40000
     # Opus' native frame sizes stop at 60ms: a 120ms packet is not a longer
     # frame, it is six 20ms frames concatenated behind one header, so it buys
     # no coding efficiency at all. Measured over 10s of speech-like audio at
@@ -93,10 +105,10 @@ class OpusEncoder:
         self._codec.format = "s16"
         self._codec.bit_rate = self.bit_rate
         self._codec.options = {
-            "application": "voip",
+            "application": "audio",
             "frame_duration": str(self.frame_duration_ms),
             # ffmpeg's libopus wrapper defaults this to 10, the slowest
-            # setting. At 24kbps voip it buys nothing measurable: over the
+            # setting. At 24kbps voip it bought nothing measurable: over the
             # same 10s sample, level 5 produced 24931 bytes against level
             # 10's 25217 -- slightly *smaller* -- for half the encode time
             # (0.44ms vs 0.77ms per frame). This call is synchronous inside
@@ -168,7 +180,6 @@ class OpusWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         self._encoder = OpusEncoder(
             sample_rate=params.audio_out_sample_rate or 24000,
             channels=params.audio_out_channels or 1,
-            bit_rate=24000,
         )
 
     async def send_message(
