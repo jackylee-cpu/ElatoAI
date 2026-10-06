@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 interface MyInfoFormProps {
     selectedUser: IUser;
     allLanguages: ILanguage[];
+    allRegions: IRegion[];
 }
 
 const fieldClass =
@@ -50,6 +51,7 @@ function LanguageFlag({
 export default function MyInfoForm({
     selectedUser,
     allLanguages,
+    allRegions,
 }: MyInfoFormProps) {
     const supabase = createClient();
     const { toast } = useToast();
@@ -63,9 +65,13 @@ export default function MyInfoForm({
     const [language, setLanguage] = useState(
         selectedUser.language_code ?? "en-US"
     );
+    // Empty until chosen. The voice server then uses its own default place,
+    // and saving leaves the column NULL rather than writing a guess.
+    const [region, setRegion] = useState(selectedUser.region_code ?? "");
     const [saving, setSaving] = useState(false);
 
     const languageSelected = allLanguages.find((item) => item.code === language);
+    const regionSelected = allRegions.find((item) => item.code === region);
 
     const handleSave = async () => {
         const trimmedName = name.trim();
@@ -90,6 +96,7 @@ export default function MyInfoForm({
                 supervisee_age: ageNumber,
                 supervisee_persona: description.trim(),
                 language_code: language,
+                ...(region ? { region_code: region } : {}),
             },
             selectedUser.user_id
         );
@@ -174,6 +181,48 @@ export default function MyInfoForm({
                         </SelectContent>
                     </Select>
                 </div>
+
+                {allRegions.length > 0 && (
+                    <div>
+                        <span className={labelClass}>Where you live</span>
+                        <Select value={region} onValueChange={setRegion}>
+                            <SelectTrigger
+                                className={cn(
+                                    fieldClass,
+                                    "flex h-auto items-center justify-between gap-3 [&>span]:line-clamp-none [&>span]:flex [&>span]:items-center [&>span]:gap-3 [&>svg]:hidden"
+                                )}
+                            >
+                                <LanguageFlag flag={regionSelected?.flag} />
+                                <span
+                                    className={cn(
+                                        "min-w-0 flex-1 truncate text-left text-base",
+                                        regionSelected ? "text-gray-900" : "text-gray-300"
+                                    )}
+                                >
+                                    {regionSelected?.name ?? "Choose a city"}
+                                </span>
+                                <ChevronDownIcon className="h-4 w-4 shrink-0 opacity-70" />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-2xl">
+                                {allRegions.map((item) => (
+                                    <SelectItem
+                                        key={item.code}
+                                        value={item.code}
+                                        className="rounded-xl py-2"
+                                    >
+                                        <span className="flex items-center gap-2">
+                                            <LanguageFlag flag={item.flag} />
+                                            <span>{item.name}</span>
+                                        </span>
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <p className="mt-2 px-1 text-xs text-gray-400">
+                            So your character knows your time and weather.
+                        </p>
+                    </div>
+                )}
             </div>
 
             <div

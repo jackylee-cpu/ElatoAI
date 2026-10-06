@@ -22,6 +22,18 @@ declare global {
         flag: string;
     }
 
+    // A place the child can live, for the date, time and weather the voice
+    // server puts in the system prompt. See supabase/migrations/*_add_regions.sql.
+    interface IRegion {
+        code: string;
+        name: string;
+        flag: string;
+        timezone: string;
+        latitude: number;
+        longitude: number;
+        sort_order: number;
+    }
+
     type ProductColor = "black" | "white" | "gray";
 
     interface IDevice {
@@ -52,6 +64,9 @@ declare global {
         // language
         language?: ILanguage;
         language_code: string;
+
+        // region: null until chosen; the voice server then uses its own default.
+        region_code?: string | null;
 
         // device
         device?: IDevice;

@@ -1,5 +1,6 @@
 import SettingsDashboard from "@/app/components/Settings/SettingsDashboard";
 import { getAllLanguages } from "@/db/languages";
+import { getAllRegions } from "@/db/regions";
 import { getUserById } from "@/db/users";
 import { getOpenGraphMetadata } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/server";
@@ -18,7 +19,10 @@ export default async function Home() {
     } = await supabase.auth.getUser();
 
     const dbUser = user ? await getUserById(supabase, user.id) : null;
-    const allLanguages = await getAllLanguages(supabase);
+    const [allLanguages, allRegions] = await Promise.all([
+        getAllLanguages(supabase),
+        getAllRegions(supabase),
+    ]);
 
     return (
         <>
@@ -26,6 +30,7 @@ export default async function Home() {
                 <SettingsDashboard
                     selectedUser={dbUser}
                     allLanguages={allLanguages}
+                    allRegions={allRegions}
                 />
             )}
         </>

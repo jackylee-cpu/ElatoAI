@@ -114,6 +114,7 @@ def build_voice_pipeline(
     child=None,
     stack: dict | None = None,
     language_code: str | None = None,
+    world_context: str | None = None,
 ):
     # `stack` is resolved by the caller because reading it needs an await and
     # this function is synchronous. Falling back to the env-only stack keeps
@@ -158,6 +159,7 @@ def build_voice_pipeline(
         child_persona=child.get("persona"),
         memory_preamble=memory_preamble,
         language_instruction=language.prompt if language else None,
+        world_context=world_context,
     )
 
     # The voice is part of the language, not a free choice beside it: a MiniMax

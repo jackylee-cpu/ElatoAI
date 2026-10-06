@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -16,6 +17,7 @@ from typing import Any, Literal
 from app_settings import fetch_voice_settings
 from models.stt.finalize import STTFinalizeFrame
 from voice_pipeline import build_voice_pipeline, resolve_voice_stack
+from world_context import fetch_world_block
 from dotenv import load_dotenv
 from metrics.turn_metrics import TurnMetricsObserver
 from gem_live_route import build_gem_live_route
@@ -598,6 +600,7 @@ async def run_bot_session(
     user_id: str | None = None,
     chat_group_id: str | None = None,
     language_code: str | None = None,
+    region=None,
 ):
     voice_route = CURRENT_VOICE_ROUTE
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
@@ -610,11 +613,18 @@ async def run_bot_session(
     # Only the classic route has a model to choose. gem_live and grok build
     # their own single speech-to-speech service and would ignore it, so they do
     # not pay for the lookup.
-    stack = (
-        resolve_voice_stack(await fetch_voice_settings())
-        if voice_route == "classic"
-        else None
-    )
+    #
+    # The date, time and weather go into the same system instruction, so they
+    # are fetched here too, alongside the settings rather than after them: the
+    # weather is a network round trip and the greeting is waiting on both.
+    if voice_route == "classic":
+        voice_settings, world_context = await asyncio.gather(
+            fetch_voice_settings(), fetch_world_block(region)
+        )
+        stack = resolve_voice_stack(voice_settings)
+    else:
+        stack = None
+        world_context = None
 
     # gem_live and grok are speech-to-speech: our STT never emits a
     # TranscriptionFrame on those routes and their instructions are fixed when
@@ -653,6 +663,7 @@ async def run_bot_session(
             child=child,
             stack=stack,
             language_code=language_code,
+            world_context=world_context,
         )
 
     processors = [transport.input(), *route_processors]

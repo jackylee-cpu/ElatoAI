@@ -110,6 +110,7 @@ def build_session_prompt(
     child_persona: str | None = None,
     memory_preamble: str | None = None,
     language_instruction: str | None = None,
+    world_context: str | None = None,
 ) -> str:
     prompt = (character_prompt or "").strip()
     child_block = build_child_block(child_name, child_age, child_persona)
@@ -120,6 +121,10 @@ def build_session_prompt(
     # one that has to win, and the later instruction is the one that does.
     # It stays ahead of SPOKEN_OUTPUT_RULES: see the note on why those are last.
     language = (language_instruction or "").strip()
+    # The date, time and weather (world_context.py). Facts, not instructions,
+    # so they sit with the other facts about this session and the language and
+    # spoken rules still come after them.
+    world = (world_context or "").strip()
 
     if not prompt:
         parts = [LANGUAGE_LEARNING_PAL_PROMPT]
@@ -127,6 +132,8 @@ def build_session_prompt(
             parts.append(child_block)
         if preamble:
             parts.append(preamble)
+        if world:
+            parts.append(world)
         if language:
             parts.append(language)
         # Appended here too. The rules used to hang off the custom-character
@@ -147,6 +154,8 @@ def build_session_prompt(
         parts.append(child_block)
     if preamble:
         parts.append(preamble)
+    if world:
+        parts.append(world)
     # The old wording was a flat "Do not ask for personal information", which
     # reads as "never retain anything about this child" once the toy has a
     # memory. The line it needs is the narrower one: do not go fishing, but do

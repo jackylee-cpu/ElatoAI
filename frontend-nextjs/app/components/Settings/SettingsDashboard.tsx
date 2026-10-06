@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 interface SettingsDashboardProps {
     selectedUser: IUser;
     allLanguages: ILanguage[];
+    allRegions: IRegion[];
 }
 
 type SettingsTab = "info" | "setting";
@@ -18,6 +19,7 @@ type SettingsTab = "info" | "setting";
 const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     selectedUser,
     allLanguages,
+    allRegions,
 }) => {
     const [tab, setTab] = useState<SettingsTab>("info");
 
@@ -63,6 +65,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 <MyInfoForm
                     selectedUser={selectedUser}
                     allLanguages={allLanguages}
+                    allRegions={allRegions}
                 />
             ) : (
                 <div className="scrollbar-hide flex-1 overflow-y-auto pb-8">

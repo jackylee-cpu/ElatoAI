@@ -327,6 +327,8 @@ def create_app() -> FastAPI:
         chat_group_id = str(uuid.uuid4())
         if memory is not None:
             memory.chat_group_id = chat_group_id
+            # For dating what the child says ("next Saturday") in their clock.
+            memory.timezone = profile.region.timezone if profile.region else None
         child = {
             "name": profile.child_name,
             "age": profile.child_age,
@@ -352,6 +354,7 @@ def create_app() -> FastAPI:
                 user_id=profile.user_id,
                 chat_group_id=chat_group_id,
                 language_code=profile.language_code,
+                region=profile.region,
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off
@@ -395,6 +398,7 @@ def create_app() -> FastAPI:
         chat_group_id = str(uuid.uuid4())
         if memory is not None:
             memory.chat_group_id = chat_group_id
+            memory.timezone = personality.region.timezone if personality.region else None
         child = {
             "name": personality.child_name,
             "age": personality.child_age,
@@ -420,6 +424,7 @@ def create_app() -> FastAPI:
                 user_id=personality.user_id,
                 chat_group_id=chat_group_id,
                 language_code=personality.language_code,
+                region=personality.region,
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off

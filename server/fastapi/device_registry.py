@@ -22,6 +22,8 @@ from urllib.parse import quote
 import aiohttp
 from loguru import logger
 
+from world_context import Region
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 # The service role key bypasses RLS, which is what we want: this lookup runs
 # on behalf of the device, not of a logged-in user.
@@ -42,6 +44,7 @@ _SELECT = (
     "user:user_id("
     "supervisee_name,supervisee_age,supervisee_persona,language_code,"
     "memories_revision,"
+    "region:region_code(name,timezone,latitude,longitude),"
     "personality:personality_id("
     "key,title,character_prompt,voice_prompt,oai_voice"
     ")"
@@ -52,7 +55,8 @@ _SELECT = (
 # account lookup only needs the child's own fields. Same names as the nested
 # `user(...)` above so both rows can go through `_parse`.
 _USER_SELECT = (
-    "supervisee_name,supervisee_age,supervisee_persona,language_code,memories_revision"
+    "supervisee_name,supervisee_age,supervisee_persona,language_code,memories_revision,"
+    "region:region_code(name,timezone,latitude,longitude)"
 )
 
 
@@ -72,6 +76,10 @@ class DevicePersonality:
     child_persona: str | None = None
     language_code: str | None = None
     memories_revision: int = 0
+    # Where the child lives, for the date, time and weather in the prompt.
+    # None when the account has not chosen one; world_context falls back to
+    # the server's own place.
+    region: Region | None = None
 
 
 def _clean(value: object) -> str | None:
@@ -87,6 +95,21 @@ def _int_or(value: object, default: int | None = None) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return default
     return value
+
+
+def _parse_region(value: object) -> Region | None:
+    """The embedded `regions` row, or None if unset or malformed."""
+    if not isinstance(value, dict):
+        return None
+    name = _clean(value.get("name"))
+    tz = _clean(value.get("timezone"))
+    lat, lon = value.get("latitude"), value.get("longitude")
+    if not name or not tz or not all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lat, lon)
+    ):
+        logger.warning("Ignoring incomplete region {}", value)
+        return None
+    return Region(name=name, timezone=tz, latitude=float(lat), longitude=float(lon))
 
 
 def _parse(row: dict) -> DevicePersonality:
@@ -118,6 +141,7 @@ def _parse(row: dict) -> DevicePersonality:
         child_persona=_clean(user.get("supervisee_persona")),
         language_code=_clean(user.get("language_code")),
         memories_revision=_int_or(user.get("memories_revision"), 0) or 0,
+        region=_parse_region(user.get("region")),
     )
 
 
