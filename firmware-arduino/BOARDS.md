@@ -235,6 +235,17 @@ Things that differ from the S3 boards and are easy to trip over:
 - **WifiManager task stack is 8KB here**, not 4KB. The registration request's
   TLS handshake runs on it and overflowed 4KB on every connect (a boot loop
   the moment WiFi came up); measured headroom at 8KB is ~3KB.
+- **Each battery sample is 64 ADC reads, trimmed.** Single reads spread
+  about +-100 counts around a steady level, with spikes of several hundred
+  when the speaker or mic switches, and the vendor table spends 5.3 counts
+  per percent: one read per sample made the screen wander 27..37% in a
+  minute on a constant voltage. A trimmed mean of 64 (top and bottom 16
+  dropped), averaged over 6 samples, holds the level to about +-1%, and the
+  screen only moves on a 2-point change. No samples while the toy talks.
+- **The "charging" pin was found floating.** On USB with the cell at ~3.86V
+  it read 1 with the internal pull-up and 0 with the pull-down, so nothing
+  was driving it (2026-09-30); it is now pulled down. The vendor code reads
+  1 as charging; that has not yet been seen on a board that was charging.
 - **Battery wiring is not in any public xiaozhi source.** The open-source
   config calls GPIO2 the LED; on this board it is the battery sense divider,
   and the vendor firmware creates `SingleLed(GPIO_NUM_NC)`. The ADC channel,

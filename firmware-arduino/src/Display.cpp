@@ -152,7 +152,7 @@ static void drawBattery(int x, int y, int percent, bool charging) {
     }
 }
 
-static void draw(DeviceState state, int volume, int bars, bool wsUp, bool battery,
+static void draw(DeviceState state, int bars, bool wsUp, bool battery,
                  int percent, bool charging) {
     u8g2.clearBuffer();
 
@@ -176,19 +176,8 @@ static void draw(DeviceState state, int volume, int bars, bool wsUp, bool batter
 
     u8g2.setFont(u8g2_font_helvB14_tr);
     const char *label = stateLabel(state);
+    // No volume readout below it: taken off the screen on request, 2026-09-30.
     u8g2.drawStr((128 - u8g2.getStrWidth(label)) / 2, 38, label);
-
-    u8g2.setFont(u8g2_font_5x8_tr);
-    char volumeText[16];
-    snprintf(volumeText, sizeof(volumeText), "VOL %d", volume);
-    u8g2.drawStr(0, 63, volumeText);
-    // Bar starts clear of the longest "VOL 100".
-    const int barLeft = 44, barRight = 127, barTop = 56, barHeight = 7;
-    u8g2.drawFrame(barLeft, barTop, barRight - barLeft, barHeight);
-    int fill = ((barRight - barLeft - 2) * constrain(volume, 0, 100)) / 100;
-    if (fill > 0) {
-        u8g2.drawBox(barLeft + 1, barTop + 1, fill, barHeight - 2);
-    }
 
     u8g2.sendBuffer();
 }
@@ -212,7 +201,6 @@ void displayTask(void *parameter) {
     // Redraw only on change: a full 1KB buffer over I2C is ~25ms, and there is
     // no reason to spend that while nothing on screen is moving.
     DeviceState lastState = (DeviceState)-1;
-    int lastVolume = -1;
     int lastBars = -2;
     bool lastWs = false;
     bool lastBattery = false, lastCharging = false;
@@ -227,19 +215,17 @@ void displayTask(void *parameter) {
         batteryPoll();
 
         DeviceState state = deviceState;
-        int volume = currentVolume;
         int bars = wifiBars(WiFi.status() == WL_CONNECTED);
         bool wsUp = webSocket.isConnected();
         bool battery = batteryPresent();
         int percent = batteryPercent();
         bool charging = batteryCharging();
 
-        if (state != lastState || volume != lastVolume || bars != lastBars ||
+        if (state != lastState || bars != lastBars ||
             wsUp != lastWs || battery != lastBattery || percent != lastPercent ||
             charging != lastCharging) {
-            draw(state, volume, bars, wsUp, battery, percent, charging);
+            draw(state, bars, wsUp, battery, percent, charging);
             lastState = state;
-            lastVolume = volume;
             lastBars = bars;
             lastWs = wsUp;
             lastBattery = battery;
