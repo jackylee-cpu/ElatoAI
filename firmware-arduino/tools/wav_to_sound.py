@@ -10,8 +10,9 @@ embedding the source as-is.
 
     python3 tools/wav_to_sound.py boot  assets/boot-sound.wav
     python3 tools/wav_to_sound.py sleep assets/sleep-sound.wav
+    python3 tools/wav_to_sound.py lowbattery assets/low-battery.wav
 
-Writes src/BootSoundData.cpp / src/SleepSoundData.cpp. Re-run whenever a source
+Writes src/BootSoundData.cpp / src/SleepSoundData.cpp / src/LowBatterySoundData.cpp. Re-run whenever a source
 WAV changes; the generated files are committed, so a normal build needs neither
 Python nor the WAVs.
 """
@@ -31,6 +32,8 @@ import numpy as np
 SOUNDS = {
     "boot": dict(rate=16000, symbol="kBootSound", out="BootSoundData.cpp"),
     "sleep": dict(rate=24000, symbol="kSleepSound", out="SleepSoundData.cpp"),
+    # Speech: 16 kHz keeps it intelligible at a third less flash than 24 kHz.
+    "lowbattery": dict(rate=16000, symbol="kLowBatterySound", out="LowBatterySoundData.cpp"),
 }
 
 # Where to cut the reverb tail, relative to the loudest sample. The tail decays

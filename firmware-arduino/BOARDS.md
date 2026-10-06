@@ -1,6 +1,6 @@
 # Supported boards
 
-One firmware, three boards. `src/BoardConfig.h` turns a single build flag into
+One firmware, four boards. `src/BoardConfig.h` turns a single build flag into
 capability macros; `src/Config.cpp` holds the pin map for each. Nothing else in
 the tree should need a `#if` for a new board that resembles one of these.
 
@@ -278,3 +278,144 @@ LED, I2S full duplex, boot chime path, SoftAP. 2026-09-30: the boot sound
 plays through the TLS handshake with no gap, and a 13.5s greeting from the
 deployed server decodes at 26.5% of the core (rtf 37%), glitches 0. **Not yet
 verified:** mic level on a real turn and the light-sleep wake.
+
+
+## Spotpear AI Toy (ESP32-C3)
+
+Build env `spotpear-ai-toy` (also `-localws` and `-audiotest`), flag
+`BOARD_SPOTPEAR_AI_TOY`. **The likely production board** (2026-10-05). The
+board is not in the xiaozhi repository. It shipped with a vendor build of xiaozhi
+2.1.0 (SKU `toy-ai-core-c3-1.54`), and every pin below was read out of that
+image by disassembly, on 2026-10-05:
+
+- the I2C, SPI and panel-IO config structs built in the board constructor and
+  in `InitializeSt7789Display()`;
+- the arguments to the `Es8311AudioCodec` and `SingleLed` constructors in
+  `GetAudioCodec()` and `GetLed()`;
+- the source text that `ESP_ERROR_CHECK` keeps as a string, which names each
+  call, e.g. `esp_lcd_panel_invert_color(panel, true)`.
+
+The full flash backup and the full pin list are in
+`~/Desktop/小智備份/toy-ai-core-c3-1.54/` on the dev Mac.
+
+| | |
+|---|---|
+| Chip / flash / PSRAM | ESP32-C3 rev v0.4, 16MB, **none** |
+| Audio | identical to the xmini-c3: ES8311 `0x18`, MCLK 10, BCLK 8, LRCK 6, DOUT 5, DIN 7, amp GPIO11, I2C SDA 3 / SCL 4 |
+| Amp enable | GPIO11; VDD_SPI_AS_GPIO already burnt (read with espefuse) |
+| Status LED | one WS2812 on GPIO2, driven as a ring of one |
+| Screen | ST7789 240x240 on SPI2: MOSI 21, SCLK 0, CS 20, DC 1, no reset pin, colours inverted. **Not driven**: this build has no screen |
+| Backlight | no control in the vendor firmware; it appears hard-wired on |
+| Battery | a cell is fitted, but nothing can measure it: see below |
+| Keys | BOOT (GPIO9) only |
+
+Everything in the xmini-c3 notes above applies, since the chip, flash mode,
+partition table and audio path are the same; `Config.cpp` serves both from
+one block. Two exceptions:
+
+- **The mic threshold is borrowed.** `MIC_VOICE_LEVEL` is the xmini-c3's 450,
+  which assumes the same codec at the same gains with a similar mic. It has
+  not been measured on this board.
+- **No battery sense on the board as sold.** The vendor firmware's
+  `GetBatteryLevel()` is the base class's `return false`, and the hardware
+  could not do better: the C3's ADC pins are GPIO0-5 only, and all six are
+  taken (screen SCLK and DC, LED, I2C, I2S). `BOARD_HAS_BATTERY` is 0.
+- **esptool cannot reset it out of the bootloader.** After a read or a write,
+  `--after hard_reset` leaves it in download mode. Either unplug it and plug it
+  back in, or open the port with pyserial and pulse RTS with DTR low:
+  `dtr=False`, `rts=True`, wait 0.1s, then `rts=False`.
+
+Verified on hardware on 2026-10-05, with the full flash backed up first and
+then erased:
+
+- it boots with the ES8311 configured, DAC and ADC both, at 24kHz;
+- the display scan finds only `0x18` and the board runs headless;
+- the boot chime plays from the speaker;
+- the WS2812 shows magenta during SoftAP, so the GRB order is right;
+- SoftAP `ELATO-DEVICE` comes up;
+- internal RAM has 73KB free with WiFi up, and the largest block is 53KB.
+
+The same day, the person testing it bound it in the app and held a
+conversation with the server, so real speech clears the borrowed mic
+threshold. **Not yet measured:** whether silence stays under it, and battery
+sense (no hardware for it yet).
+
+### Low-battery reminder without battery sense
+
+Since 2026-10-06 the board warns of a flat battery without measuring it
+(`BOARD_LOW_BATTERY_VIA_VDD`, `src/SupplyMonitor.cpp`). The cell feeds a
+regulator that holds the chip at 3.3V until the cell gets near empty; after
+that VDD sags. So VDD dropping is the "nearly empty" signal.
+
+How VDD is read:
+
+- GPIO0 is the undriven screen SCLK. With both internal pulls on, it sits at
+  about 45% of VDD, which ADC1 channel 0 can read. Pulled up alone it reads a
+  flat 4095.
+- On USB it measured 2031..2039 counts, steady to a few counts. GPIO1 does the
+  same at 2090.
+- GPIO20, the screen's CS, is held high so the panel ignores the line.
+- The first reading the board ever takes is stored in NVS as its reference.
+
+How it warns:
+
+- **Thresholds.** Below 95.5% of the reference (VDD about 3.15V) for a 30s
+  window, the LED's idle green turns red. It clears above 97.5%.
+- **Reminder.** A spoken Cantonese reminder plays then, and again every 10
+  minutes while still low. The text is "我就快冇電喇，請爸爸媽媽幫我叉電呀！",
+  in the macOS Sinji voice, from `assets/low-battery.wav`.
+- **Timing.** The reminder waits for the device to be idle, so it never talks
+  over the toy.
+- **After a brownout.** A brownout reset gives one reminder on the next boot.
+
+Verified 2026-10-06 with `SUPPLY_LOW_RATIO_OVERRIDE=1.05f`, which forces the
+low state: the reminder played after the greeting turn ended, and the LED was
+red. **Not yet verified:** that the reading tracks a real run-down, and how
+long before shutdown it fires. Each boot prints a run log from NVS (`Supply
+log:`): an entry every 2 minutes, written straight to NVS once the reading is
+under 99%. A charge-then-drain run with that log is the test.
+
+Power path, seen the same day: with a flat cell fitted, the chip reads 98-99%
+of its USB-only reference **while on USB**, so it runs from the cell's node
+rather than from USB. With the cell flat, the board took minutes to show up on
+USB after being plugged in, and once dropped off USB halfway through a 1.6MB
+flash write. Ask Spotpear whether the charger has load sharing (power path).
+Without it, a toy that is plugged in with a dead cell may brown out repeatedly
+before it can start.
+
+### Battery sense for the production board
+
+**On hold.** On 2026-10-06 the owner said a reminder when the battery is
+nearly flat is enough; a percentage is not needed. So ask for this only if a
+run-down shows the reminder above comes too late or not at all.
+
+The board has no screen in this product, so GPIO0, the screen's SCLK and ADC1
+channel 0, goes to a divider. This is what to ask Spotpear for:
+
+| | |
+|---|---|
+| Pin | GPIO0 (ADC1 ch0). GPIO1 (ADC1 ch1) works the same if it routes better; tell us which |
+| Divider | cell + -> 100k -> GPIO0 -> 100k -> GND, 1% resistors, so 4.2V reads 2.1V |
+| Filter | 100nF from GPIO0 to GND, next to the pin |
+| Node | the cell itself, after the protection IC, **not** the charger's system output |
+| Screen | not fitted, or at least GPIO0 not routed to it |
+
+Why these values:
+
+- **Range.** Halving the cell keeps a full charge (4.2V, up to ~4.35V
+  while charging) inside the C3's 12dB ADC range, which runs to about 2.5V.
+- **Drain.** The divider costs 21uA, about 0.5mAh a day.
+- **Filter.** The 100nF lets the ADC sample a 50k source cleanly.
+- **Node.** Measured on the system rail instead, it would read the USB
+  supply whenever the toy is plugged in.
+
+A charge-status output is worth asking for too: the charger's CHRG pin to
+GPIO12 or GPIO13. Those are the two free pins, and the xmini-c3 uses GPIO12
+for this. Both are the flash's HD and WP lines, so Spotpear has to confirm
+they are not wired to the flash on this board.
+
+Firmware that follows the hardware: a reading path keyed to millivolts
+rather than the xmini-c3's raw table, battery polling that does not depend
+on the display task (which exits on a headless board), and somewhere for
+the number to go, because nothing in the server or the app carries a
+battery level today.

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-// The boot and sleep sounds, as 16-bit mono PCM in flash. Generated from
+// The boot, sleep and low-battery sounds, as 16-bit mono PCM in flash. Generated from
 // assets/*.wav by tools/wav_to_sound.py -- regenerate those rather than editing
 // BootSoundData.cpp or SleepSoundData.cpp.
 //
@@ -17,5 +17,10 @@ extern const int kBootSoundRate;
 extern const int16_t kSleepSoundPcm[];
 extern const unsigned kSleepSoundFrames;
 extern const int kSleepSoundRate;
+
+// Spoken, on boards that warn of a low battery (SupplyMonitor.h).
+extern const int16_t kLowBatterySoundPcm[];
+extern const unsigned kLowBatterySoundFrames;
+extern const int kLowBatterySoundRate;
 
 #endif

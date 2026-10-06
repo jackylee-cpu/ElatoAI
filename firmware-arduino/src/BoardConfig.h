@@ -35,14 +35,23 @@
 //   Audio pins are from xiaozhi-esp32 v2.2.6 main/boards/xmini-c3/config.h;
 //   the battery wiring is not in any public source and was read out of the
 //   vendor firmware this board shipped with (see Battery.cpp).
+//
+// BOARD_SPOTPEAR_AI_TOY
+//   Spotpear AI Toy, xiaozhi SKU "toy-ai-core-c3-1.54": the xmini-c3's
+//   ESP32-C3, ES8311, amplifier, I2C and BOOT on the same pins, plus a 1.54"
+//   ST7789 SPI screen this firmware does not drive and one WS2812 on GPIO2.
+//   It takes a battery but cannot measure it: the C3's ADC pins, GPIO0-5,
+//   are all wired to something. The production board is to free GPIO0 from
+//   the screen for a divider (see BOARDS.md). It is not in the xiaozhi
+//   repository; every pin was read out of the vendor firmware by disassembly.
 
 #if !defined(BOARD_ELATO_BREADBOARD) && !defined(BOARD_WAVESHARE_S3_AUDIO) && \
-    !defined(BOARD_XMINI_C3)
+    !defined(BOARD_XMINI_C3) && !defined(BOARD_SPOTPEAR_AI_TOY)
 #define BOARD_ELATO_BREADBOARD
 #endif
 
 #if (defined(BOARD_ELATO_BREADBOARD) + defined(BOARD_WAVESHARE_S3_AUDIO) + \
-     defined(BOARD_XMINI_C3)) != 1
+     defined(BOARD_XMINI_C3) + defined(BOARD_SPOTPEAR_AI_TOY)) != 1
 #error "Define exactly one BOARD_* flag"
 #endif
 
@@ -66,6 +75,7 @@
 #define BOARD_WS2812_COUNT       0
 #define BOARD_HAS_STATUS_LED     0
 #define BOARD_HAS_BATTERY        1
+#define BOARD_LOW_BATTERY_VIA_VDD 0
 // The C3 has no APLL. MCLK comes from the 160MHz PLL through the I2S
 // fractional divider instead, which is what xiaozhi runs this codec on.
 #define BOARD_I2S_USE_APLL       0
@@ -89,6 +99,33 @@
 #define BOARD_DISPLAY_ROTATION   U8G2_R0
 #define BOARD_NAME               "xiaozhi xmini-c3"
 
+#elif defined(BOARD_SPOTPEAR_AI_TOY)
+
+// The xmini-c3's audio path unchanged (see above for each of these), with the
+// one WS2812 standing in for a status LED and no battery.
+#define BOARD_HAS_CODEC          1
+#define BOARD_HAS_ES7210         0
+#define BOARD_SHARED_I2S_BUS     1
+#define BOARD_HAS_IO_EXPANDER    0
+#define BOARD_PA_VIA_EXPANDER    0
+#define BOARD_KEYS_VIA_EXPANDER  0
+#define BOARD_HAS_GPIO_KEYS      0
+// A "ring" of one: LedRing drives any WS2812 chain on one data pin.
+#define BOARD_HAS_WS2812_RING    1
+#define BOARD_WS2812_COUNT       1
+#define BOARD_HAS_STATUS_LED     1
+#define BOARD_HAS_BATTERY        0
+// No battery sense, so the low-battery warning comes from the chip's own
+// supply sagging once the regulator runs out of headroom (SupplyMonitor).
+#define BOARD_LOW_BATTERY_VIA_VDD 1
+#define BOARD_I2S_USE_APLL       0
+#define BOARD_MIC_DOWNSAMPLE_3_2 1
+#define BOARD_DAC_GAIN_DB        0.0f
+#define BOARD_SLEEP_VIA_LIGHT_SLEEP 1
+// No I2C display; only here because Display.cpp names it.
+#define BOARD_DISPLAY_ROTATION   U8G2_R0
+#define BOARD_NAME               "Spotpear AI Toy (toy-ai-core-c3-1.54)"
+
 #elif defined(BOARD_WAVESHARE_S3_AUDIO)
 
 // The two codecs share BCLK and LRCK, so one I2S port runs both directions and
@@ -106,6 +143,7 @@
 #define BOARD_HAS_STATUS_LED     1
 // GPIO8 is a battery ADC here too, but its divider and curve are unknown.
 #define BOARD_HAS_BATTERY        0
+#define BOARD_LOW_BATTERY_VIA_VDD 0
 #define BOARD_I2S_USE_APLL       1
 #define BOARD_MIC_DOWNSAMPLE_3_2 0
 #define BOARD_DAC_GAIN_DB        0.0f
@@ -126,6 +164,7 @@
 #define BOARD_WS2812_COUNT       0
 #define BOARD_HAS_STATUS_LED     1
 #define BOARD_HAS_BATTERY        0
+#define BOARD_LOW_BATTERY_VIA_VDD 0
 // Two I2S ports at different rates share the one APLL, so neither uses it.
 // See audioStreamTask.
 #define BOARD_I2S_USE_APLL       0

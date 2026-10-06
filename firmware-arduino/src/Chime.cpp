@@ -173,6 +173,14 @@ void playBootChime() {
     playResampledOnOpenPort(kBootSoundPcm, kBootSoundFrames, kBootSoundRate);
 }
 
+void playLowBatteryReminder() {
+    Serial.printf("Chime: low battery, %u frames @ %d Hz -> %u Hz on the open port\n",
+                  kLowBatterySoundFrames, kLowBatterySoundRate, (unsigned)SAMPLE_RATE);
+    boardSetSpeakerAmp(true);
+    playResampledOnOpenPort(kLowBatterySoundPcm, kLowBatterySoundFrames, kLowBatterySoundRate);
+    boardSetSpeakerAmp(false);
+}
+
 void playSleepChime() {
     Serial.printf("Chime: sleep, %u frames @ %d Hz\n", kSleepSoundFrames, kSleepSoundRate);
     playSample(kSleepSoundPcm, kSleepSoundFrames, kSleepSoundRate);

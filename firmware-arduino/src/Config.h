@@ -126,6 +126,12 @@ extern const int LED_RING_PIN;
 extern const int BATTERY_ADC_PIN;
 extern const int CHARGE_DETECT_PIN;
 
+// For boards with no battery sense (BOARD_LOW_BATTERY_VIA_VDD): an undriven
+// ADC pin that SupplyMonitor biases to a fraction of the chip's own supply,
+// and an unused screen's chip select to hold high meanwhile. -1 elsewhere.
+extern const int SUPPLY_SENSE_PIN;
+extern const int LCD_CS_PIN;
+
 // I2S Speaker pins
 extern const int I2S_WS_OUT;
 extern const int I2S_BCK_OUT;

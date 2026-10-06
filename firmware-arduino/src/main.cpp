@@ -7,6 +7,7 @@
 #include "FactoryReset.h"
 #include "LEDHandler.h"
 #include "OTA.h"
+#include "SupplyMonitor.h"
 #include "WifiManager.h"
 #if !BOARD_SLEEP_VIA_LIGHT_SLEEP
 #include <driver/rtc_io.h>
@@ -598,6 +599,7 @@ void setup() {
 
   displaySetup();
   batteryBegin();
+  supplyMonitorBegin();
   noteActivity();
 
   // Before the tasks, not inside one: networkTask is created at the highest
@@ -736,6 +738,7 @@ void loop() {
     audioMemoryReport();
   }
   checkIdleTimeout();
+  supplyMonitorPoll();
   processSleepRequest();
   if (otaState == OTA_IN_PROGRESS) {
     loopOTA();

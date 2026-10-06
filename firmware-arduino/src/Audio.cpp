@@ -6,6 +6,7 @@
 #include "Codec.h"
 #include "IoExpander.h"
 #include "LEDHandler.h"
+#include "SupplyMonitor.h"
 #if BOARD_MIC_DOWNSAMPLE_3_2
 #include "Downsample.h"
 #endif
@@ -1054,6 +1055,14 @@ void audioStreamTask(void *parameter) {
             if (played > 0) decodeStatsNoteAudioOut();
         }
         else {
+#if BOARD_LOW_BATTERY_VIA_VDD
+            // Here because this task owns the port. Idle only, so it never
+            // talks over the toy or into an open mic; a reminder that falls
+            // due mid-conversation waits for the turn to end.
+            if (deviceState == IDLE && supplyTakeReminder()) {
+                playLowBatteryReminder();
+            }
+#endif
             // Always read: BufferPrint writes with portMAX_DELAY, so a producer
             // that filled the ring stays blocked until something drains it.
             drainAudioBuffer();
@@ -1110,8 +1119,10 @@ static volatile uint32_t micSendMinHeap = UINT32_MAX;
 // as speech and the device sat in THINKING waiting for an answer to nothing
 // (2026-09-24). The gain is now 24dB, which halves both: silence ~230, speech
 // ~530 averaged over a press with its pauses, its words well above that.
+// The Spotpear AI Toy takes the same number on the strength of the same codec
+// at the same gains; its own mic has not been measured.
 #ifndef MIC_VOICE_LEVEL_OVERRIDE
-#if defined(BOARD_XMINI_C3)
+#if defined(BOARD_XMINI_C3) || defined(BOARD_SPOTPEAR_AI_TOY)
 static const int32_t MIC_VOICE_LEVEL = 450;
 #else
 static const int32_t MIC_VOICE_LEVEL = 150;

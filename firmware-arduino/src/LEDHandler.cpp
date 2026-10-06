@@ -1,5 +1,6 @@
 #include "LEDHandler.h"
 #include "LedRing.h"
+#include "SupplyMonitor.h"
 
 // This file was written for a discrete RGB LED on three GPIOs, which is what
 // the breadboard kit has. The Waveshare board has a seven-pixel WS2812 ring on
@@ -365,7 +366,9 @@ void ledTask(void *parameter)
         switch (deviceState)
         {
         case IDLE:
-            setStaticColor(StaticColor::GREEN);
+            // Red instead of green once the battery is nearly flat. Only
+            // boards with BOARD_LOW_BATTERY_VIA_VDD ever report low.
+            setStaticColor(supplyLow() ? StaticColor::RED : StaticColor::GREEN);
             break;
         case SOFT_AP:
             setStaticColor(StaticColor::MAGENTA);

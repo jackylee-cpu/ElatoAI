@@ -102,8 +102,11 @@ String authTokenGlobal;
 volatile DeviceState deviceState = IDLE;
 
 // I2S and Audio parameters
-#if defined(BOARD_XMINI_C3)
+#if defined(BOARD_XMINI_C3) || defined(BOARD_SPOTPEAR_AI_TOY)
 
+// Both C3 boards wire the ES8311, its amplifier, I2C and BOOT to the same
+// pins, so this one block serves both; only the LED and the battery differ.
+//
 // One ES8311 on one full-duplex bus, so the Waveshare argument applies: one
 // LRCK, one rate. Unlike the Waveshare board there is no ES7210 to hold it to
 // 16kHz, so it runs at 24kHz, as xiaozhi runs it: the server's stream then
@@ -123,20 +126,43 @@ const uint32_t MIC_SAMPLE_RATE = 24000;
 const i2s_port_t I2S_PORT_IN = I2S_NUM_0;
 const i2s_port_t I2S_PORT_OUT = I2S_NUM_0;
 
-// No status LED on this board (BOARD_HAS_STATUS_LED is 0, so LEDHandler
-// drives nothing). Kept out of the GPIO range like the Waveshare selectors so
-// a stray digitalWrite() cannot land on a real pin -- in particular not on
-// GPIO2, which the open-source xiaozhi config calls the LED but which is the
-// battery divider here.
+// Kept out of the GPIO range like the Waveshare selectors so a stray
+// digitalWrite() cannot land on a real pin -- in particular not on GPIO2,
+// which is the battery divider on the xmini-c3.
 const int BLUE_LED_PIN = 202;
 const int RED_LED_PIN = 200;
 const int GREEN_LED_PIN = 201;
+
+#if defined(BOARD_SPOTPEAR_AI_TOY)
+// One WS2812 on GPIO2 -- the vendor firmware drives it as xiaozhi's SingleLed,
+// an RMT led_strip of one pixel -- so it goes through the ring path with a
+// ring of one.
+//
+// No battery sense: the board takes a cell, but every ADC-capable pin
+// (GPIO0-5) is wired to something, so BATTERY_ADC_PIN stays -1.
+const int LED_RING_PIN = 2;
+const int BATTERY_ADC_PIN = -1;
+const int CHARGE_DETECT_PIN = -1;
+
+// What it gets instead is a low-battery warning from the chip's own supply
+// (SupplyMonitor.cpp). GPIO0 is the screen's SCLK, which this firmware never
+// drives; with both internal pulls on it sits at about 45% of VDD, which
+// ADC1 channel 0 can read. GPIO20 is the screen's CS, held high so the
+// panel ignores whatever GPIO0 does.
+const int SUPPLY_SENSE_PIN = 0;
+const int LCD_CS_PIN = 20;
+#else
+// No status LED on the xmini-c3 (BOARD_HAS_STATUS_LED is 0, so LEDHandler
+// drives nothing).
 const int LED_RING_PIN = -1;
 
 // Battery sense divider on ADC1 channel 2, and the charger's status output,
 // high while charging. Both read out of the vendor firmware; see Battery.cpp.
 const int BATTERY_ADC_PIN = 2;
 const int CHARGE_DETECT_PIN = 12;
+const int SUPPLY_SENSE_PIN = -1;
+const int LCD_CS_PIN = -1;
+#endif
 
 const int I2S_MCLK_OUT = 10;
 
@@ -161,7 +187,9 @@ const gpio_num_t VOLUME_UP_PIN = GPIO_NUM_NC;
 const gpio_num_t VOLUME_DOWN_PIN = GPIO_NUM_NC;
 const gpio_num_t TOUCH_PAD_PIN = GPIO_NUM_NC;
 
-// ES8311 at 0x18 and the SSD1306 at 0x3C.
+// ES8311 at 0x18, and the SSD1306 at 0x3C on the xmini-c3. The Spotpear board's
+// screen is an SPI ST7789 that this firmware leaves alone, so the display
+// scan finds nothing here and it runs headless.
 const int I2C_SDA_PIN = 3;
 const int I2C_SCL_PIN = 4;
 
@@ -203,6 +231,8 @@ const int LED_RING_PIN = 38;
 
 const int BATTERY_ADC_PIN = -1;
 const int CHARGE_DETECT_PIN = -1;
+const int SUPPLY_SENSE_PIN = -1;
+const int LCD_CS_PIN = -1;
 
 // The shared I2S bus. BCLK and LRCK are common to both codecs; only the data
 // lines are separate, and even those are one pin each rather than a pair.
@@ -260,6 +290,8 @@ const int LED_RING_PIN = -1;
 
 const int BATTERY_ADC_PIN = -1;
 const int CHARGE_DETECT_PIN = -1;
+const int SUPPLY_SENSE_PIN = -1;
+const int LCD_CS_PIN = -1;
 
 // Pins follow the xiaozhi `bread-compact-wifi` wiring, which is what this kit
 // shipped with: a raw I2S mic and a MAX98357A on separate pin sets (simplex
