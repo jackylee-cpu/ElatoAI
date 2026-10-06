@@ -1,44 +1,13 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * What the toy remembers about this child.
+ * The old memory store's raw lines (`memories`), one per thing the child said.
  *
- * These rows are the only thing a memory rebuild replays, so deleting one here
- * really does erase it -- the raw `conversations` transcript is never used as a
- * memory source, precisely so that a deletion cannot be undone by it.
+ * Nothing reads these since that store was removed; they are only cleared, so
+ * that "Clear all" leaves nothing of the child behind.
  *
- * RLS scopes every query to the signed-in owner, so no user id is passed.
+ * RLS scopes every query to the signed-in owner.
  */
-export const dbGetMemories = async (
-    supabase: SupabaseClient,
-    limit: number = 200
-): Promise<IMemory[]> => {
-    const { data, error } = await supabase
-        .from("memories")
-        .select("memory_id, content, agent_reply, kind, source_personality_key, created_at")
-        .order("created_at", { ascending: false })
-        .limit(limit);
-
-    if (error) {
-        throw error;
-    }
-    return (data ?? []) as IMemory[];
-};
-
-export const dbDeleteMemory = async (
-    supabase: SupabaseClient,
-    memoryId: string
-) => {
-    const { error } = await supabase
-        .from("memories")
-        .delete()
-        .eq("memory_id", memoryId);
-
-    if (error) {
-        throw error;
-    }
-};
-
 export const dbDeleteAllMemories = async (
     supabase: SupabaseClient,
     userId: string
@@ -75,6 +44,61 @@ export const dbGetMemorySegments = async (
         throw error;
     }
     return (data ?? []) as IMemorySegment[];
+};
+
+/**
+ * The facts the toy currently holds about this child.
+ *
+ * Active ones only: a replaced fact stays in the table for tracing but is no
+ * longer in any prompt, so showing it would read as the toy still believing it.
+ */
+export const dbGetMemoryFacts = async (
+    supabase: SupabaseClient,
+    limit: number = 200
+): Promise<IMemoryFact[]> => {
+    const { data, error } = await supabase
+        .from("memory_facts")
+        .select("fact_id, content, chat_group_id, created_at")
+        .is("superseded_at", null)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+    if (error) {
+        throw error;
+    }
+    return (data ?? []) as IMemoryFact[];
+};
+
+/**
+ * Forget one fact. A database trigger also drops the notes from the
+ * conversation it was learned in, which could otherwise still mention it.
+ */
+export const dbDeleteMemoryFact = async (
+    supabase: SupabaseClient,
+    factId: string
+) => {
+    const { error } = await supabase
+        .from("memory_facts")
+        .delete()
+        .eq("fact_id", factId);
+
+    if (error) {
+        throw error;
+    }
+};
+
+export const dbDeleteAllMemoryFacts = async (
+    supabase: SupabaseClient,
+    userId: string
+) => {
+    const { error } = await supabase
+        .from("memory_facts")
+        .delete()
+        .eq("user_id", userId);
+
+    if (error) {
+        throw error;
+    }
 };
 
 /**

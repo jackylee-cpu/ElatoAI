@@ -7,9 +7,9 @@ write path.
 
 It does not cover addresses, school names or surnames -- those need judgement,
 not a regex, and they belong to the extraction layer that reads a turn and
-decides what it means. The summariser prompt already refuses them; a future
-facts layer would be where they are properly handled. Pretending this module
-does more than it does would be worse than the gap.
+decides what it means. The consolidation prompt (memory/summarise.py) refuses
+them for both summaries and facts. Pretending this module does more than it
+does would be worse than the gap.
 
 **Dates are not sensitive and must survive.** A birthday, a trip next Saturday,
 the day a puppy arrives -- these are exactly what a child wants the toy to
@@ -18,12 +18,12 @@ and looks identical to the front of an ID number. So date-shaped runs are
 removed before anything is counted, and the month and day are range-checked so
 that "12-34-5678" is not waved through as a date.
 
-A flagged turn is kept out of `memories` and out of VoiceMem, but stays in
-`conversations`. That split is the point: `conversations` is a transcript a
-parent reads and can delete, and it is never replayed into a prompt, whereas
-everything in `memories` is eventually spoken back by the toy. The number a
-child read out loud stays visible to their parent, and stops being something
-the toy knows.
+A flagged turn stays in `conversations` but is never handed to consolidation,
+so it reaches no segment and no fact; every fact is checked again before it is
+written. That split is the point: `conversations` is a transcript a parent
+reads and can delete, and it is never replayed into a prompt, whereas segments
+and facts are eventually spoken back by the toy. The number a child read out
+loud stays visible to their parent, and stops being something the toy knows.
 """
 
 from __future__ import annotations

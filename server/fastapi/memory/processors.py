@@ -4,38 +4,27 @@ The governing rule here is that **neither processor ever holds a frame**.
 
 Barge-in on this pipeline already drops audio on roughly one turn in three, and
 the cause is a frame-ordering and STT-mute-latch race around interruption --
-see the comments in bot.py around InterruptionFrame, which note that Pipecat
-pushes no TTSStoppedFrame when a turn is interrupted. Pipecat processes frames
-in order, one at a time, so an `await` inside `process_frame` stalls everything
-queued behind it, including the InterruptionFrame itself. An interruption
-flushes the pipeline's queues, so a TranscriptionFrame released after that
-stall can land on an aggregator that has already been reset: the user's line
-goes into the context with no LLM run to answer it, and the toy simply says
-nothing. That is the existing symptom, and a stall makes it far more likely.
+see the comments in bot.py around InterruptionFrame. Pipecat processes frames in
+order, one at a time, so an `await` inside `process_frame` stalls everything
+queued behind it, including the InterruptionFrame itself.
 
-So memory retrieval is a side effect, never a step:
+Nothing here needs to wait anyway. What a turn gets from memory -- the running
+summary of this session -- is a string already sitting on the MemorySession,
+and what gets written is handed to a queue. Who the child is and what the last
+sessions were about are in the system prompt, put there once at connect.
 
-  * the search starts on the first interim transcript, while the child is still
-    talking, and its cost is paid out of time we were spending anyway;
-  * the final transcript uses the result only if it is already there;
-  * what gets injected is the shared LLMContext, not a frame, so injection
-    cannot perturb frame ordering at all.
-
-VoiceMem's own docs put a recall at roughly 1-2s of wall time, so on a short
-utterance the prefetch will genuinely not be ready. Skipping memory for that
-turn is the correct trade: a toy that pauses is worse than a toy that forgets.
+What gets injected is the shared LLMContext, not a frame, so injection cannot
+perturb frame ordering at all.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
-    InterimTranscriptionFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -45,7 +34,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from memory.session import SEARCH_BLOCK_MS, MemorySession, PendingTurn
+from memory.session import MemorySession, PendingTurn
 
 # How many completed exchanges stay in the prompt verbatim. Pipecat's context
 # otherwise grows for the whole session, and on a toy that is left connected
@@ -59,8 +48,8 @@ MAX_HISTORY_TURNS = max(0, min(int(os.getenv("MEMORY_MAX_HISTORY_TURNS", "8")), 
 
 # The one context message memory ever writes. Kept as a marker so each turn
 # rewrites the same message instead of appending a new one -- appending would
-# grow the prompt by a memory block per turn and re-state stale memories.
-_MEMORY_MARKER = "<<voicemem>>"
+# grow the prompt by a memory block per turn and re-state stale summaries.
+_MEMORY_MARKER = "<<memory>>"
 
 
 class UserTurnRelay:
@@ -116,7 +105,7 @@ def _is_memory_message(message: object) -> bool:
 
 
 class MemoryProcessor(FrameProcessor):
-    """Prefetch on interim transcripts, inject on the final one, never wait."""
+    """On each final transcript: trim the history, refresh the memory message."""
 
     def __init__(
         self,
@@ -130,176 +119,22 @@ class MemoryProcessor(FrameProcessor):
         self._context = context
         self._relay = relay
         self._max_history_turns = max_history_turns
-        self._pending: asyncio.Task | None = None
-        self._pending_turn = 0
-        self._turn = 0
-        self._prefetched_for = ""
-        self._started_at = 0.0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, InterruptionFrame):
-            # Whatever we were looking up belongs to a turn that no longer
-            # exists. Bumping the turn id also stops a late result from being
-            # injected into the next turn.
-            self._cancel_pending()
-            self._turn += 1
-
-        elif isinstance(frame, InterimTranscriptionFrame):
-            self._maybe_prefetch(frame.text or "")
-
-        elif isinstance(frame, TranscriptionFrame):
+        if isinstance(frame, TranscriptionFrame):
             text = (frame.text or "").strip()
             if text:
-                await self._inject(text)
+                # Rewritten even when the summary is empty: the trim has to run
+                # on every turn, not only on the turns with something to add.
+                self._rewrite_context(self._memory.session_block())
                 # Hand the line to the capture processor downstream: the
                 # aggregator between us is about to consume this frame.
                 if self._relay is not None:
                     self._relay.set(text)
-            self._turn += 1
 
         await self.push_frame(frame, direction)
-
-    # ── prefetch ─────────────────────────────────────────────────────────────
-
-    def _maybe_prefetch(self, text: str) -> None:
-        """Start one lookup per turn, as early as there is anything to look up."""
-        text = text.strip()
-        if not text or self._pending is not None:
-            return
-        # Interim transcripts arrive character by character on some providers;
-        # a two-character query retrieves noise and burns the turn's one shot.
-        if len(text) < 4:
-            return
-        self._prefetched_for = text
-        self._pending_turn = self._turn
-        self._started_at = time.monotonic()
-        self._pending = asyncio.create_task(self._memory.search(text))
-        logger.debug("Memory lookup started on turn {} for {!r}", self._turn, text)
-
-    def _cancel_pending(self) -> None:
-        if self._pending is not None and not self._pending.done():
-            self._pending.cancel()
-        self._pending = None
-        self._prefetched_for = ""
-
-    # ── injection ────────────────────────────────────────────────────────────
-
-    async def _inject(self, text: str) -> None:
-        """Assemble this turn's memory block and rewrite the context.
-
-        Two sources, in the order they are useful:
-
-          * `session_block()` -- the running summary of this conversation. Free
-            and always present, and the reason the history window below is a
-            window rather than a hole.
-          * the prefetched search -- what this child said in *other* sessions,
-            if the lookup happened to finish. Often it did not, which is why it
-            is second and why nothing waits for it.
-
-        The context is rewritten even when both are empty: the trim has to run
-        on every turn, not only on the turns that had something to remember.
-        """
-        running = self._memory.session_block()
-        retrieved = await self._collect(text)
-        self._rewrite_context("\n\n".join(part for part in (running, retrieved) if part))
-
-    async def _collect(self, text: str) -> str:
-        """The prefetched block, if it is ready. Waits only if told to."""
-        task = self._pending
-        self._pending = None
-        if task is None or self._pending_turn != self._turn:
-            # Nothing in flight, or it belongs to an interrupted turn. Both
-            # mean this turn answers with no cross-session recall -- the running
-            # summary still goes in -- and that is invisible from the outside,
-            # so say which it was. "No retrieval", not "no memory": since the
-            # session-summary half landed, the two have to be told apart in the
-            # log or every quiet turn reads like a broken feature.
-            if task is not None:
-                task.cancel()
-                logger.info(
-                    "No retrieval this turn: the lookup belonged to turn {}, we are "
-                    "on turn {} (an interruption came between them)",
-                    self._pending_turn,
-                    self._turn,
-                )
-            else:
-                logger.info(
-                    "No retrieval this turn: no lookup was ever started for {!r} "
-                    "(the recognizer emitted no interim transcript long enough "
-                    "to search on)",
-                    text,
-                )
-            return ""
-
-        if task.done():
-            return self._result_of(task)
-
-        if SEARCH_BLOCK_MS <= 0:
-            # The default. Let it finish in the background so the store still
-            # warms, but do not make the child wait for it.
-            waited = (time.monotonic() - self._started_at) * 1000
-            logger.info(
-                "No retrieval this turn: the lookup for {!r} has run {:.0f}ms and is "
-                "not done, and VOICEMEM_SEARCH_BLOCK_MS is 0 so nothing waits "
-                "for it. Raise it to about 800 if turns keep missing.",
-                self._prefetched_for,
-                waited,
-            )
-            self._discard(task)
-            return ""
-
-        started = time.monotonic()
-        try:
-            block = await asyncio.wait_for(
-                asyncio.shield(task), timeout=SEARCH_BLOCK_MS / 1000
-            )
-        except asyncio.TimeoutError:
-            logger.debug("Memory lookup still running after {}ms, skipping", SEARCH_BLOCK_MS)
-            self._discard(task)
-            return ""
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Memory lookup failed: {}", exc)
-            return ""
-        logger.debug("Memory lookup waited {:.0f}ms", (time.monotonic() - started) * 1000)
-        return block or ""
-
-    @staticmethod
-    def _discard(task: asyncio.Task) -> None:
-        """Let a lookup finish in the background without anyone awaiting it.
-
-        The callback has to tolerate cancellation: calling `.exception()` on a
-        cancelled task re-raises CancelledError, and inside a done-callback that
-        surfaces as an unhandled exception in the event loop -- pages of
-        traceback for the entirely normal case of a barge-in.
-        """
-
-        def _swallow(finished: asyncio.Task) -> None:
-            if finished.cancelled():
-                return
-            exc = finished.exception()
-            if exc is not None:
-                logger.debug("Background memory lookup failed: {}", exc)
-
-        task.add_done_callback(_swallow)
-
-    @staticmethod
-    def _result_of(task: asyncio.Task) -> str:
-        if task.cancelled():
-            return ""
-        exc = task.exception()
-        if exc is not None:
-            logger.warning("Memory lookup failed: {}", exc)
-            return ""
-        block = task.result() or ""
-        # A store with nothing relevant in it looks exactly like a lookup that
-        # never ran, from the outside. Only the log can tell them apart.
-        logger.info(
-            "Memory lookup ready: {}",
-            f"{len(block)} chars injected" if block else "no relevant memories",
-        )
-        return block
 
     def _rewrite_context(self, block: str) -> None:
         """Trim the history window, then put one fresh memory message at the end.
@@ -308,10 +143,8 @@ class MemoryProcessor(FrameProcessor):
         the prompt grows by a block per turn and carries stale memories
         forward. And it belongs at the end: this runs before the user
         aggregator appends the child's line, so appending now puts memory
-        immediately ahead of the line it was retrieved for -- the same
-        placement VoiceMem's own `inject()` uses. Rewriting the old entry in
-        place would instead leave it stranded near the top as the conversation
-        grows.
+        immediately ahead of it. Rewriting the old entry in place would instead
+        leave it stranded near the top as the conversation grows.
         """
         try:
             messages = self._context.get_messages()
@@ -368,11 +201,11 @@ class MemoryProcessor(FrameProcessor):
 class AssistantTurnCaptureProcessor(FrameProcessor):
     """Pair each user line with the toy's answer and hand both to memory.
 
-    VoiceMem's `ingest(text, agent_reply=...)` wants the exchange, not the two
-    halves separately: the left brain uses the reply to disambiguate what the
-    child meant, and the right brain attributes emotion across the pair. So the
-    write waits until the answer is complete -- which is also comfortably off
-    the critical path.
+    Memory wants the exchange, not the two halves separately: the transcript
+    stores both, and consolidation reads the reply to understand what the
+    child meant ("yes" means nothing without the question). So the write waits
+    until the answer is complete -- which is also comfortably off the critical
+    path.
 
     The delta accumulation mirrors what bot.py already does for the browser
     transcript, rather than inventing a second shape for the same thing.

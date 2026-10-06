@@ -282,9 +282,6 @@ def create_app() -> FastAPI:
             selected["llm"],
             selected["tts"],
         )
-        # Loading the embedding model lazily would put roughly two seconds on
-        # the first child's first sentence, which is the worst place for it.
-        await memory_session.warmup()
 
     @app.websocket("/ws/browser")
     async def browser_websocket(websocket: WebSocket):
@@ -357,13 +354,13 @@ def create_app() -> FastAPI:
                 language_code=profile.language_code,
             )
         finally:
-            # Draining pending writes and uploading the snapshot hang off this,
-            # and a browser tab closing is exactly the disconnect that would
-            # otherwise lose the last turn -- the same reason the esp32 route
-            # releases in a finally.
+            # Draining pending writes and summarising the last stretch hang off
+            # this, and a browser tab closing is exactly the disconnect that
+            # would otherwise lose the last turn -- the same reason the esp32
+            # route releases in a finally.
             if memory is not None:
                 try:
-                    await memory.release()
+                    await memory_session.release(memory)
                 except Exception as exc:  # noqa: BLE001 - teardown must not raise
                     logger.warning(
                         "Could not persist memory for {}: {}", user_id, exc
@@ -425,14 +422,13 @@ def create_app() -> FastAPI:
                 language_code=personality.language_code,
             )
         finally:
-            # Draining pending writes, running the session-boundary batch and
-            # uploading the snapshot all hang off this. It has to be in the
-            # finally: a device that drops off wifi never produces a clean
-            # disconnect event, and that last turn is usually the one worth
-            # keeping.
+            # Draining pending writes and summarising the last stretch hang off
+            # this. It has to be in the finally: a device that drops off wifi
+            # never produces a clean disconnect event, and that last turn is
+            # usually the one worth keeping.
             if memory is not None:
                 try:
-                    await memory.release()
+                    await memory_session.release(memory)
                 except Exception as exc:  # noqa: BLE001 - teardown must not raise
                     logger.warning("Could not persist memory for {}: {}", mac_address, exc)
             if session_key:

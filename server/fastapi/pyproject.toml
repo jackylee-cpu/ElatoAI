@@ -9,9 +9,8 @@ dependencies = [
     # in the same change that ports the pipeline, not before.
     "pipecat-ai[webrtc,websocket,silero,deepgram,openai,cartesia,google,grok,runner,openrouter,minimax,whisper,mlx-whisper,azure]>=1.7.0,<1.8",
     "pipecat-ai-cli",
-    # Long-term memory. Pulls torch through sentence-transformers; the Docker
-    # build installs the CPU-only wheel first so it does not drag in CUDA.
-    "voicemem>=0.2.3",
+    # world_context.py names its timezone; slim images may not ship zoneinfo.
+    "tzdata",
 ]
 
 # This is an application, not a library, but the README installs it with

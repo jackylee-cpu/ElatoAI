@@ -229,22 +229,25 @@ declare global {
         uptime: number | null;
     }
 
-    interface IMemory {
-        memory_id: string;
+    /**
+     * One thing the toy knows about the child, learned from a conversation.
+     *
+     * Only active facts are ever listed: one that was replaced by a newer
+     * version keeps its row for tracing, with `superseded_at` set.
+     */
+    interface IMemoryFact {
+        fact_id: string;
         content: string;
-        agent_reply: string | null;
-        kind: "fact" | "affect";
-        source_personality_key: string | null;
+        chat_group_id: string | null;
         created_at: string;
     }
 
     /**
-     * One conversation, compressed to a sentence or two.
+     * One stretch of a conversation, compressed to a sentence or two.
      *
-     * Derived from the utterances in `IMemory`, never edited by hand: this is
-     * what the toy reads at the start of the next conversation, and it is the
-     * layer a parent should be shown first. The raw lines it was made from are
-     * the layer they delete from.
+     * Written by the voice server, never edited by hand. The latest couple
+     * from conversations with substance are what the toy reads at the start
+     * of the next one.
      */
     interface IMemorySegment {
         segment_id: string;

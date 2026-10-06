@@ -17,5 +17,6 @@ venv/
 .idea/
 .vscode/
 
-# Local VoiceMem stores. Working cache only -- Supabase is the source of truth.
+# Local stores left by the VoiceMem memory removed on 2026-09-24. Nothing
+# writes here any more; safe to delete.
 voicemem_spaces/

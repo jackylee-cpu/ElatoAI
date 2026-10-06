@@ -2,19 +2,14 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
-import {
-    Accordion,
-    AccordionContent,
-    AccordionItem,
-    AccordionTrigger,
-} from "@/components/ui/accordion";
 import { useToast } from "@/components/ui/use-toast";
 import { createClient } from "@/utils/supabase/client";
 import {
     dbDeleteAllMemories,
+    dbDeleteAllMemoryFacts,
     dbDeleteAllMemorySegments,
-    dbDeleteMemory,
-    dbGetMemories,
+    dbDeleteMemoryFact,
+    dbGetMemoryFacts,
     dbGetMemorySegments,
 } from "@/db/memories";
 import { invalidateMemories } from "@/app/actions";
@@ -23,8 +18,9 @@ import {
     memorySectionTitle,
     memorySectionSubtitle,
     memorySectionEmpty,
-    memoryLinesLabel,
-    memoryLinesDescription,
+    memoryFactsLabel,
+    memoryFactsDescription,
+    memoryNotesLabel,
 } from "@/lib/data";
 
 interface MemorySectionProps {
@@ -34,36 +30,34 @@ interface MemorySectionProps {
 /**
  * What the toy remembers, and the way to take it back.
  *
- * Two layers, shown in the order a parent cares about them. The summaries are
- * what the toy actually reads when it next says hello, and they read like
- * something a person wrote. The utterances underneath are the raw material --
- * questions, corrections, half-sentences that only make sense in context -- and
- * showing those as the answer to "what does it remember" made the feature look
- * broken when it was working.
+ * Two layers, shown in the order a parent cares about them. The facts are who
+ * the toy thinks the child is -- a name, a pet, a favourite thing -- and they
+ * are in its mind for every conversation, so each one can be deleted on its
+ * own. The notes underneath are what each conversation was about; the latest
+ * couple are what the toy reads when it next says hello.
  *
- * Deleting stays on the raw layer, because that is the layer with teeth: a
- * rebuild only ever replays those rows, so removing one is the only deletion
- * the toy cannot undo. Summaries are derived, and go when the memory revision
- * moves.
+ * The raw lines the old memory store kept (`memories`) are no longer shown:
+ * nothing reads them since that store was removed, and "Clear all" still
+ * wipes them.
  */
 const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
     const supabase = createClient();
     const { toast } = useToast();
-    const [memories, setMemories] = React.useState<IMemory[] | null>(null);
     const [segments, setSegments] = React.useState<IMemorySegment[] | null>(null);
+    const [facts, setFacts] = React.useState<IMemoryFact[] | null>(null);
     const [busyId, setBusyId] = React.useState<string | null>(null);
 
     const load = React.useCallback(async () => {
         try {
-            const [loadedSegments, loadedMemories] = await Promise.all([
+            const [loadedFacts, loadedSegments] = await Promise.all([
+                dbGetMemoryFacts(supabase),
                 dbGetMemorySegments(supabase),
-                dbGetMemories(supabase),
             ]);
+            setFacts(loadedFacts);
             setSegments(loadedSegments);
-            setMemories(loadedMemories);
         } catch {
+            setFacts([]);
             setSegments([]);
-            setMemories([]);
             toast({
                 description: "Could not load what your toy remembers.",
                 variant: "destructive",
@@ -76,20 +70,20 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
     }, [load]);
 
     const afterDelete = async (message: string) => {
-        // Bump the revision and drop the device session, or the toy keeps the
-        // deleted memory in its own working copy until it next reconnects.
+        // The toy read its memory into the prompt when it connected. Dropping
+        // the device session makes it read again now, without what was deleted.
         await invalidateMemories();
         await load();
         toast({ description: message });
     };
 
-    const onDelete = async (memoryId: string) => {
-        setBusyId(memoryId);
+    const onDeleteFact = async (factId: string) => {
+        setBusyId(factId);
         try {
-            await dbDeleteMemory(supabase, memoryId);
+            await dbDeleteMemoryFact(supabase, factId);
             await afterDelete("Forgotten.");
         } catch {
-            toast({ description: "Could not delete that memory.", variant: "destructive" });
+            toast({ description: "Could not delete that.", variant: "destructive" });
         } finally {
             setBusyId(null);
         }
@@ -98,9 +92,12 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
     const onDeleteAll = async () => {
         setBusyId("all");
         try {
-            // Summaries first. If the second call fails, a parent is left with
-            // notes and no lines, which reads as "it still remembers"; the other
-            // order leaves lines and no notes, which is merely untidy.
+            // What the toy reads first. If a later call fails, a parent is left
+            // with leftovers the toy never reads, which is merely untidy; the
+            // other order leaves facts behind, which reads as "it still
+            // remembers". `memories` is the old store's raw lines, cleared here
+            // so "Clear all" means it.
+            await dbDeleteAllMemoryFacts(supabase, selectedUser.user_id);
             await dbDeleteAllMemorySegments(supabase, selectedUser.user_id);
             await dbDeleteAllMemories(supabase, selectedUser.user_id);
             await afterDelete("Your toy has forgotten everything.");
@@ -111,9 +108,8 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
         }
     };
 
-    const loading = segments === null || memories === null;
-    const hasAnything =
-        (segments?.length ?? 0) > 0 || (memories?.length ?? 0) > 0;
+    const loading = facts === null || segments === null;
+    const hasAnything = (facts?.length ?? 0) > 0 || (segments?.length ?? 0) > 0;
 
     return (
         <div className="flex flex-col gap-3 max-w-screen-sm">
@@ -144,8 +140,51 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
                 <Loader2 className="animate-spin text-muted-foreground" size={16} />
             )}
 
-            {!loading && segments!.length === 0 && (
+            {!loading && facts!.length === 0 && segments!.length === 0 && (
                 <p className="text-sm text-muted-foreground">{memorySectionEmpty}</p>
+            )}
+
+            {!loading && facts!.length > 0 && (
+                <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-0.5">
+                        <h3 className="text-sm font-medium">{memoryFactsLabel}</h3>
+                        <p className="text-xs text-muted-foreground">
+                            {memoryFactsDescription}
+                        </p>
+                    </div>
+                    <ul className="flex flex-col gap-2">
+                        {facts!.map((fact) => (
+                            <li
+                                key={fact.fact_id}
+                                className="flex flex-row items-start justify-between gap-3 rounded-lg border p-3"
+                            >
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-sm">{fact.content}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                        {new Date(fact.created_at).toLocaleDateString()}
+                                    </span>
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    aria-label="Forget this"
+                                    onClick={() => onDeleteFact(fact.fact_id)}
+                                    disabled={busyId !== null}
+                                >
+                                    {busyId === fact.fact_id ? (
+                                        <Loader2 className="animate-spin" size={14} />
+                                    ) : (
+                                        <Trash2 size={14} />
+                                    )}
+                                </Button>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
+            {!loading && segments!.length > 0 && facts!.length > 0 && (
+                <h3 className="text-sm font-medium pt-2">{memoryNotesLabel}</h3>
             )}
 
             {!loading && segments!.length > 0 && (
@@ -164,48 +203,6 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
                 </ul>
             )}
 
-            {!loading && memories!.length > 0 && (
-                <Accordion type="single" collapsible>
-                    <AccordionItem value="lines" className="border-b-0">
-                        <AccordionTrigger className="text-sm hover:no-underline">
-                            {memoryLinesLabel} ({memories!.length})
-                        </AccordionTrigger>
-                        <AccordionContent className="flex flex-col gap-2">
-                            <p className="text-xs text-muted-foreground">
-                                {memoryLinesDescription}
-                            </p>
-                            <ul className="flex flex-col gap-2">
-                                {memories!.map((memory) => (
-                                    <li
-                                        key={memory.memory_id}
-                                        className="flex flex-row items-start justify-between gap-3 rounded-lg border p-3"
-                                    >
-                                        <div className="flex flex-col gap-1">
-                                            <span className="text-sm">{memory.content}</span>
-                                            <span className="text-xs text-muted-foreground">
-                                                {new Date(memory.created_at).toLocaleDateString()}
-                                            </span>
-                                        </div>
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            aria-label="Delete this line"
-                                            onClick={() => onDelete(memory.memory_id)}
-                                            disabled={busyId !== null}
-                                        >
-                                            {busyId === memory.memory_id ? (
-                                                <Loader2 className="animate-spin" size={14} />
-                                            ) : (
-                                                <Trash2 size={14} />
-                                            )}
-                                        </Button>
-                                    </li>
-                                ))}
-                            </ul>
-                        </AccordionContent>
-                    </AccordionItem>
-                </Accordion>
-            )}
         </div>
     );
 };

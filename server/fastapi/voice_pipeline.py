@@ -129,9 +129,10 @@ def build_voice_pipeline(
     # three exactly where the env vars put them. See language_profiles.py.
     language = language_profiles.resolve(language_code)
 
-    # The system-prompt half of long-term memory: what the last sessions ended
-    # on. `memory_preamble` has been an unused hook in build_session_prompt
-    # since it was written, and this is the thing it was for.
+    # The system-prompt half of long-term memory: who the child is (facts) and
+    # what the last sessions ended on (the brief). `memory_preamble` had been
+    # an unused hook in build_session_prompt since it was written, and this is
+    # the thing it was for.
     #
     # It goes in the system instruction rather than a per-turn message because
     # the greeting is queued on connect, before the child has said a word --
@@ -139,10 +140,14 @@ def build_voice_pipeline(
     # is most obvious.
     memory_preamble = child.get("memory_preamble")
     if memory is not None:
-        brief = memory.opening_brief_block()
-        if brief:
-            memory_preamble = brief
-            logger.info("Opened the session with {} chars of memory brief", len(brief))
+        preamble = memory.prompt_preamble()
+        if preamble:
+            memory_preamble = preamble
+            logger.info(
+                "Opened the session with {} fact(s) and {} chars of memory",
+                len(memory.facts),
+                len(preamble),
+            )
 
     system_instruction = build_session_prompt(
         title=title,
@@ -226,31 +231,16 @@ def build_voice_pipeline(
     if extra_after_stt is not None:
         processors.append(extra_after_stt)
 
-    # Long-term memory sits between STT and the aggregator so it sees interim
-    # transcripts (to start the lookup while the child is still talking) and
-    # the final one (to inject before the LLM runs). Neither processor ever
-    # holds a frame -- see memory/processors.py.
+    # Long-term memory sits between STT and the aggregator so it sees the final
+    # transcript before the LLM runs: that is where the history window is
+    # trimmed and the running summary refreshed. Neither processor ever holds a
+    # frame -- see memory/processors.py.
     if memory is not None:
         from memory.processors import (
             AssistantTurnCaptureProcessor,
             MemoryProcessor,
             UserTurnRelay,
         )
-
-        # Memory retrieval is started by the first interim transcript, while the
-        # child is still talking, because a lookup takes long enough (~850ms
-        # measured locally) that starting it at the end of the turn would mean
-        # either waiting or missing. A segmented STT emits no interim frames at
-        # all, so there is nothing to trigger on and memory would silently never
-        # be injected -- say so rather than shipping a feature that quietly does
-        # nothing.
-        if stt_name in {"whisper", "mlx-whisper", "mlx_whisper"}:
-            logger.warning(
-                "STT provider {} produces no interim transcripts, so long-term "
-                "memory will rarely be retrieved in time. Use a streaming STT "
-                "(deepgram, azure) or raise VOICEMEM_SEARCH_BLOCK_MS.",
-                stt_name,
-            )
 
         # The aggregator between these two consumes TranscriptionFrame, so the
         # child's line cannot reach the capture processor as a frame. The relay
