@@ -1,3 +1,6 @@
 .vscode/
 .DS_Store
 local.md
+
+# Backups the prod-readiness tracker writes before each change.
+docs/.*.bak.xlsx
