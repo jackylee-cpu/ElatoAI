@@ -1,6 +1,8 @@
 export const defaultToyId: string = "56224f7f-250d-4351-84ee-e4a13b881c7b";
+// 波波熊 (hk_bobo_bear), the column default of users.personality_id too
+// (migration 20261007170000_cantonese_cast).
 export const defaultPersonalityId: string =
-    "a1c073e6-653d-40cf-acc1-891331689409";
+    "57b31256-eac3-4c69-bf08-35d3c163b22a";
 
 export const paymentLink = "https://buy.stripe.com/bIY0033Dc7LB28o9AJ";
 export const devkitPaymentLink = "https://buy.stripe.com/fZefZ12z82rh3cseV5";

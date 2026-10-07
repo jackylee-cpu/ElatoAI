@@ -354,3 +354,18 @@ VALUES
 -- ALTER TABLE public.users
 -- ADD CONSTRAINT fk_toy_id
 -- FOREIGN KEY (toy_id) REFERENCES public.toys(toy_id);
+-- Seed data runs after the migrations, so the upstream characters above come
+-- back visible on every `supabase db reset`. Retire them again the way
+-- 20261007170000_cantonese_cast.sql does, and move the seed account to 波波熊.
+UPDATE public.personalities
+SET is_hidden = true
+WHERE creator_id IS NULL
+  AND key NOT IN ('hk_bobo_bear', 'hk_dingding_rabbit', 'hk_dudu_dino',
+                  'hk_tiutiu_frog', 'hk_mimi_cat', 'hk_grandpa_tree');
+
+UPDATE public.users AS u
+SET personality_id = '57b31256-eac3-4c69-bf08-35d3c163b22a'
+FROM public.personalities AS p
+WHERE p.personality_id = u.personality_id
+  AND p.creator_id IS NULL
+  AND p.is_hidden = true;
