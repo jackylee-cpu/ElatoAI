@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { createClient } from "@/utils/supabase/server";
 import { createServiceClient } from "@/utils/supabase/service";
 
 const ALGORITHM = "HS256";
@@ -130,8 +129,9 @@ const getUserById = async (userId: string) => {
     return data;
 };
 
+// Service role: the board has no session, and anon can no longer read users.
 const getDevUser = async () => {
-    const supabase = createClient();
+    const supabase = createServiceClient();
     const { data, error } = await supabase.from("users").select("*").eq(
         "email",
         "admin@elatoai.com",
