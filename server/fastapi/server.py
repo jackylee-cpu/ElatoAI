@@ -17,6 +17,7 @@ from loguru import logger
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 import app_settings
+import device_auth
 import language_profiles
 from bot import create_esp32_auth_message, run_bot_session
 import session_content
@@ -400,12 +401,27 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/esp32")
     async def esp32_websocket(websocket: WebSocket):
         await websocket.accept()
-        mac_address = websocket.headers.get("x-device-mac")
+        # Who this is comes from the device token alone. Accept first, then
+        # close with 4401, so the board sees a close code it can act on (fetch
+        # a new token) rather than a bare failed handshake.
+        try:
+            device = device_auth.verify(
+                device_auth.bearer(websocket.headers.get("authorization"))
+            )
+        except device_auth.InvalidDeviceToken as exc:
+            logger.warning(
+                "Refusing ESP32 websocket: {} (X-Device-Mac claims {})",
+                exc,
+                websocket.headers.get("x-device-mac") or "nothing",
+            )
+            await websocket.close(code=4401, reason="invalid device token")
+            return
+        mac_address = device.mac
         logger.info(
-            "ESP32 websocket connected: mac={} rssi={} auth={}",
-            mac_address or "unknown",
+            "ESP32 websocket connected: device={} mac={} rssi={}",
+            device.device_id,
+            mac_address,
             websocket.headers.get("x-wifi-rssi", "unknown"),
-            "yes" if websocket.headers.get("authorization") else "no",
         )
         # The device has no query string to carry a character on, so resolve the
         # one assigned to it in Supabase. This fails open to the defaults.

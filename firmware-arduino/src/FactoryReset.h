@@ -8,8 +8,7 @@
 void setResetComplete() {
     HTTPClient http;
     WiFiClientSecure client;
-    client.setCACert(Vercel_CA_cert);  // Using the existing server certificate
-    
+
     // Construct JSON payload
     JsonDocument doc;
     doc["authToken"] = authTokenGlobal;
@@ -17,12 +16,7 @@ void setResetComplete() {
     String jsonString;
     serializeJson(doc, jsonString);
 
-    // Initialize HTTPS connection with client
-    #ifdef DEV_MODE
-    http.begin("http://" + String(backend_server) + ":" + String(backend_port) + "/api/factory_reset_handler");
-    #else
-    http.begin(client, "https://" + String(backend_server) + "/api/factory_reset_handler");
-    #endif
+    beginBackendRequest(http, client, "/api/factory_reset_handler");
 
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(10000);  // Add timeout for reliability

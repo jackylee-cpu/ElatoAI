@@ -7,6 +7,7 @@
 **/
 #include "WifiManager.h"
 #include "OTA.h"
+#include "Audio.h"
 #include "AsyncJson.h"
 #include "ArduinoJson.h"
 #include <WiFi.h>
@@ -24,85 +25,135 @@ static uint64_t nextProvisionAttemptMillis = 0;
 static uint32_t provisionBackoffMillis = 5000;
 static const uint32_t PROVISION_BACKOFF_MAX = 30000;
 
-bool isDeviceRegistered() {
-  if (!authTokenGlobal.isEmpty()) {
-    return true;
-  }
+// The board's own secret, issued by the web app the first time it called in
+// and never shown again. It is the only thing that proves this board is this
+// board: lose it and the board is locked out until its device_secrets row is
+// deleted, so it lives apart from everything a factory reset of the account
+// side would touch.
+static String loadDeviceSecret() {
+  preferences.begin("device", false);
+  // isKey first: getString on a missing key logs an error on every first boot.
+  String secret = preferences.isKey("secret") ? preferences.getString("secret", "") : String();
+  preferences.end();
+  return secret;
+}
 
+static void storeDeviceSecret(const char *secret) {
+  preferences.begin("device", false);
+  preferences.putString("secret", secret);
+  preferences.end();
+}
+
+// Renew this long before the token runs out, so no session starts on one that
+// is about to die.
+static const uint32_t TOKEN_RENEW_MARGIN_MS = 60UL * 60UL * 1000UL;
+
+static bool deviceTokenFresh() {
+  return !authTokenGlobal.isEmpty() && !authTokenRejected &&
+         (int32_t)(authTokenExpiresAtMs - millis()) > (int32_t)TOKEN_RENEW_MARGIN_MS;
+}
+
+// Trade the device secret for a device token. A board calling in for the very
+// first time has no secret yet and is issued one with the answer.
+static bool fetchDeviceToken() {
     HTTPClient http;
-
-    #ifdef DEV_MODE
-      http.begin("http://" + String(backend_server) + ":" + String(backend_port) +
-                  "/api/generate_auth_token?macAddress=" + WiFi.macAddress());
-    #else
-      WiFiClientSecure client;
-      client.setCACert(Vercel_CA_cert);
-      http.begin(client, "https://" + String(backend_server) +
-                  "/api/generate_auth_token?macAddress=" + WiFi.macAddress());
-    #endif
-
+    WiFiClientSecure client;
+    beginBackendRequest(http, client, "/api/generate_auth_token");
+    http.addHeader("Content-Type", "application/json");
     http.setTimeout(10000);
 
-    int httpCode = http.GET();
+    JsonDocument request;
+    request["macAddress"] = WiFi.macAddress();
+    const String secret = loadDeviceSecret();
+    if (!secret.isEmpty()) {
+        request["deviceSecret"] = secret;
+    }
+    String body;
+    serializeJson(request, body);
+
+    const int httpCode = http.POST(body);
+    if (httpCode != HTTP_CODE_OK && httpCode != 202) {
+        // 401 is the one that needs a person: this board's secret is missing
+        // or wrong, and it cannot get back in by retrying.
+        Serial.printf("[AUTH] generate_auth_token returned %d%s\n", httpCode,
+                      httpCode == 401 ? " -- device secret refused" : "");
+        http.end();
+        return false;
+    }
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, http.getString());
+    http.end();
+    if (error) {
+        Serial.printf("[AUTH] JSON parsing failed: %s\n", error.c_str());
+        return false;
+    }
+
+    const char *issued = doc["device_secret"];
+    if (issued && *issued) {
+        storeDeviceSecret(issued);
+        Serial.println("[AUTH] Device secret issued and stored");
+    }
 
     // 202 means the backend knows this board but no account has claimed it yet.
     // That is a normal state during onboarding, not an error -- keep quiet and
     // let the caller retry.
     if (httpCode == 202) {
-        Serial.println("[AUTH] Registered, waiting to be claimed by an account");
-        http.end();
+        Serial.printf("[AUTH] Registered, waiting to be claimed (code %s)\n",
+                      (const char *)(doc["user_code"] | "?"));
         return false;
     }
 
-    if (httpCode != HTTP_CODE_OK) {
-        Serial.printf("[AUTH] generate_auth_token returned %d\n", httpCode);
+    const char *token = doc["token"];
+    if (!token || !*token) {
+        Serial.println("[AUTH] No token in the response");
+        return false;
     }
+    const uint32_t expiresIn = doc["expires_in"] | 3600;
+    authTokenGlobal = token;
+    authTokenExpiresAtMs = millis() + expiresIn * 1000UL;
+    authTokenRejected = false;
+    Serial.printf("[AUTH] Device token valid for %us\n", (unsigned)expiresIn);
+    return true;
+}
 
-    if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, payload);
-
-        if (error) {
-            Serial.print("JSON parsing failed: ");
-            Serial.println(error.c_str());
-            http.end();
-            return false;
-        }
-
-        String authToken = doc["token"];
-        if (!authToken.isEmpty()) {
-            // Store the auth token in NVS
-            preferences.begin("auth", false);
-            preferences.putString("auth_token", authToken);
-            preferences.end();
-
-            authTokenGlobal = String(authToken);
-            http.end();
-            return true;
-        }
-    }
-
-    // If we get here, either the request failed or no token was found
-    http.end();
-    return false;
+bool isDeviceRegistered() {
+  return deviceTokenFresh() || fetchDeviceToken();
 }
 
 void connectCb();
 
-// Retry acquiring the auth token while connected. Without this a board that is
-// online but unclaimed never opens the websocket and never tries again, so it
-// looks dead until it is power-cycled.
+// Get a session going, and keep its token alive. Without the retry a board that
+// is online but unclaimed never opens the websocket and never tries again, so
+// it looks dead until it is power-cycled.
 void startSessionIfReady() {
-  if (!authTokenGlobal.isEmpty()) return;
+  if (deviceTokenFresh()) return;
+  // A token on its way out is renewed only between sessions: the C3 has no
+  // room for this request's TLS next to the websocket's.
+  if (websocketStarted && webSocket.isConnected()) return;
   if (millis() < nextProvisionAttemptMillis) return;
 
-  if (isDeviceRegistered()) {
-    provisionBackoffMillis = 5000;
-    connectCb();
-    return;
+  bool ok;
+  if (websocketStarted) {
+    // The socket retries on its own every second. Hold it off until the new
+    // token is in its headers, which also keeps its TLS out of the way.
+    xSemaphoreTake(wsMutex, portMAX_DELAY);
+    ok = isDeviceRegistered();
+    if (ok) {
+      webSocket.setExtraHeaders(websocketExtraHeaders().c_str());
+    }
+    xSemaphoreGive(wsMutex);
+  } else {
+    ok = isDeviceRegistered();
+    if (ok) {
+      connectCb();
+    }
   }
 
+  if (ok) {
+    provisionBackoffMillis = 5000;
+    return;
+  }
   nextProvisionAttemptMillis = millis() + provisionBackoffMillis;
   provisionBackoffMillis = min(provisionBackoffMillis * 2, PROVISION_BACKOFF_MAX);
 }

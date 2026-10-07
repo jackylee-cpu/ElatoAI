@@ -29,7 +29,7 @@ COPY . .
 
 # Only NEXT_PUBLIC_* values need to be present at build time — they get
 # inlined into the client bundle. Server-only secrets (OPENAI_API_KEY,
-# JWT_SECRET_KEY, GOOGLE_OAUTH, etc.) are NOT build args: they're supplied
+# DEVICE_JWT_SECRET, GOOGLE_OAUTH, etc.) are NOT build args: they're supplied
 # to the container at runtime (env_file/environment) so they never end up
 # baked into an image layer.
 ARG NEXT_PUBLIC_SUPABASE_URL

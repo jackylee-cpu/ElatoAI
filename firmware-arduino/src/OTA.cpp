@@ -21,6 +21,7 @@ const char *server_certificate = R"EOF(
 
 void markOTAUpdateComplete() {
     HTTPClient http;
+    WiFiClientSecure client;
     // Construct the JSON payload
     JsonDocument doc;
     doc["authToken"] = authTokenGlobal;
@@ -28,14 +29,7 @@ void markOTAUpdateComplete() {
     String jsonString;
     serializeJson(doc, jsonString);
 
-    // Initialize HTTPS connection with client
-    #ifdef DEV_MODE
-        http.begin("http://" + String(backend_server) + ":" + String(backend_port) + "/api/ota_update_handler");
-    #else
-        WiFiClientSecure client;
-        client.setCACert(Vercel_CA_cert);  // Using the existing server certificate
-        http.begin(client, "https://" + String(backend_server) + "/api/ota_update_handler");
-    #endif
+    beginBackendRequest(http, client, "/api/ota_update_handler");
 
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(10000);  // Add timeout for reliability

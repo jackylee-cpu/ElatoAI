@@ -363,12 +363,6 @@ static void expanderKeyTask(void *parameter) {
 }
 #endif
 
-void getAuthTokenFromNVS() {
-  preferences.begin("auth", false);
-  authTokenGlobal = preferences.getString("auth_token", "");
-  preferences.end();
-}
-
 void setupWiFi() {
   WifiManager.startBackgroundTask(
       "ELATO-DEVICE"); // Run the background task to take care of our Wifi
@@ -462,7 +456,6 @@ void setupDeviceMetadata() {
     resetAuth();
   }
 
-  getAuthTokenFromNVS();
   getOTAStatusFromNVS();
 
   if (otaState == OTA_IN_PROGRESS || otaState == OTA_COMPLETE) {

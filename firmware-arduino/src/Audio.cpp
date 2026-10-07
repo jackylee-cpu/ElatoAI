@@ -1342,6 +1342,12 @@ void micTask(void *parameter) {
     }
 }
 
+// A connection the server closes before sending "auth" is one it refused: it
+// checks the device token first and closes with 4401 when it is not live. The
+// library does not hand the close code up, so this is how it shows.
+static bool wsOpen = false;
+static bool wsAuthed = false;
+
 // WEBSOCKET EVENTS
 // networkTask -> webSocket.loop() -> webSocketEvent()
 void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
@@ -1350,6 +1356,12 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     {
     case WStype_DISCONNECTED:
         Serial.printf("[WSc] Disconnected!\n");
+        if (wsOpen && !wsAuthed) {
+            // startSessionIfReady() on the wifi task fetches a new one.
+            Serial.println("[WSc] Closed before auth: device token refused");
+            authTokenRejected = true;
+        }
+        wsOpen = false;
         deviceState = IDLE;
         // Nothing else takes this path to IDLE, so without this the tail of the
         // interrupted turn would still be in the ring when the next one starts.
@@ -1357,6 +1369,8 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_CONNECTED:
         Serial.printf("[WSc] Connected to url: %s\n", payload);
+        wsOpen = true;
+        wsAuthed = false;
         deviceState = PROCESSING;
         // Each websocket is a fresh session on the server, so nothing the user
         // said before this counts towards it.
@@ -1380,6 +1394,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 
         // auth messages
         if (strcmp((char*)type.c_str(), "auth") == 0) {
+            wsAuthed = true;
             // as<float>() on a missing key yields 0, and a factor of 0 makes
             // PitchShiftFixedOutput emit one sample of the grain buffer over
             // and over -- a constant tone at full volume, which is exactly the
@@ -1525,6 +1540,18 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     }
 }
 
+bool websocketStarted = false;
+
+// The server takes the device's identity from the token alone; the MAC rides
+// along only so a refused connection says in the server log who it claimed to
+// be.
+String websocketExtraHeaders()
+{
+    return "Authorization: Bearer " + authTokenGlobal + "\r\n" +
+           "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
+           "X-Device-Mac: " + WiFi.macAddress();
+}
+
 // wifiTask -> WIFIMANAGER::loop() -> WIFIMANAGER::tryConnect() -> connectCb() -> websocketSetup()
 void websocketSetup(const String& server_domain, int port, const String& path)
 {
@@ -1553,14 +1580,9 @@ void websocketSetup(const String& server_domain, int port, const String& path)
     Serial.printf("[WS] connecting to %s://%s:%d%s\n", plaintext ? "ws" : "wss",
                   host.c_str(), wsPort, wsPath.c_str());
 
-    const String headers =
-        "Authorization: Bearer " + String(authTokenGlobal) + "\r\n" +
-        "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
-        "X-Device-Mac: " + WiFi.macAddress();
-
     xSemaphoreTake(wsMutex, portMAX_DELAY);
 
-    webSocket.setExtraHeaders(headers.c_str());
+    webSocket.setExtraHeaders(websocketExtraHeaders().c_str());
     webSocket.onEvent(webSocketEvent);
     webSocket.setReconnectInterval(1000);
     // Cloudflare closes a websocket that has been idle for ~100s, and a quiet
@@ -1575,6 +1597,7 @@ void websocketSetup(const String& server_domain, int port, const String& path)
     } else {
         webSocket.beginSslWithCA(host.c_str(), wsPort, wsPath.c_str(), CA_cert);
     }
+    websocketStarted = true;
 
     xSemaphoreGive(wsMutex);
 }

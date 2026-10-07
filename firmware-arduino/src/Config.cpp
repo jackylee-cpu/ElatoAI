@@ -82,9 +82,15 @@ const char *ws_path = "/fastapi/ws/esp32";
 #error "PROD_MODE requires VOICE_SERVER_DENO, _CLOUDFLARE or _FASTAPI in Config.h"
 #endif
 // Backend server details. Same host as the voice server; PROD talks https on
-// 443, so backend_port only matters to the DEV_MODE http path.
+// 443, so backend_port only matters to the http path.
+#if defined(LOCAL_BACKEND_HOST)
+// A dev board whose web app is on the LAN too (set alongside LOCAL_WS_HOST).
+const char *backend_server = LOCAL_BACKEND_HOST;
+const uint16_t backend_port = LOCAL_BACKEND_PORT;
+#else
 const char *backend_server = "elatoai.hkqft.com";
 const uint16_t backend_port = 3000;
+#endif
 
 #elif defined(ELATO_MODE)
 // ELATO
@@ -99,6 +105,17 @@ const uint16_t backend_port = 3000;
 #endif
 
 String authTokenGlobal;
+uint32_t authTokenExpiresAtMs = 0;
+volatile bool authTokenRejected = false;
+
+void beginBackendRequest(HTTPClient &http, WiFiClientSecure &client, const String &path) {
+#if defined(DEV_MODE) || defined(LOCAL_BACKEND_HOST)
+    http.begin("http://" + String(backend_server) + ":" + String(backend_port) + path);
+#else
+    client.setCACert(Vercel_CA_cert);
+    http.begin(client, "https://" + String(backend_server) + path);
+#endif
+}
 volatile DeviceState deviceState = IDLE;
 
 // I2S and Audio parameters

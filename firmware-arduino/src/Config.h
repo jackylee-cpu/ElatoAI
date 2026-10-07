@@ -39,7 +39,9 @@
 // booted under an older scheme wipe their token once on the next boot; without
 // that, isDeviceRegistered() short-circuits on the stale token and the device
 // never re-registers against its real account.
-#define PROVISION_VERSION 3
+// 4: tokens are no longer stored at all (they last 24 hours and live in RAM);
+// this wipes the parent JWT that versions before it kept in NVS for good.
+#define PROVISION_VERSION 4
 
 extern Preferences preferences;
 extern bool factory_reset_status;
@@ -77,7 +79,13 @@ extern const char *ssid;
 extern const char *ssid_peronal;
 extern const char *password_personal;
 
+// The device token the voice websocket opens with: 24 hours, bought from
+// /api/generate_auth_token with this board's device secret (NVS namespace
+// "device"). Held in RAM only and renewed between sessions; see
+// startSessionIfReady() in WifiManager.cpp.
 extern String authTokenGlobal;
+extern uint32_t authTokenExpiresAtMs;  // millis() at which the token runs out
+extern volatile bool authTokenRejected; // the voice server closed us before "auth"
 
 // WebSocket server details
 extern const char *ws_server;
@@ -87,6 +95,11 @@ extern const char *ws_path;
 // Backend server details
 extern const char *backend_server;
 extern const uint16_t backend_port;
+
+// Start a request to the web app at `path`. The one place that decides http
+// (DEV_MODE, or a LAN backend via LOCAL_BACKEND_HOST) or https; `client` must
+// outlive the request.
+void beginBackendRequest(HTTPClient &http, WiFiClientSecure &client, const String &path);
 
 // I2S and Audio parameters
 extern const uint32_t SAMPLE_RATE;

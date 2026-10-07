@@ -97,6 +97,8 @@ extern volatile bool i2sInputFlushScheduled;
 // WEBSOCKET
 void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length);
 void websocketSetup(const String& server_domain, int port, const String& path);
+String websocketExtraHeaders();
+extern bool websocketStarted;  // websocketSetup() has run; the socket now reconnects itself
 void networkTask(void *parameter);
 
 void transitionToIdle();

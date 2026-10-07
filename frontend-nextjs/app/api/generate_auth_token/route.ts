@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
-import jwt from "jsonwebtoken";
 import { createServiceClient } from "@/utils/supabase/service";
+import {
+    DEVICE_TOKEN_TTL_SECONDS,
+    deviceSecretMatches,
+    hashDeviceSecret,
+    newDeviceSecret,
+    signDeviceToken,
+} from "@/lib/deviceAuth";
 
-const ALGORITHM = "HS256";
 const skipDeviceRegistration =
     process.env.NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION === "True";
 
@@ -11,35 +16,13 @@ const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const CODE_LENGTH = 6;
 const CODE_COLLISION_RETRIES = 5;
 
-interface TokenPayload {
-    [key: string]: any;
-}
-
-const createSupabaseToken = (
-    jwtSecretKey: string,
-    data: TokenPayload,
-    // Set expiration to null for no expiration, or use a very large number like 10 years
-    expireDays: number | null = 3650, // Default to 10 years
-): string => {
-    const toEncode = {
-        aud: "authenticated",
-        role: "authenticated",
-        sub: data.user_id,
-        email: data.email,
-        // Only include exp if expireDays is not null
-        ...(expireDays && {
-            exp: Math.floor(Date.now() / 1000) + (expireDays * 86400),
-        }),
-        user_metadata: {
-            ...data,
-        },
-    };
-
-    const encodedJwt = jwt.sign(toEncode, jwtSecretKey, {
-        algorithm: ALGORITHM,
-    });
-    return encodedJwt;
+type DeviceRow = {
+    device_id: string;
+    mac_address: string;
+    user_code: string;
+    user_id: string | null;
 };
+const DEVICE_COLUMNS = "device_id, mac_address, user_code, user_id";
 
 const generateUserCode = () => {
     const bytes = crypto.getRandomValues(new Uint8Array(CODE_LENGTH));
@@ -50,32 +33,24 @@ const generateUserCode = () => {
 
 /**
  * Find the device row for this MAC, creating it if this is the first time we
- * have heard from the board, and stamp `last_seen_at` either way.
+ * have heard from the board.
  *
  * A freshly created row has a null `user_id`: the board is online but nobody
- * owns it yet, which is what puts it in the web app's claim list.
+ * owns it yet.
  */
-const registerDevice = async (macAddress: string) => {
+const findOrCreateDevice = async (mac: string): Promise<DeviceRow> => {
     const supabase = createServiceClient();
-    const mac = macAddress.trim().toUpperCase();
 
     const { data: existing, error: selectError } = await supabase
         .from("devices")
-        .select("device_id, user_code, user_id")
+        .select(DEVICE_COLUMNS)
         .eq("mac_address", mac)
         .maybeSingle();
 
     if (selectError) {
         throw new Error(selectError.message);
     }
-
     if (existing) {
-        // Best effort -- a failed heartbeat must not stop a claimed device from
-        // getting its token.
-        await supabase
-            .from("devices")
-            .update({ last_seen_at: new Date().toISOString() })
-            .eq("device_id", existing.device_id);
         return existing;
     }
 
@@ -84,12 +59,8 @@ const registerDevice = async (macAddress: string) => {
     for (let attempt = 0; attempt < CODE_COLLISION_RETRIES; attempt++) {
         const { data, error } = await supabase
             .from("devices")
-            .insert({
-                mac_address: mac,
-                user_code: generateUserCode(),
-                last_seen_at: new Date().toISOString(),
-            })
-            .select("device_id, user_code, user_id")
+            .insert({ mac_address: mac, user_code: generateUserCode() })
+            .select(DEVICE_COLUMNS)
             .single();
 
         if (!error) {
@@ -104,7 +75,7 @@ const registerDevice = async (macAddress: string) => {
         if (error.message.includes("mac_address")) {
             const { data: raced } = await supabase
                 .from("devices")
-                .select("device_id, user_code, user_id")
+                .select(DEVICE_COLUMNS)
                 .eq("mac_address", mac)
                 .maybeSingle();
             if (raced) {
@@ -116,86 +87,118 @@ const registerDevice = async (macAddress: string) => {
     throw new Error("Could not allocate a device code");
 };
 
-const getUserById = async (userId: string) => {
+/**
+ * Check the board's secret, or issue one if it has never had one.
+ *
+ * Returns the new secret when one was issued, null when the presented one
+ * matched, and false when the board failed to prove itself. Issuing is trust
+ * on first use: whoever asks first for a device without a secret gets it, and
+ * the unique key on device_id means only one request can.
+ */
+const authenticateDevice = async (
+    deviceId: string,
+    presented: string | null,
+): Promise<string | null | false> => {
     const supabase = createServiceClient();
-    const { data, error } = await supabase
-        .from("users")
-        .select("*")
-        .eq("user_id", userId)
+    const { data: stored, error } = await supabase
+        .from("device_secrets")
+        .select("secret_hash")
+        .eq("device_id", deviceId)
         .maybeSingle();
     if (error) {
         throw new Error(error.message);
     }
-    return data;
-};
 
-// Service role: the board has no session, and anon can no longer read users.
-const getDevUser = async () => {
-    const supabase = createServiceClient();
-    const { data, error } = await supabase.from("users").select("*").eq(
-        "email",
-        "admin@elatoai.com",
-    ).single();
-    if (error) {
-        throw new Error(error.message);
+    if (stored) {
+        return presented && deviceSecretMatches(presented, stored.secret_hash)
+            ? null
+            : false;
     }
-    return data;
+
+    const secret = newDeviceSecret();
+    const { error: insertError } = await supabase
+        .from("device_secrets")
+        .insert({ device_id: deviceId, secret_hash: hashDeviceSecret(secret) });
+    if (insertError) {
+        if (insertError.code === "23505") {
+            return false; // another request got there first
+        }
+        throw new Error(insertError.message);
+    }
+    return secret;
 };
 
-export async function GET(req: Request) {
-    try {
-        const { searchParams } = new URL(req.url);
-        const macAddress = searchParams.get("macAddress");
+/** Old firmware asked with just a MAC on the query string. That no longer gets anything. */
+export async function GET() {
+    return NextResponse.json(
+        { error: "Update the firmware: POST the MAC address and device secret." },
+        { status: 410 },
+    );
+}
 
-        if (!macAddress) {
+/**
+ * The board's only way in: POST { macAddress, deviceSecret? }.
+ *
+ *   401  the board did not prove itself: a known device with a secret, and
+ *        none or the wrong one presented
+ *   202  { status: "unclaimed", user_code }  -- online, nobody owns it yet;
+ *        the firmware polls this and needs to tell "not yours yet" apart from
+ *        "the server is broken"
+ *   200  { token, expires_in }  -- a device token for the voice websocket
+ *
+ * Either success also carries `device_secret` when one was just issued, which
+ * the board must keep: it is never shown again.
+ *
+ * With NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION=True (local development) an
+ * unclaimed board gets a token anyway and runs as the default character.
+ */
+export async function POST(req: Request) {
+    try {
+        const body = await req.json().catch(() => null);
+        const mac = typeof body?.macAddress === "string"
+            ? body.macAddress.trim().toUpperCase()
+            : "";
+        const presented = typeof body?.deviceSecret === "string" && body.deviceSecret
+            ? body.deviceSecret
+            : null;
+
+        if (!mac) {
             return NextResponse.json(
                 { error: "MAC address is required" },
                 { status: 400 },
             );
         }
 
-        /**
-         * If `NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION` is true, we use the default dev user.
-         * Otherwise the device is resolved from its own row, which it creates on
-         * first contact. Until somebody claims that row in the web app the device
-         * has no owner, and we say so with a 202 rather than an error -- the
-         * firmware polls this endpoint and needs to tell "not yours yet" apart
-         * from "the server is broken".
-         */
-        let user;
-        if (skipDeviceRegistration) {
-            user = await getDevUser();
-        } else {
-            const device = await registerDevice(macAddress);
-            if (!device.user_id) {
-                return NextResponse.json(
-                    { status: "unclaimed", user_code: device.user_code },
-                    { status: 202 },
-                );
-            }
-            user = await getUserById(device.user_id);
-        }
-
-        if (!user) {
+        const device = await findOrCreateDevice(mac);
+        const issued = await authenticateDevice(device.device_id, presented);
+        if (issued === false) {
             return NextResponse.json(
-                { error: "User not found" },
-                { status: 400 },
+                { error: "Device secret missing or wrong" },
+                { status: 401 },
             );
         }
 
-        const payload = {
-            email: user.email,
-            user_id: user.user_id,
-            created_time: new Date(),
-        };
+        // Only a board that proved itself counts as seen: a stranger sending a
+        // MAC must not put that board in anyone's claim list.
+        await createServiceClient()
+            .from("devices")
+            .update({ last_seen_at: new Date().toISOString() })
+            .eq("device_id", device.device_id);
 
-        const token = createSupabaseToken(
-            process.env.JWT_SECRET_KEY!,
-            payload,
-            null,
-        );
+        const secretField = issued ? { device_secret: issued } : {};
 
-        return NextResponse.json({ token });
+        if (!device.user_id && !skipDeviceRegistration) {
+            return NextResponse.json(
+                { status: "unclaimed", user_code: device.user_code, ...secretField },
+                { status: 202 },
+            );
+        }
+
+        return NextResponse.json({
+            token: signDeviceToken(device),
+            expires_in: DEVICE_TOKEN_TTL_SECONDS,
+            ...secretField,
+        });
     } catch (error) {
         return NextResponse.json(
             {
