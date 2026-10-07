@@ -103,6 +103,7 @@ const EDITABLE_FIELDS = [
     "is_hidden",
     "is_child_voice",
     "is_story",
+    "ip_key",
 ] as const;
 
 export async function updatePersonalityAction(
@@ -278,4 +279,119 @@ async function refreshVoiceServerSettings(): Promise<boolean> {
         console.warn("Could not refresh voice server settings:", error);
         return false;
     }
+}
+
+export interface IpModeDraft {
+    mode_key: string;
+    // Under restrict_modes: whether the IP may use this mode at all.
+    allowed: boolean;
+    // The IP's own flavour for the mode, added after the mode's prompt.
+    prompt: string;
+}
+
+export interface IpDraft {
+    ip_key: string;
+    name: string;
+    description: string;
+    guardrails: string;
+    restrict_modes: boolean;
+    restrict_styles: boolean;
+    is_hidden: boolean;
+    sort_order: number;
+    modes: IpModeDraft[];
+    // Under restrict_styles: the styles the IP may use.
+    style_keys: string[];
+}
+
+/**
+ * Create or update an IP with what it adds to and allows in a session.
+ *
+ * ip_modes holds a row for a mode that is allowed (under restrict_modes) or
+ * flavoured (any time); ip_styles only matters under restrict_styles. Both are
+ * rewritten whole from the form, which is the whole of what the admin sees.
+ * Not one transaction -- PostgREST has none -- so a failure partway is
+ * reported and saving again puts it right.
+ */
+export async function saveIpAction(
+    draft: IpDraft,
+    creating: boolean,
+): Promise<ActionResult> {
+    await assertAdmin();
+
+    const ipKey = draft.ip_key.trim().toLowerCase();
+    const name = draft.name.trim();
+    // Like a character key: memories and characters are filed under it.
+    if (!/^[a-z0-9_-]+$/.test(ipKey)) {
+        return {
+            ok: false,
+            error: "Key must be lowercase letters, numbers, - and _",
+        };
+    }
+    if (!name) {
+        return { ok: false, error: "Name is required" };
+    }
+
+    const ipRow = {
+        ip_key: ipKey,
+        name,
+        description: draft.description.trim(),
+        guardrails: draft.guardrails.trim(),
+        restrict_modes: draft.restrict_modes,
+        restrict_styles: draft.restrict_styles,
+        is_hidden: draft.is_hidden,
+        sort_order: Number.isFinite(draft.sort_order) ? Math.trunc(draft.sort_order) : 0,
+    };
+    const modeRows = draft.modes
+        .map((mode) => ({ ...mode, prompt: mode.prompt.trim() }))
+        .filter((mode) => (draft.restrict_modes ? mode.allowed : mode.prompt !== ""))
+        .map((mode) => ({ ip_key: ipKey, mode_key: mode.mode_key, prompt: mode.prompt }));
+    const styleRows = draft.restrict_styles
+        ? Array.from(new Set(draft.style_keys)).map((style_key) => ({
+              ip_key: ipKey,
+              style_key,
+          }))
+        : [];
+
+    if (draft.restrict_modes && modeRows.length === 0) {
+        return { ok: false, error: "Allow at least one activity, or turn off the limit" };
+    }
+
+    try {
+        const supabase = createServiceClient();
+        const { error: ipError } = creating
+            ? await supabase.from("ips").insert(ipRow)
+            : await supabase.from("ips").update(ipRow).eq("ip_key", ipKey);
+        if (ipError) throw ipError;
+
+        const { error: clearModes } = await supabase
+            .from("ip_modes")
+            .delete()
+            .eq("ip_key", ipKey);
+        if (clearModes) throw clearModes;
+        if (modeRows.length > 0) {
+            const { error } = await supabase.from("ip_modes").insert(modeRows);
+            if (error) throw error;
+        }
+
+        const { error: clearStyles } = await supabase
+            .from("ip_styles")
+            .delete()
+            .eq("ip_key", ipKey);
+        if (clearStyles) throw clearStyles;
+        if (styleRows.length > 0) {
+            const { error } = await supabase.from("ip_styles").insert(styleRows);
+            if (error) throw error;
+        }
+    } catch (error) {
+        console.error("saveIpAction failed", error);
+        const message = String((error as { message?: string })?.message ?? "");
+        if (creating && message.includes("duplicate key")) {
+            return { ok: false, error: `An IP with key "${ipKey}" already exists` };
+        }
+        return { ok: false, error: "Could not save the IP" };
+    }
+
+    revalidatePath("/home/admin");
+    revalidatePath("/home");
+    return { ok: true };
 }

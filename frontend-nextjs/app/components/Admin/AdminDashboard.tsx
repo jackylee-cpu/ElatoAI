@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ModelSettingsTab from "./ModelSettingsTab";
 import LatencyTab from "./LatencyTab";
 import CharactersTab from "./CharactersTab";
+import IpsTab from "./IpsTab";
 import { BackIcon } from "../Playground/icons";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +14,9 @@ interface AdminDashboardProps {
     settings: IVoiceStackSettings;
     turnMetrics: ITurnMetric[];
     personalities: IAdminPersonality[];
+    ips: IIp[];
+    modes: IMode[];
+    styles: IStyle[];
 }
 
 const tabTriggerClass = cn(
@@ -25,6 +29,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     settings,
     turnMetrics,
     personalities,
+    ips,
+    modes,
+    styles,
 }) => {
     return (
         <div className="relative z-10 mx-auto flex h-full w-full max-w-5xl flex-col px-4 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-8 md:pt-8">
@@ -45,7 +52,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 defaultValue="model"
                 className="flex min-h-0 flex-1 flex-col"
             >
-                <TabsList className="mx-auto mb-5 grid h-auto w-full max-w-lg grid-cols-3 rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)]">
+                <TabsList className="mx-auto mb-5 grid h-auto w-full max-w-xl grid-cols-4 rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)]">
                     <TabsTrigger value="model" className={tabTriggerClass}>
                         Model
                     </TabsTrigger>
@@ -57,6 +64,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         className={tabTriggerClass}
                     >
                         Characters
+                    </TabsTrigger>
+                    <TabsTrigger value="ips" className={tabTriggerClass}>
+                        IPs
                     </TabsTrigger>
                 </TabsList>
 
@@ -73,7 +83,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <LatencyTab rows={turnMetrics} />
                         </TabsContent>
                         <TabsContent value="characters" className="mt-0">
-                            <CharactersTab personalities={personalities} />
+                            <CharactersTab personalities={personalities} ips={ips} />
+                        </TabsContent>
+                        <TabsContent value="ips" className="mt-0">
+                            <IpsTab
+                                ips={ips}
+                                modes={modes}
+                                styles={styles}
+                                personalities={personalities}
+                            />
                         </TabsContent>
                     </div>
                 </div>

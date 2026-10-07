@@ -14,6 +14,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { toast } from "@/components/ui/use-toast";
 import { ImagePlus, Loader2, X } from "lucide-react";
 import Image from "next/image";
@@ -43,6 +50,7 @@ const EMPTY: Partial<IPersonality> = {
     is_child_voice: false,
     is_story: false,
     is_hidden: false,
+    ip_key: "house",
 };
 
 interface CharacterEditSheetProps {
@@ -50,12 +58,14 @@ interface CharacterEditSheetProps {
     personality: IAdminPersonality | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    ips: IIp[];
 }
 
 const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
     personality,
     open,
     onOpenChange,
+    ips,
 }) => {
     const creating = personality === null;
     const [draft, setDraft] = useState<Partial<IPersonality>>(
@@ -178,6 +188,30 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                                     onChange={(event) => set("key", event.target.value)}
                                     placeholder="space_explorer"
                                 />
+                            </Field>
+                        )}
+
+                        {ips.length > 0 && (
+                            <Field
+                                label="IP"
+                                hint="Whose world this character is in. Memories are kept per IP, so moving a character to another IP starts its children's memory afresh there."
+                            >
+                                <Select
+                                    value={draft.ip_key ?? "house"}
+                                    onValueChange={(value) => set("ip_key", value)}
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {ips.map((ip) => (
+                                            <SelectItem key={ip.ip_key} value={ip.ip_key}>
+                                                {ip.name}
+                                                {ip.is_hidden ? " (hidden)" : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </Field>
                         )}
 
@@ -374,7 +408,7 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
     );
 };
 
-const Field: React.FC<{
+export const Field: React.FC<{
     label: string;
     hint?: string;
     children: React.ReactNode;
@@ -386,7 +420,7 @@ const Field: React.FC<{
     </div>
 );
 
-const Toggle: React.FC<{
+export const Toggle: React.FC<{
     label: string;
     hint?: string;
     checked: boolean;

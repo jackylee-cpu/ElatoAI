@@ -4,6 +4,7 @@ import { getAllPersonalitiesForAdmin } from "@/db/personalities";
 import { getRecentTurnMetrics } from "@/db/turnMetrics";
 import { assertAdmin } from "@/lib/admin";
 import { createServiceClient } from "@/utils/supabase/service";
+import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
 
 // Latency numbers are the point of the page, so it must not be served from a
 // cache that predates the last conversation.
@@ -17,17 +18,24 @@ export default async function AdminPage() {
     // an authenticated key.
     const supabase = createServiceClient();
 
-    const [settings, turnMetrics, personalities] = await Promise.all([
-        getVoiceStackSettings(supabase),
-        getRecentTurnMetrics(supabase),
-        getAllPersonalitiesForAdmin(supabase),
-    ]);
+    const [settings, turnMetrics, personalities, ips, modes, styles] =
+        await Promise.all([
+            getVoiceStackSettings(supabase),
+            getRecentTurnMetrics(supabase),
+            getAllPersonalitiesForAdmin(supabase),
+            getAllIps(supabase),
+            getAllModes(supabase),
+            getAllStyles(supabase),
+        ]);
 
     return (
         <AdminDashboard
             settings={settings}
             turnMetrics={turnMetrics}
             personalities={personalities}
+            ips={ips}
+            modes={modes}
+            styles={styles}
         />
     );
 }

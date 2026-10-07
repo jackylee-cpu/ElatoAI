@@ -15,13 +15,22 @@ import { PlusIcon } from "./icons";
 import { PlaygroundBottomNav } from "./PlaygroundBottomNav";
 import { PlaygroundMicButton } from "./PlaygroundMicButton";
 import { SlidersHorizontal } from "lucide-react";
+import SessionOptions, { OptionRow } from "./SessionOptions";
+import { modesAllowedBy, stylesAllowedBy } from "@/db/sessionOptions";
 
 interface PlaygroundProps {
     currentUser: IUser;
     allPersonalities: IPersonality[];
     myPersonalities: IPersonality[];
+    ips: IIp[];
+    modes: IMode[];
+    styles: IStyle[];
     isAdmin?: boolean;
 }
+
+const DEFAULT_IP_KEY = "house";
+const ipKeyOf = (personality: IPersonality | undefined) =>
+    personality?.ip_key ?? DEFAULT_IP_KEY;
 
 const initialFilterForUser = (user: IUser): PersonalityFilter[] => {
     const personality = user.personality;
@@ -35,6 +44,9 @@ const Playground: React.FC<PlaygroundProps> = ({
     currentUser,
     allPersonalities,
     myPersonalities,
+    ips,
+    modes,
+    styles,
     isAdmin = false,
 }) => {
     const isDoctor = currentUser.user_info.user_type === "doctor";
@@ -49,19 +61,80 @@ const Playground: React.FC<PlaygroundProps> = ({
         () => initialFilterForUser(currentUser)
     );
 
+    const [modeKey, setModeKey] = useState<string | null>(currentUser.mode_key ?? null);
+    const [styleKey, setStyleKey] = useState<string | null>(
+        currentUser.style_key ?? null
+    );
+
+    const findPersonality = (personalityId: string) =>
+        allPersonalities.find((p) => p.personality_id === personalityId) ??
+        myPersonalities.find((p) => p.personality_id === personalityId) ??
+        (currentUser.personality?.personality_id === personalityId
+            ? currentUser.personality
+            : undefined);
+    const findIp = (ipKey: string) => ips.find((ip) => ip.ip_key === ipKey);
+
+    // Switching IP is picking one of its characters. The tabs only narrow the
+    // list, so they appear once there is more than one IP to choose from.
+    // A hidden IP's characters leave the picker with it; a database without
+    // IPs at all lists everything, as before.
+    const visibleIps = ips.filter((ip) => !ip.is_hidden);
+    const visibleIpKeys = new Set(visibleIps.map((ip) => ip.ip_key));
+    const showIpTabs = visibleIps.length > 1;
+    const [ipKeyState, setIpKeyState] = useState<string>(() => {
+        const current = ipKeyOf(findPersonality(personalityIdState));
+        return visibleIpKeys.has(current) ? current : (visibleIps[0]?.ip_key ?? current);
+    });
+    const inShownIp = (personality: IPersonality) => {
+        const ipKey = ipKeyOf(personality);
+        if (ips.length > 0 && !visibleIpKeys.has(ipKey)) return false;
+        return !showIpTabs || ipKey === ipKeyState;
+    };
+
+    // The modes and styles offered are the ones the current character's IP
+    // allows. The voice server applies the same rule and drops anything else,
+    // so this only keeps the page from offering what would be ignored.
+    const currentIp = findIp(ipKeyOf(findPersonality(personalityIdState)));
+    const allowedModes = modesAllowedBy(currentIp, modes);
+    const allowedStyles = stylesAllowedBy(currentIp, styles);
+
     const onPersonalityPicked = async (personalityIdPicked: string) => {
         setPersonalityIdState(personalityIdPicked);
-        await updateUser(
-            supabase,
-            {
-                personality_id: personalityIdPicked,
-            },
-            currentUser.user_id
-        );
+        const updates: Partial<IUser> = { personality_id: personalityIdPicked };
+        // A character in another IP may not allow the mode or style chosen
+        // for the last one. Clear them rather than keep a choice the server
+        // would silently drop.
+        const nextIp = findIp(ipKeyOf(findPersonality(personalityIdPicked)));
+        if (modeKey && !modesAllowedBy(nextIp, modes).some((m) => m.mode_key === modeKey)) {
+            setModeKey(null);
+            updates.mode_key = null;
+        }
+        if (
+            styleKey &&
+            !stylesAllowedBy(nextIp, styles).some((s) => s.style_key === styleKey)
+        ) {
+            setStyleKey(null);
+            updates.style_key = null;
+        }
+        await updateUser(supabase, updates, currentUser.user_id);
         // The device reads its character when a session starts, so drop the
         // current one -- it reconnects about a second later as the new
         // character. Best effort: if this fails the change still lands the next
         // time the device connects.
+        void refreshDeviceSession();
+    };
+
+    // Same reconnect as a new character: the mode and style are part of the
+    // system prompt, which is fixed for the life of a session.
+    const onModeChange = async (next: string | null) => {
+        setModeKey(next);
+        await updateUser(supabase, { mode_key: next }, currentUser.user_id);
+        void refreshDeviceSession();
+    };
+
+    const onStyleChange = async (next: string | null) => {
+        setStyleKey(next);
+        await updateUser(supabase, { style_key: next }, currentUser.user_id);
         void refreshDeviceSession();
     };
 
@@ -92,6 +165,32 @@ const Playground: React.FC<PlaygroundProps> = ({
                             </Link>
                         </header>
 
+                        {showIpTabs && (
+                            <div className="mx-auto w-full max-w-[400px] shrink-0 pb-3">
+                                <OptionRow
+                                    label="World"
+                                    value={ipKeyState}
+                                    onChange={(next) => next && setIpKeyState(next)}
+                                    options={visibleIps.map((ip) => ({
+                                        key: ip.ip_key,
+                                        label: ip.name,
+                                        description: ip.description,
+                                    }))}
+                                />
+                            </div>
+                        )}
+
+                        <div className="shrink-0 pb-3">
+                            <SessionOptions
+                                modes={allowedModes}
+                                styles={allowedStyles}
+                                modeKey={modeKey}
+                                styleKey={styleKey}
+                                onModeChange={onModeChange}
+                                onStyleChange={onStyleChange}
+                            />
+                        </div>
+
                         <div className="shrink-0 pb-4 pt-1">
                             <PersonalityFilters
                                 setSelectedFilters={setSelectedFilters}
@@ -108,14 +207,13 @@ const Playground: React.FC<PlaygroundProps> = ({
                                 personalityIdState={personalityIdState}
                                 languageState={"en-US"}
                                 disableButtons={false}
-                                allPersonalities={
-                                    isDoctor
-                                        ? allPersonalities.filter(
-                                              (p) => p.is_story || p.is_doctor
-                                          )
-                                        : allPersonalities
-                                }
-                                myPersonalities={myPersonalities}
+                                allPersonalities={(isDoctor
+                                    ? allPersonalities.filter(
+                                          (p) => p.is_story || p.is_doctor
+                                      )
+                                    : allPersonalities
+                                ).filter(inShownIp)}
+                                myPersonalities={myPersonalities.filter(inShownIp)}
                             />
                         </div>
                     </div>

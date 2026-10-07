@@ -31,9 +31,12 @@ type Scope = "all" | "builtin" | "user" | "hidden";
 
 interface CharactersTabProps {
     personalities: IAdminPersonality[];
+    ips: IIp[];
 }
 
-const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
+const CharactersTab: React.FC<CharactersTabProps> = ({ personalities, ips }) => {
+    const ipName = (ipKey: string | undefined) =>
+        ips.find((ip) => ip.ip_key === (ipKey ?? "house"))?.name ?? ipKey ?? "house";
     const [search, setSearch] = useState("");
     const [scope, setScope] = useState<Scope>("all");
     const [editing, setEditing] = useState<IAdminPersonality | null>(null);
@@ -106,6 +109,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
                             <TableRow>
                                 <TableHead>Title</TableHead>
                                 <TableHead>Key</TableHead>
+                                <TableHead>IP</TableHead>
                                 <TableHead>Owner</TableHead>
                                 <TableHead>Voice</TableHead>
                                 <TableHead className="text-right">Prompt</TableHead>
@@ -144,6 +148,9 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
                                     </TableCell>
                                     <TableCell className="text-xs font-mono">
                                         {entry.key}
+                                    </TableCell>
+                                    <TableCell className="text-xs whitespace-nowrap">
+                                        {ipName(entry.ip_key)}
                                     </TableCell>
                                     <TableCell className="text-xs">
                                         {entry.creator_id === null ? (
@@ -210,6 +217,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
                     personality={editing}
                     open
                     onOpenChange={(open) => !open && setEditing(null)}
+                    ips={ips}
                 />
             )}
             {creating && (
@@ -218,6 +226,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
                     personality={null}
                     open
                     onOpenChange={(open) => !open && setCreating(false)}
+                    ips={ips}
                 />
             )}
         </div>

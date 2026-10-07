@@ -34,6 +34,45 @@ declare global {
         sort_order: number;
     }
 
+    // Whose world a character lives in. Every character belongs to one IP,
+    // and the child's memories are kept per IP. restrict_modes /
+    // restrict_styles limit an IP to its ip_modes / ip_styles rows; off, every
+    // mode and style is allowed and ip_modes only adds flavour. See
+    // supabase/migrations/*_add_ips_modes_styles.sql.
+    interface IIp {
+        ip_key: string;
+        name: string;
+        description: string;
+        // Hard limits for every character in the IP; placed after the style
+        // and mode in the system prompt.
+        guardrails: string;
+        restrict_modes: boolean;
+        restrict_styles: boolean;
+        image_url: string | null;
+        is_hidden: boolean;
+        sort_order: number;
+        ip_modes?: { mode_key: string; prompt: string }[];
+        ip_styles?: { style_key: string }[];
+    }
+
+    // What the character is doing (companion, story, language) and the manner
+    // it does it in (playful, gentle, silly). Both are written in the voice
+    // server's content/*.yaml and synced into these tables on startup, so the
+    // web app only ever reads them.
+    interface IMode {
+        mode_key: string;
+        name: string;
+        description: string;
+        sort_order: number;
+    }
+
+    interface IStyle {
+        style_key: string;
+        name: string;
+        description: string;
+        sort_order: number;
+    }
+
     type ProductColor = "black" | "white" | "gray";
 
     interface IDevice {
@@ -67,6 +106,11 @@ declare global {
 
         // region: null until chosen; the voice server then uses its own default.
         region_code?: string | null;
+
+        // mode and style: null until chosen, which gives the session the
+        // character alone, as before modes existed.
+        mode_key?: string | null;
+        style_key?: string | null;
 
         // device
         device?: IDevice;
@@ -422,6 +466,8 @@ declare global {
         // users.personality_id references it, and deleting one silently moves
         // every child using it back to the Elato default.
         is_hidden?: boolean;
+        // The IP this character belongs to. Defaults to 'house', our own.
+        ip_key?: string;
     }
 
     type PersonalityFilter = "is_child_voice" | "is_doctor" | "is_story";
