@@ -46,7 +46,13 @@ class RoutedOpenRouterLLMService(OpenRouterLLMService):
             provider["sort"] = self._provider_sort
 
         if self._provider_order:
+            # The list is the whole allowlist, not a preference. With fallbacks
+            # on, OpenRouter moves past a rate-limited host to any other one,
+            # including hosts that answer DeepSeek with empty content or a
+            # literal <｜end▁of▁sentence｜> (P2-10). Strict order 404s instead
+            # once every listed host is down.
             provider["order"] = list(self._provider_order)
+            provider["allow_fallbacks"] = False
 
         if provider:
             extra_body["provider"] = provider
@@ -85,7 +91,7 @@ def _provider_sort(override: str | None = None) -> str:
 
 
 def _provider_order(override: list[str] | str | None = None) -> list[str] | None:
-    """Preferred OpenRouter hosts, tried first and in this order.
+    """The only OpenRouter hosts allowed to serve, tried in this order.
 
     Same whitelist rule as provider sort: a junk slug 404s the request with
     "No endpoints found for the request with manual order". Empty means omit

@@ -122,20 +122,29 @@ def test_no_reasoning_omits_the_key_entirely():
     print("  ok: unset reasoning is omitted, not sent as null")
 
 
-def test_preferred_providers_are_tried_in_order():
+def test_listed_providers_are_the_only_ones_used():
+    """With fallbacks on, a rate-limited listed host hands the request to any
+    other host -- measured 2026-10-07: order=[deepinfra] was served by Relace."""
     service = _service(provider_sort="latency", provider_order=["groq", "akashml"])
     extra = _params(service)["extra_body"]
     assert extra["provider"]["sort"] == "latency"
     assert extra["provider"]["order"] == ["groq", "akashml"]
-    print("  ok: preferred hosts are sent as provider.order")
+    assert extra["provider"]["allow_fallbacks"] is False
+    print("  ok: listed hosts are sent as a strict provider.order")
+
+
+def test_no_order_keeps_fallbacks():
+    service = _service(provider_sort="latency")
+    assert "allow_fallbacks" not in _params(service)["extra_body"]["provider"]
+    print("  ok: without a list, any host may serve")
 
 
 def test_nitro_still_sends_provider_order():
     service = _service(provider_sort="nitro", provider_order=["groq"])
     params = _params(service)
     assert params["model"] == "qwen/qwen3.8-27b:nitro"
-    assert params["extra_body"]["provider"] == {"order": ["groq"]}
-    print("  ok: nitro keeps preferred hosts and skips provider.sort")
+    assert params["extra_body"]["provider"] == {"order": ["groq"], "allow_fallbacks": False}
+    print("  ok: nitro keeps the listed hosts and skips provider.sort")
 
 
 def test_an_unknown_provider_slug_raises():
@@ -167,7 +176,8 @@ def main():
         test_chat_params_include_reasoning_and_provider_sort,
         test_nitro_still_sends_reasoning,
         test_no_reasoning_omits_the_key_entirely,
-        test_preferred_providers_are_tried_in_order,
+        test_listed_providers_are_the_only_ones_used,
+        test_no_order_keeps_fallbacks,
         test_nitro_still_sends_provider_order,
         test_an_unknown_provider_slug_raises,
         test_env_provider_order_is_a_comma_list,

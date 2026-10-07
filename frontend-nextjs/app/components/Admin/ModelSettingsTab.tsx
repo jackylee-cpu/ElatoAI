@@ -378,10 +378,11 @@ const ModelSettingsTab: React.FC<ModelSettingsTabProps> = ({ settings }) => {
                         </div>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        Routing picks by latency, throughput or price. Preferred
-                        providers are tried first, in the order you tap them;
-                        others still serve if those are down. Speech usually
-                        wants `latency` plus a fast host if you have a favourite.
+                        Routing picks by latency, throughput or price. If you
+                        pick providers, only those serve, in the order you tap
+                        them; if all of them are down the toy goes quiet for
+                        that turn, so pick several you have tested. Speech
+                        usually wants `latency`.
                     </p>
 
                     <div className="flex flex-col gap-2">

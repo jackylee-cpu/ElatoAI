@@ -7,6 +7,7 @@ import os
 import language_profiles
 import session_content
 from character_prompt import build_session_prompt
+from llm_output_guard import LLMOutputGuard
 from loguru import logger
 from models.llm import create_llm_service
 from models.stt import create_stt_service, flush_silence_ms
@@ -251,6 +252,10 @@ def build_voice_pipeline(
         user_params=LLMUserAggregatorParams(user_turn_strategies=build_user_turn_strategies()),
     )
 
+    # Straight after the LLM, so control tokens a host leaks never reach memory,
+    # the transcript or TTS. See llm_output_guard.py.
+    guard = LLMOutputGuard(stack["llm_model"])
+
     processors = [input_processor, vad, stt]
     if extra_after_stt is not None:
         processors.append(extra_after_stt)
@@ -271,12 +276,12 @@ def build_voice_pipeline(
         # carries it across.
         relay = UserTurnRelay()
         processors.append(MemoryProcessor(memory, context, relay))
-        processors.extend([user_aggregator, llm])
+        processors.extend([user_aggregator, llm, guard])
         processors.append(
             AssistantTurnCaptureProcessor(memory, child.get("personality_key"), relay)
         )
     else:
-        processors.extend([user_aggregator, llm])
+        processors.extend([user_aggregator, llm, guard])
 
     if extra_after_llm is not None:
         processors.append(extra_after_llm)
