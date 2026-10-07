@@ -909,9 +909,6 @@ function App({ personalityIdState, isDoctor, userId, renderTrigger }: AppProps) 
             dcRef.current?.readyState === "open"
           }
           personality={personality}
-          userId={userId}
-          isDoctor={isDoctor}
-          supabase={supabase}
           voiceStatus={usesFastAPI ? voiceStatus : undefined}
           micMode={usesFastAPI ? micMode : undefined}
           isTalking={isTalking}

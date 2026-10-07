@@ -2,6 +2,7 @@
 
 import { encodedRedirect } from "@/utils/utils";
 import { createClient } from "@/utils/supabase/server";
+import { createServiceClient } from "@/utils/supabase/service";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
@@ -125,23 +126,32 @@ export const checkDoctorAction = async (authCode: string) => {
     return authCode === "kiwi-subtle-emu";
 };
 
-export const connectUserToDevice = async (
-    userId: string,
-    userDeviceCode: string,
-) => {
+/*
+ * Binding and unbinding write `devices.user_id` and `users.device_id`, which the
+ * signed-in client is not granted (migration 20261007130000): an owner can only
+ * read their own devices and change their volume. So these actions take the
+ * user from the session and do the write with the service role.
+ */
+
+export const connectUserToDevice = async (userDeviceCode: string) => {
     const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return false;
+    }
+    const service = createServiceClient();
 
     // Codes get copied off a screen, so normalise once and use the same value
     // for both the check and the write -- these used to disagree, which let a
     // code with stray whitespace validate and then silently match no rows.
     const code = userDeviceCode.trim().toUpperCase();
 
-    const isCodeValid = await dbCheckUserCode(supabase, code);
+    const isCodeValid = await dbCheckUserCode(service, code);
     if (!isCodeValid) {
         return false;
     }
 
-    return await addUserToDevice(supabase, code, userId);
+    return await addUserToDevice(service, code, user.id);
 };
 
 /** Devices that are online but unowned, for the claim list in Settings. */
@@ -151,7 +161,7 @@ export const listUnclaimedDevices = async () => {
     if (!user) {
         return [];
     }
-    return await getUnclaimedDevices(supabase);
+    return await getUnclaimedDevices(createServiceClient());
 };
 
 /**
@@ -164,7 +174,7 @@ export const claimDeviceAction = async (deviceId: string) => {
     if (!user) {
         return false;
     }
-    return await claimDevice(supabase, deviceId, user.id);
+    return await claimDevice(createServiceClient(), deviceId, user.id);
 };
 
 export const unbindDeviceAction = async (deviceId: string) => {
@@ -173,7 +183,7 @@ export const unbindDeviceAction = async (deviceId: string) => {
     if (!user) {
         return false;
     }
-    return await unbindDevice(supabase, deviceId, user.id);
+    return await unbindDevice(createServiceClient(), deviceId, user.id);
 };
 
 /**

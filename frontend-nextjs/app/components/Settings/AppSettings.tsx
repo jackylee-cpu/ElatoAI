@@ -256,7 +256,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                                 variant="outline"
                                 disabled={isConnected || deviceCode.length !== 6}
                                 onClick={async () => {
-                                    const result = await connectUserToDevice(selectedUser.user_id, deviceCode);
+                                    const result = await connectUserToDevice(deviceCode);
                                     if (!result) {
                                         setError("Error registering device");
                                     } else {

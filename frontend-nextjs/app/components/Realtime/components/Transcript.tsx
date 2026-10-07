@@ -6,8 +6,6 @@ import { MicMode } from "@/app/components/Realtime/lib/micMode";
 import Image from "next/image";
 import { useTranscript } from "@/app/components/Realtime/contexts/TranscriptContext";
 import { cn, getPersonalityAvatarSrc } from "@/lib/utils";
-import { dbInsertTranscriptItem } from "@/db/conversations";
-import { SupabaseClient } from "@supabase/supabase-js";
 import { EmojiComponent } from "../../Playground/EmojiImage";
 import { playgroundAssets } from "../../Playground/playgroundAssets";
 import { CloseIcon, MicIcon } from "../../Playground/icons";
@@ -20,9 +18,6 @@ export interface TranscriptProps {
   onSendMessage: () => void;
   canSend: boolean;
   personality: IPersonality;
-  userId: string;
-  isDoctor: boolean;
-  supabase: SupabaseClient;
   voiceStatus?: VoiceTurnStatus;
   micMode?: MicMode;
   isTalking?: boolean;
@@ -80,9 +75,6 @@ function formatBubbleTime(createdAtMs: number) {
 
 function Transcript({
   personality,
-  userId,
-  isDoctor,
-  supabase,
   voiceStatus,
   isTalking = false,
   onTalkStart,
@@ -115,17 +107,6 @@ function Transcript({
         if (nearBottom || hasNewMessage) {
           scrollToBottom();
         }
-      }
-
-      if (hasUpdatedMessage) {
-        transcriptItems.forEach((newItem, index) => {
-          const oldItem = prevLogs[index];
-          if (oldItem && (newItem.title !== oldItem.title || newItem.data !== oldItem.data)) {
-            if (newItem.type === "MESSAGE" && newItem.role === "user" && newItem.status === "DONE") {
-              dbInsertTranscriptItem(supabase, newItem, userId, personality.key, isDoctor);
-            }
-          }
-        });
       }
     }
 

@@ -17,7 +17,6 @@ export const createUser = async (
             supervisee_age: 14,
             supervisee_persona: "",
             personality_id: userProps.personality_id, // selecting default personality
-            session_time: 0,
             avatar_url: user.user_metadata?.avatar_url ??
                 `/user_avatar/user_avatar_${
                     Math.floor(Math.random() * 10)
