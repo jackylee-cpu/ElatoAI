@@ -72,7 +72,10 @@ const AppSettings: React.FC<AppSettingsProps> = ({
         const load = async () => {
             const devices = await listUnclaimedDevices();
             if (!cancelled) {
-                setUnclaimed(devices as typeof unclaimed);
+                // A server action can resolve to undefined -- in development
+                // whenever the poll lands mid-rebuild -- and `.length` on that
+                // took the whole settings panel down.
+                setUnclaimed(Array.isArray(devices) ? devices : []);
             }
         };
         load();

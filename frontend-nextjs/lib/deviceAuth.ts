@@ -2,6 +2,13 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 
 /**
+ * The tokens the voice server accepts, and how a board earns its own.
+ *
+ * Two kinds, both HS256 with DEVICE_JWT_SECRET and told apart by audience and
+ * `typ`, so neither opens the other's socket (server/fastapi/device_auth.py):
+ *   device token     -- 24 hours, names a board, for /ws/esp32
+ *   web voice token  --  5 minutes, names a signed-in account, for /ws/nextjs
+ *
  * How a board proves who it is.
  *
  * The first time a board calls /api/generate_auth_token it is issued a random
@@ -18,6 +25,10 @@ import jwt from "jsonwebtoken";
 
 export const DEVICE_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 const DEVICE_TOKEN_AUDIENCE = "aibuddy-device";
+// Only has to outlive the gap between asking for it and the socket opening:
+// the voice server checks it once, on connect, and the session can run longer.
+const WEB_VOICE_TOKEN_TTL_SECONDS = 5 * 60;
+const WEB_VOICE_TOKEN_AUDIENCE = "aibuddy-web";
 
 export const newDeviceSecret = () => crypto.randomBytes(32).toString("base64url");
 
@@ -45,6 +56,20 @@ export const signDeviceToken = (device: { device_id: string; mac_address: string
         subject: device.device_id,
         audience: DEVICE_TOKEN_AUDIENCE,
         expiresIn: DEVICE_TOKEN_TTL_SECONDS,
+    });
+
+/**
+ * A ticket for /ws/nextjs naming this account. The voice server takes the
+ * user id from it -- and the character from that account -- instead of from
+ * the query string, which anyone could edit. Server-side only: call it from a
+ * server action after checking the session.
+ */
+export const signWebVoiceToken = (userId: string) =>
+    jwt.sign({ typ: "web" }, signingKey(), {
+        algorithm: "HS256",
+        subject: userId,
+        audience: WEB_VOICE_TOKEN_AUDIENCE,
+        expiresIn: WEB_VOICE_TOKEN_TTL_SECONDS,
     });
 
 /** The device a token names, or null for anything that is not a live device token. */

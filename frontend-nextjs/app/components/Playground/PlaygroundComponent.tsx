@@ -162,7 +162,6 @@ const Playground: React.FC<PlaygroundProps> = ({
                     <PlaygroundBottomNav>
                         <App
                             personalityIdState={personalityIdState}
-                            userId={currentUser.user_id}
                             renderTrigger={({
                                 sessionStatus,
                                 onToggleConnection,

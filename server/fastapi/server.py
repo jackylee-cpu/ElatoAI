@@ -18,15 +18,14 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 import app_settings
 import device_auth
-import language_profiles
-from bot import create_esp32_auth_message, run_bot_session
 import session_content
-from device_registry import (
-    fetch_character_setup,
-    fetch_device_personality,
-    fetch_user_personality,
+from bot import create_esp32_auth_message, run_bot_session
+from device_registry import fetch_device_personality, fetch_user_personality
+from esp32_transport import (
+    BrowserWebsocketTransport,
+    Esp32WebsocketTransport,
+    RawPCMFrameSerializer,
 )
-from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
 from memory import session as memory_session
 from models.providers import get_provider_catalog, validate_classic_provider_stack
 
@@ -314,43 +313,32 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/nextjs")
     async def nextjs_websocket(websocket: WebSocket):
         await websocket.accept()
-        tts_voice = websocket.query_params.get("voice")
-        tts_voices = language_profiles.parse_voices(
-            websocket.query_params.get("voices")
-        )
-        title = websocket.query_params.get("title")
-        character_prompt = websocket.query_params.get("character_prompt")
-        voice_prompt = websocket.query_params.get("voice_prompt")
-        first_message_prompt = websocket.query_params.get("first_message_prompt")
-        user_id = websocket.query_params.get("user_id")
-        personality_key = websocket.query_params.get("personality_key")
-        logger.info(
-            "NextJS websocket connected voice={} title={} user={}",
-            tts_voice or "default",
-            title or "default",
-            user_id or "anonymous",
-        )
+        # Whose session this is comes from the web voice token the web app's
+        # server signed for the signed-in account (actions.ts,
+        # createVoiceSessionToken), never from the query string -- anyone who
+        # learned a user_id used to be able to read that child's memories, and
+        # any page could put its own character prompt on the URL. 4401 as on
+        # the device route.
+        try:
+            user_id = device_auth.verify_web(websocket.query_params.get("token"))
+        except device_auth.InvalidToken as exc:
+            logger.warning("Refusing NextJS websocket: {}", exc)
+            await websocket.close(code=4401, reason="invalid voice token")
+            return
         transport = create_browser_transport(websocket)
 
-        # Same store the toy uses: memory is keyed by the account and the
-        # character's IP, not by the client or the character, so what a child
-        # tells the web app is there the next time they pick up the toy on the
-        # same IP. `user_id` is whatever the web app put on the query string;
-        # no session without one, just no memory.
-        #
-        # NOTE: this trusts the query string. On localhost that is the same
-        # trust boundary as the rest of the dev setup, but before this is
-        # exposed publicly the id has to arrive as something the browser cannot
-        # forge -- a short-lived token signed by the Next.js server -- or
-        # anyone who learns a user_id can read that child's memories.
-        #
-        # The IP, mode and style are looked up from the character's key, not
-        # taken from the query string with the rest of the character: the IP
-        # decides whose memories load.
-        profile, setup = await asyncio.gather(
-            fetch_user_personality(user_id), fetch_character_setup(personality_key)
+        # The character is the one on the account, read with the child's
+        # profile in one request: picking a character in the web app saves it
+        # there first. Memory is keyed by the account and the character's IP,
+        # as on the toy, so what a child tells the web app is there the next
+        # time they pick up the toy on the same IP.
+        profile = await fetch_user_personality(user_id)
+        ip = profile.ip
+        logger.info(
+            "NextJS websocket connected user={} character={}",
+            user_id,
+            profile.title or "default",
         )
-        ip = setup.ip
         memory = await memory_session.acquire(
             profile.user_id, ip.ip_key if ip else None, profile.language_code
         )
@@ -365,10 +353,7 @@ def create_app() -> FastAPI:
             "name": profile.child_name,
             "age": profile.child_age,
             "persona": profile.child_persona,
-            # The character arrives on the query string here, not from the
-            # account row, so take the key from the same place the prompt came
-            # from rather than from `profile` (which never carries one).
-            "personality_key": personality_key,
+            "personality_key": profile.personality_key,
         }
 
         try:
@@ -376,12 +361,12 @@ def create_app() -> FastAPI:
                 transport,
                 "browser",
                 False,
-                tts_voice=tts_voice,
-                tts_voices=tts_voices,
-                title=title,
-                character_prompt=character_prompt,
-                voice_prompt=voice_prompt,
-                first_message_prompt=first_message_prompt,
+                tts_voice=profile.tts_voice,
+                tts_voices=profile.tts_voices,
+                title=profile.title,
+                character_prompt=profile.character_prompt,
+                voice_prompt=profile.voice_prompt,
+                first_message_prompt=profile.first_message_prompt,
                 memory=memory,
                 child=child,
                 user_id=profile.user_id,
@@ -389,8 +374,8 @@ def create_app() -> FastAPI:
                 language_code=profile.language_code,
                 region=profile.region,
                 ip=ip,
-                mode_key=setup.mode_key,
-                style_key=setup.style_key,
+                mode_key=profile.mode_key,
+                style_key=profile.style_key,
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off
@@ -415,7 +400,7 @@ def create_app() -> FastAPI:
             device = device_auth.verify(
                 device_auth.bearer(websocket.headers.get("authorization"))
             )
-        except device_auth.InvalidDeviceToken as exc:
+        except device_auth.InvalidToken as exc:
             logger.warning(
                 "Refusing ESP32 websocket: {} (X-Device-Mac claims {})",
                 exc,

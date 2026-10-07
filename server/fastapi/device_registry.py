@@ -51,26 +51,20 @@ _IP_SELECT = (
     "ip_modes(mode_key,prompt),ip_styles(style_key))"
 )
 
-_SELECT = (
-    "volume,"
-    "user_id,"
-    "user:user_id("
+# One account and its character, the same for the toy and the browser: both
+# resolve the character the parent picked from the account row, so the two can
+# never disagree, and nothing about the character is taken from the client.
+_ACCOUNT_SELECT = (
     "supervisee_name,supervisee_age,supervisee_persona,language_code,"
     "memories_revision,"
     "region:region_code(name,timezone,latitude,longitude),"
     "personality:personality_id("
-    f"key,title,character_prompt,voice_prompt,oai_voice,voices,mode_key,style_key,{_IP_SELECT}"
-    ")"
+    "key,title,character_prompt,voice_prompt,first_message_prompt,oai_voice,voices,"
+    f"mode_key,style_key,{_IP_SELECT}"
     ")"
 )
 
-# The browser route already carries its character on the query string, so the
-# account lookup only needs the child's own fields. Same names as the nested
-# `user(...)` above so both rows can go through `_parse`.
-_USER_SELECT = (
-    "supervisee_name,supervisee_age,supervisee_persona,language_code,memories_revision,"
-    "region:region_code(name,timezone,latitude,longitude)"
-)
+_SELECT = f"volume,user_id,user:user_id({_ACCOUNT_SELECT})"
 
 
 @dataclass(frozen=True)
@@ -78,6 +72,9 @@ class DevicePersonality:
     title: str | None = None
     character_prompt: str | None = None
     voice_prompt: str | None = None
+    # How the character opens a browser session. The toy keeps the bot's own
+    # greeting, as it always has.
+    first_message_prompt: str | None = None
     tts_voice: str | None = None
     tts_voices: dict[str, str] | None = None
     volume: int | None = None
@@ -154,6 +151,7 @@ def _parse(row: dict) -> DevicePersonality:
         title=_clean(personality.get("title")),
         character_prompt=_clean(personality.get("character_prompt")),
         voice_prompt=_clean(personality.get("voice_prompt")),
+        first_message_prompt=_clean(personality.get("first_message_prompt")),
         tts_voice=_clean(personality.get("oai_voice")),
         tts_voices=language_profiles.parse_voices(personality.get("voices")),
         volume=volume,
@@ -267,12 +265,12 @@ async def fetch_device_personality(mac_address: str | None) -> DevicePersonality
 
 
 async def fetch_user_personality(user_id: str | None) -> DevicePersonality:
-    """Resolve a logged-in account's child profile, for the browser route.
+    """Resolve a signed-in account's child profile and character, for the browser route.
 
-    The web app already passes the character it picked on the query string, so
-    only the child's own fields and `memories_revision` matter here -- but the
-    same row feeds the same `_parse`, so the browser and the toy build the
-    child profile from one code path instead of two that can drift.
+    `user_id` comes from a verified web voice token (device_auth.verify_web).
+    The character is the one on the account -- picking one in the web app
+    saves it there first -- read through the same select and `_parse` as the
+    toy's, so the browser and the toy build a session from one code path.
     """
     if not user_id:
         return DevicePersonality()
@@ -283,7 +281,7 @@ async def fetch_user_personality(user_id: str | None) -> DevicePersonality:
     url = (
         f"{SUPABASE_URL}/rest/v1/users"
         f"?user_id=eq.{quote(user_id, safe='')}"
-        f"&select={quote(_USER_SELECT, safe='()*,:')}"
+        f"&select={quote(_ACCOUNT_SELECT, safe='()*,:')}"
         f"&limit=1"
     )
     rows = await _fetch_rows(url, f"user {user_id}")
@@ -297,55 +295,11 @@ async def fetch_user_personality(user_id: str | None) -> DevicePersonality:
     # than duplicating the parsing.
     personality = _parse({"user_id": user_id, "user": rows[0]})
     logger.info(
-        "User {} resolved to child={} revision={}",
+        "User {} resolved to character={} ip={} child={} revision={}",
         user_id,
+        personality.title or "default",
+        personality.ip.ip_key if personality.ip else "unknown",
         personality.child_name or "unknown",
         personality.memories_revision,
     )
     return personality
-
-
-@dataclass(frozen=True)
-class CharacterSetup:
-    """What the browser route reads about its character server-side.
-
-    `ip` is None when the character could not be read, and memory then stays
-    off (see memory.session.acquire).
-    """
-
-    ip: IpRules | None = None
-    mode_key: str | None = None
-    style_key: str | None = None
-
-
-async def fetch_character_setup(personality_key: str | None) -> CharacterSetup:
-    """The IP, mode and style of the character the browser picked, by its key.
-
-    The browser route takes the character's prompt and voice from the query
-    string, but not these: the IP decides whose memories load, so it is read
-    here rather than trusted from the client, and the mode and style come along
-    in the same request. No key is the built-in pal: an in-house character with
-    no mode or style.
-    """
-    if not personality_key:
-        return CharacterSetup(ip=session_content.DEFAULT_IP)
-
-    if not _supabase_configured("character setup"):
-        return CharacterSetup()
-
-    url = (
-        f"{SUPABASE_URL}/rest/v1/personalities"
-        f"?key=eq.{quote(personality_key, safe='')}"
-        f"&select={quote('key,mode_key,style_key,' + _IP_SELECT, safe='()*,:')}"
-        f"&limit=1"
-    )
-    rows = await _fetch_rows(url, f"character {personality_key}")
-    if not rows:
-        logger.warning("No character with key {}, running without memory", personality_key)
-        return CharacterSetup()
-    row = rows[0]
-    return CharacterSetup(
-        ip=_parse_ip(row),
-        mode_key=_clean(row.get("mode_key")),
-        style_key=_clean(row.get("style_key")),
-    )

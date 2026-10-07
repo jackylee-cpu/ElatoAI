@@ -3,6 +3,7 @@
 import { encodedRedirect } from "@/utils/utils";
 import { createClient } from "@/utils/supabase/server";
 import { createServiceClient } from "@/utils/supabase/service";
+import { signWebVoiceToken } from "@/lib/deviceAuth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
@@ -180,6 +181,20 @@ export const unbindDeviceAction = async (deviceId: string) => {
         return false;
     }
     return await unbindDevice(createServiceClient(), deviceId, user.id);
+};
+
+/**
+ * A five-minute ticket for the voice server's /ws/nextjs, for whoever is
+ * signed in. The browser asks for a fresh one each time it opens the socket.
+ * Null when there is no session.
+ */
+export const createVoiceSessionToken = async () => {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return null;
+    }
+    return signWebVoiceToken(user.id);
 };
 
 /**

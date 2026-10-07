@@ -19,6 +19,7 @@ import { useHandleServerEvent } from "./hooks/useHandleServerEvent";
 import { createRealtimeConnection } from "./lib/realtimeConnection";
 import { FastAPIVoiceSession, FastAPIControlMessage } from "./lib/fastapiConnection";
 import { getFastAPIVoiceUrl, shouldUseFastAPIVoice } from "./lib/voiceBackend";
+import { createVoiceSessionToken } from "@/app/actions";
 import { MicMode, MIC_MODE_STORAGE_KEY, parseMicMode } from "./lib/micMode";
 import { toast } from "@/components/ui/use-toast";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -64,11 +65,10 @@ export type VoiceTriggerRenderProps = {
 
 interface AppProps {
   personalityIdState: string;
-  userId: string;
   renderTrigger?: (props: VoiceTriggerRenderProps) => React.ReactNode;
 }
 
-function App({ personalityIdState, userId, renderTrigger }: AppProps) {
+function App({ personalityIdState, renderTrigger }: AppProps) {
   const supabase = createClient();
 
   const { transcriptItems, addTranscriptMessage, upsertTranscriptMessage, updateTranscriptItemStatus } =
@@ -528,16 +528,16 @@ function App({ personalityIdState, userId, renderTrigger }: AppProps) {
 
     if (shouldUseFastAPIVoice(personality?.provider)) {
       updateVoiceStatus("connecting");
-      const voiceUrl = getFastAPIVoiceUrl({
-        voice: personality?.oai_voice,
-        voices: personality?.voices,
-        title: personality?.title,
-        characterPrompt: personality?.character_prompt,
-        voicePrompt: personality?.voice_prompt,
-        firstMessagePrompt: personality?.first_message_prompt,
-        userId,
-        personalityKey: personality?.key,
-      });
+      // A fresh ticket per socket: it lasts five minutes and is only checked
+      // when the socket opens.
+      const token = await createVoiceSessionToken().catch(() => null);
+      if (!token) {
+        setSessionStatus("DISCONNECTED");
+        updateVoiceStatus("disconnected");
+        toast({ description: "Please sign in again to talk." });
+        return;
+      }
+      const voiceUrl = getFastAPIVoiceUrl(token);
       try {
         // A restart closes the old socket and opens a new one immediately, so
         // the old socket's close event can land after the new one is already
