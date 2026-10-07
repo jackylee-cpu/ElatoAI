@@ -1,5 +1,9 @@
 """Supabase side of long-term memory: everything the toy knows, in three tables.
 
+Every row is kept per IP (`ip_key`) as well as per child: what a child tells
+one IP's characters is never read back by another's. Within an IP, its
+characters share one memory.
+
     table `memory_facts`      who the child is, one active fact per row
     table `memory_segments`   what each stretch of conversation was about
     table `conversations`     the transcript, for the web app; never read back
@@ -118,7 +122,7 @@ def _parse_segments(rows: list[dict] | None) -> list[Segment]:
     return out
 
 
-async def fetch_recent_segments(user_id: str, limit: int = 2) -> list[Segment]:
+async def fetch_recent_segments(user_id: str, ip_key: str, limit: int = 2) -> list[Segment]:
     """This child's most recent segments, oldest first.
 
     The query asks newest-first because that is what the index serves, and the
@@ -130,6 +134,7 @@ async def fetch_recent_segments(user_id: str, limit: int = 2) -> list[Segment]:
     url = (
         f"{SUPABASE_URL}/rest/v1/memory_segments"
         f"?user_id=eq.{quote(user_id, safe='')}"
+        f"&ip_key=eq.{quote(ip_key, safe='')}"
         f"&select=summary,from_turn,to_turn,created_at,chat_group_id"
         f"&order=created_at.desc"
         f"&limit={int(limit)}"
@@ -140,6 +145,7 @@ async def fetch_recent_segments(user_id: str, limit: int = 2) -> list[Segment]:
 
 async def insert_segment(
     user_id: str,
+    ip_key: str,
     chat_group_id: str | None,
     from_turn: int,
     to_turn: int,
@@ -153,6 +159,7 @@ async def insert_segment(
         return False
     row: dict[str, Any] = {
         "user_id": user_id,
+        "ip_key": ip_key,
         "from_turn": int(from_turn),
         "to_turn": int(to_turn),
         "summary": summary,
@@ -179,7 +186,9 @@ class Fact:
     created_at: str | None = None
 
 
-async def fetch_active_facts(user_id: str, limit: int = 200) -> list[Fact] | None:
+async def fetch_active_facts(
+    user_id: str, ip_key: str, limit: int = 200
+) -> list[Fact] | None:
     """This child's active facts, oldest first. None if the read failed.
 
     None is not []: consolidation hands the known list to the model so it can
@@ -191,6 +200,7 @@ async def fetch_active_facts(user_id: str, limit: int = 200) -> list[Fact] | Non
     url = (
         f"{SUPABASE_URL}/rest/v1/memory_facts"
         f"?user_id=eq.{quote(user_id, safe='')}"
+        f"&ip_key=eq.{quote(ip_key, safe='')}"
         f"&superseded_at=is.null"
         f"&select=fact_id,content,created_at"
         f"&order=created_at.desc,fact_id.desc"
@@ -213,14 +223,16 @@ async def fetch_active_facts(user_id: str, limit: int = 200) -> list[Fact] | Non
     return list(reversed(out))
 
 
-async def insert_fact(user_id: str, chat_group_id: str | None, content: str) -> str | None:
+async def insert_fact(
+    user_id: str, ip_key: str, chat_group_id: str | None, content: str
+) -> str | None:
     """Record one fact and return its id, or None if the write failed."""
     if not configured() or not user_id:
         return None
     content = (content or "").strip()
     if not content:
         return None
-    row: dict[str, Any] = {"user_id": user_id, "content": content}
+    row: dict[str, Any] = {"user_id": user_id, "ip_key": ip_key, "content": content}
     if chat_group_id:
         row["chat_group_id"] = chat_group_id
     rows = await _post_json_returning(
@@ -277,6 +289,7 @@ async def supersede_fact(user_id: str, fact_id: str, replaced_by: str) -> bool:
 
 async def insert_conversation_turn(
     user_id: str,
+    ip_key: str,
     role: str,
     content: str,
     personality_key: str | None,
@@ -297,6 +310,7 @@ async def insert_conversation_turn(
 
     row: dict[str, Any] = {
         "user_id": user_id,
+        "ip_key": ip_key,
         "role": role,
         "content": content,
         "is_sensitive": False,

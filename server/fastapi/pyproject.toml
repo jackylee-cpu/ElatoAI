@@ -11,6 +11,9 @@ dependencies = [
     "pipecat-ai-cli",
     # world_context.py names its timezone; slim images may not ship zoneinfo.
     "tzdata",
+    # session_content.py reads content/*.yaml. pipecat pulls it in today, but
+    # this module imports it directly.
+    "pyyaml",
 ]
 
 # This is an application, not a library, but the README installs it with

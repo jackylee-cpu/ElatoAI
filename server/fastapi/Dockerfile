@@ -21,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     "pipecat-ai[webrtc,websocket,silero,deepgram,openai,cartesia,google,grok,runner,openrouter,minimax,whisper,azure]>=1.7.0,<1.8" \
     "pipecat-ai-cli" \
-    "tzdata"
+    "tzdata" \
+    "pyyaml"
 
 COPY . .
 

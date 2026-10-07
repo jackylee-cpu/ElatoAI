@@ -19,7 +19,12 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 import app_settings
 import language_profiles
 from bot import create_esp32_auth_message, run_bot_session
-from device_registry import fetch_device_personality, fetch_user_personality
+import session_content
+from device_registry import (
+    fetch_character_ip,
+    fetch_device_personality,
+    fetch_user_personality,
+)
 from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
 from memory import session as memory_session
 from models.providers import get_provider_catalog, validate_classic_provider_stack
@@ -275,6 +280,13 @@ def create_app() -> FastAPI:
         return get_provider_catalog()
 
     @app.on_event("startup")
+    async def sync_modes_and_styles():
+        # Deploying a change to content/*.yaml is the whole of releasing it:
+        # the web app lists modes and styles from their tables, so they are
+        # brought in line with the YAML here. Fails open with a warning.
+        await session_content.sync_catalog()
+
+    @app.on_event("startup")
     async def validate_provider_configuration():
         selected = validate_classic_provider_stack()
         logger.info(
@@ -312,19 +324,26 @@ def create_app() -> FastAPI:
         )
         transport = create_browser_transport(websocket)
 
-        # Same store the toy uses: memory is keyed by the account, not by the
-        # client or the character, so what a child tells the web app is there
-        # the next time they pick up the toy. `user_id` is whatever the web app
-        # put on the query string; no session without one, just no memory.
+        # Same store the toy uses: memory is keyed by the account and the
+        # character's IP, not by the client or the character, so what a child
+        # tells the web app is there the next time they pick up the toy on the
+        # same IP. `user_id` is whatever the web app put on the query string;
+        # no session without one, just no memory.
         #
         # NOTE: this trusts the query string. On localhost that is the same
         # trust boundary as the rest of the dev setup, but before this is
         # exposed publicly the id has to arrive as something the browser cannot
         # forge -- a short-lived token signed by the Next.js server -- or
         # anyone who learns a user_id can read that child's memories.
-        profile = await fetch_user_personality(user_id)
+        #
+        # The IP is looked up from the character's key, not taken from the
+        # query string with the rest of the character: it decides whose
+        # memories load.
+        profile, ip = await asyncio.gather(
+            fetch_user_personality(user_id), fetch_character_ip(personality_key)
+        )
         memory = await memory_session.acquire(
-            profile.user_id, profile.language_code
+            profile.user_id, ip.ip_key if ip else None, profile.language_code
         )
         # One id per session, generated whether or not memory is running: it is
         # what ties a turn_metrics row to the conversation it was measured in.
@@ -360,6 +379,9 @@ def create_app() -> FastAPI:
                 chat_group_id=chat_group_id,
                 language_code=profile.language_code,
                 region=profile.region,
+                ip=ip,
+                mode_key=profile.mode_key,
+                style_key=profile.style_key,
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off
@@ -392,11 +414,14 @@ def create_app() -> FastAPI:
         )
         transport = create_esp32_transport(websocket)
 
-        # Memory is keyed by the account the device is claimed by, not by the
-        # device or the character: it is the same child either way. An
-        # unclaimed device resolves to no user and simply runs without memory.
+        # Memory is keyed by the account the device is claimed by and the
+        # character's IP, not by the device or the character: it is the same
+        # child either way, but one IP never hears what was told to another.
+        # An unclaimed device resolves to no user and runs without memory.
         memory = await memory_session.acquire(
-            personality.user_id, personality.language_code
+            personality.user_id,
+            personality.ip.ip_key if personality.ip else None,
+            personality.language_code,
         )
         # Same reasoning as the browser route: the id exists for the metrics
         # even when there is no memory to attach it to.
@@ -431,6 +456,9 @@ def create_app() -> FastAPI:
                 chat_group_id=chat_group_id,
                 language_code=personality.language_code,
                 region=personality.region,
+                ip=personality.ip,
+                mode_key=personality.mode_key,
+                style_key=personality.style_key,
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off

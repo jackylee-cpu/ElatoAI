@@ -141,8 +141,11 @@ class MemorySession:
     five-turn sessions kept only their first turn.
     """
 
-    def __init__(self, user_id: str, language_code: str | None = None):
+    def __init__(self, user_id: str, ip_key: str, language_code: str | None = None):
         self.user_id = user_id
+        # Whose world this memory belongs to. Every read and write is scoped
+        # to it, so one IP's characters never hear what was told to another's.
+        self.ip_key = ip_key
         self.language_code = language_code
         self._refs = 0
         self._lock = asyncio.Lock()
@@ -203,8 +206,8 @@ class MemorySession:
         self._session_segments = []
         self.session_summary = ""
         recent, facts = await asyncio.gather(
-            store.fetch_recent_segments(self.user_id, BRIEF_LOOKBACK_SEGMENTS),
-            store.fetch_active_facts(self.user_id, FACTS_IN_PROMPT),
+            store.fetch_recent_segments(self.user_id, self.ip_key, BRIEF_LOOKBACK_SEGMENTS),
+            store.fetch_active_facts(self.user_id, self.ip_key, FACTS_IN_PROMPT),
         )
         if facts is None:
             logger.warning(
@@ -284,11 +287,17 @@ class MemorySession:
 
     async def _write_turn(self, turn: PendingTurn) -> None:
         await store.insert_conversation_turn(
-            self.user_id, "user", turn.user_text, turn.personality_key, self.chat_group_id
+            self.user_id,
+            self.ip_key,
+            "user",
+            turn.user_text,
+            turn.personality_key,
+            self.chat_group_id,
         )
         if turn.agent_reply:
             await store.insert_conversation_turn(
                 self.user_id,
+                self.ip_key,
                 "assistant",
                 turn.agent_reply,
                 turn.personality_key,
@@ -395,7 +404,7 @@ class MemorySession:
         and longer stretch. They are still in `conversations`, so a stretch
         lost here can be recovered from the transcript.
         """
-        known = await store.fetch_active_facts(self.user_id)
+        known = await store.fetch_active_facts(self.user_id, self.ip_key)
         if known is None:
             # Fall back to what this session loaded, so the model can still
             # see what it already knows rather than re-adding all of it.
@@ -432,6 +441,7 @@ class MemorySession:
                 self.session_summary = self._join_session_summary()
             await store.insert_segment(
                 self.user_id,
+                self.ip_key,
                 stretch.chat_group_id,
                 stretch.from_turn,
                 stretch.to_turn,
@@ -468,7 +478,7 @@ class MemorySession:
             if privacy.holds_sensitive_number(text):
                 logger.info("Dropped a fact about {} that held a long number", self.user_id)
                 continue
-            fact_id = await store.insert_fact(self.user_id, chat_group_id, text)
+            fact_id = await store.insert_fact(self.user_id, self.ip_key, chat_group_id, text)
             if fact_id is None:
                 continue
             known_texts.add(text)
@@ -560,12 +570,15 @@ class MemorySession:
 
 # Live sessions only, so two devices on one account share one. A session leaves
 # when its last connection does; a finishing consolidation keeps the object
-# alive on its own.
-_sessions: dict[str, MemorySession] = {}
+# alive on its own. Keyed by IP too: the web playground on one IP and the toy on
+# another are two memories, not one.
+_sessions: dict[tuple[str, str], MemorySession] = {}
 _registry_lock = asyncio.Lock()
 
 
-async def acquire(user_id: str, language_code: str | None = None) -> MemorySession | None:
+async def acquire(
+    user_id: str, ip_key: str | None, language_code: str | None = None
+) -> MemorySession | None:
     """Get this child's memory for a new connection. None when unavailable.
 
     Every `None` here is a session that will not remember anything, and that is
@@ -591,10 +604,23 @@ async def acquire(user_id: str, language_code: str | None = None) -> MemorySessi
         )
         return None
 
+    if not ip_key:
+        # Not the same as the default IP. The character's IP could not be
+        # read, and loading the wrong IP's memories into it is worse than
+        # remembering nothing for one session.
+        logger.warning(
+            "No IP for {}'s character, running without memory. The character "
+            "lookup failed; check the warning above it.",
+            user_id,
+        )
+        return None
+
     async with _registry_lock:
-        session = _sessions.get(user_id)
+        session = _sessions.get((user_id, ip_key))
         if session is None:
-            session = _sessions[user_id] = MemorySession(user_id, language_code)
+            session = _sessions[(user_id, ip_key)] = MemorySession(
+                user_id, ip_key, language_code
+            )
     try:
         await session.acquire()
     except Exception as exc:  # noqa: BLE001 - a broken read must not refuse the session
@@ -609,5 +635,5 @@ async def release(session: MemorySession) -> None:
     await session.release()
     if session._refs == 0:
         async with _registry_lock:
-            if _sessions.get(session.user_id) is session:
-                del _sessions[session.user_id]
+            if _sessions.get((session.user_id, session.ip_key)) is session:
+                del _sessions[(session.user_id, session.ip_key)]

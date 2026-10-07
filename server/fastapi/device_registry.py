@@ -23,6 +23,8 @@ import aiohttp
 from loguru import logger
 
 import language_profiles
+import session_content
+from session_content import IpRules
 from world_context import Region
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -41,15 +43,23 @@ LOOKUP_TIMEOUT_SECONDS = float(os.getenv("DEVICE_LOOKUP_TIMEOUT", "3"))
 # `user_id` and the child's own fields are pulled for long-term memory: the
 # memory store is keyed by user_id, and the child profile goes into the system
 # prompt the way the Deno route already does it (server/deno/supabase.ts:96).
+#
+# The character's IP comes along with it: its guardrails and the modes and
+# styles it allows shape the prompt, and its key decides whose memories load.
+_IP_SELECT = (
+    "ip:ip_key(ip_key,guardrails,restrict_modes,restrict_styles,"
+    "ip_modes(mode_key,prompt),ip_styles(style_key))"
+)
+
 _SELECT = (
     "volume,"
     "user_id,"
     "user:user_id("
     "supervisee_name,supervisee_age,supervisee_persona,language_code,"
-    "memories_revision,"
+    "memories_revision,mode_key,style_key,"
     "region:region_code(name,timezone,latitude,longitude),"
     "personality:personality_id("
-    "key,title,character_prompt,voice_prompt,oai_voice,voices"
+    f"key,title,character_prompt,voice_prompt,oai_voice,voices,{_IP_SELECT}"
     ")"
     ")"
 )
@@ -59,6 +69,7 @@ _SELECT = (
 # `user(...)` above so both rows can go through `_parse`.
 _USER_SELECT = (
     "supervisee_name,supervisee_age,supervisee_persona,language_code,memories_revision,"
+    "mode_key,style_key,"
     "region:region_code(name,timezone,latitude,longitude)"
 )
 
@@ -84,6 +95,14 @@ class DevicePersonality:
     # None when the account has not chosen one; world_context falls back to
     # the server's own place.
     region: Region | None = None
+    # What the character is doing and in what manner, as the account chose.
+    # None means not chosen, which leaves that block out of the prompt.
+    mode_key: str | None = None
+    style_key: str | None = None
+    # The character's IP. None when it could not be read, which is not the
+    # same as the default IP: memory stays off rather than risk loading
+    # another IP's memories into this character.
+    ip: IpRules | None = None
 
 
 def _clean(value: object) -> str | None:
@@ -147,7 +166,27 @@ def _parse(row: dict) -> DevicePersonality:
         language_code=_clean(user.get("language_code")),
         memories_revision=_int_or(user.get("memories_revision"), 0) or 0,
         region=_parse_region(user.get("region")),
+        mode_key=_clean(user.get("mode_key")),
+        style_key=_clean(user.get("style_key")),
+        ip=_parse_ip(personality),
     )
+
+
+def _parse_ip(personality: dict) -> IpRules | None:
+    """The character's IP, or the default IP when there is no character.
+
+    No character is the built-in pal, which an unclaimed device and the
+    browser's default both get, and the built-in pal is an in-house character.
+    A character whose IP did not come back is a different case and stays None.
+    """
+    if not personality:
+        return session_content.DEFAULT_IP
+    ip = session_content.parse_ip_rules(personality.get("ip"))
+    if ip is None:
+        logger.warning(
+            "Character {} came back without its IP", personality.get("key") or "unknown"
+        )
+    return ip
 
 
 async def _fetch_rows(url: str, what: str) -> list[dict]:
@@ -215,9 +254,12 @@ async def fetch_device_personality(mac_address: str | None) -> DevicePersonality
 
     personality = _parse(rows[0])
     logger.info(
-        "Device {} resolved to character={} voice={} volume={} user={}",
+        "Device {} resolved to character={} ip={} mode={} style={} voice={} volume={} user={}",
         mac_address,
         personality.title or "default",
+        personality.ip.ip_key if personality.ip else "unknown",
+        personality.mode_key or "none",
+        personality.style_key or "none",
         personality.tts_voice or "default",
         personality.volume if personality.volume is not None else "default",
         personality.user_id or "unknown",
@@ -262,3 +304,31 @@ async def fetch_user_personality(user_id: str | None) -> DevicePersonality:
         personality.memories_revision,
     )
     return personality
+
+
+async def fetch_character_ip(personality_key: str | None) -> IpRules | None:
+    """The IP of the character the browser picked, by its key.
+
+    The browser route takes the character itself from the query string, but
+    not its IP: that decides whose memories load, so it is read here rather
+    than trusted from the client. No key is the built-in pal, an in-house
+    character. A key that cannot be resolved returns None, and the session
+    runs without memory.
+    """
+    if not personality_key:
+        return session_content.DEFAULT_IP
+
+    if not _supabase_configured("character IP"):
+        return None
+
+    url = (
+        f"{SUPABASE_URL}/rest/v1/personalities"
+        f"?key=eq.{quote(personality_key, safe='')}"
+        f"&select={quote('key,' + _IP_SELECT, safe='()*,:')}"
+        f"&limit=1"
+    )
+    rows = await _fetch_rows(url, f"character {personality_key}")
+    if not rows:
+        logger.warning("No character with key {}, running without memory", personality_key)
+        return None
+    return _parse_ip(rows[0])

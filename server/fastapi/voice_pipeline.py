@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import language_profiles
+import session_content
 from character_prompt import build_session_prompt
 from loguru import logger
 from models.llm import create_llm_service
@@ -116,6 +117,9 @@ def build_voice_pipeline(
     stack: dict | None = None,
     language_code: str | None = None,
     world_context: str | None = None,
+    ip=None,
+    mode_key: str | None = None,
+    style_key: str | None = None,
 ):
     # `stack` is resolved by the caller because reading it needs an await and
     # this function is synchronous. Falling back to the env-only stack keeps
@@ -151,6 +155,10 @@ def build_voice_pipeline(
                 len(preamble),
             )
 
+    # An IP that could not be read shapes the prompt as an in-house one would:
+    # nothing restricted, no guardrails. Memory is already off for it (see
+    # memory.session.acquire), which is the part that must not guess.
+    rules = ip or session_content.DEFAULT_IP
     system_instruction = build_session_prompt(
         title=title,
         character_prompt=character_prompt,
@@ -161,6 +169,9 @@ def build_voice_pipeline(
         memory_preamble=memory_preamble,
         language_instruction=language.prompt if language else None,
         world_context=world_context,
+        style_block=session_content.style_block(style_key, rules),
+        mode_block=session_content.mode_block(mode_key, rules),
+        guardrails_block=session_content.guardrails_block(rules),
     )
 
     # The voice is part of the language, not a free choice beside it: a MiniMax
@@ -176,7 +187,7 @@ def build_voice_pipeline(
 
     logger.info(
         "Building classic route with stt={} llm={} tts={} model={} reasoning={} "
-        "language={} voice={} character={}",
+        "language={} voice={} character={} ip={} mode={} style={}",
         stt_provider,
         llm_provider,
         tts_provider,
@@ -185,6 +196,9 @@ def build_voice_pipeline(
         language.label if language else (language_code or "provider default"),
         session_voice or "default",
         title or "default",
+        ip.ip_key if ip else "unknown",
+        mode_key or "none",
+        style_key or "none",
     )
     if language:
         intended = language_profiles.intended_voice(

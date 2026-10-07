@@ -111,6 +111,9 @@ def build_session_prompt(
     memory_preamble: str | None = None,
     language_instruction: str | None = None,
     world_context: str | None = None,
+    style_block: str | None = None,
+    mode_block: str | None = None,
+    guardrails_block: str | None = None,
 ) -> str:
     prompt = (character_prompt or "").strip()
     child_block = build_child_block(child_name, child_age, child_persona)
@@ -125,9 +128,18 @@ def build_session_prompt(
     # so they sit with the other facts about this session and the language and
     # spoken rules still come after them.
     world = (world_context or "").strip()
+    # Style, mode and the IP's guardrails (session_content.py) go straight
+    # after the character, in that order: who you are, how you sound, what you
+    # are doing, then what you must never do. The guardrails follow the other
+    # two so a "silly" style or a story cannot talk the character past them.
+    shaping = [
+        block.strip()
+        for block in (style_block, mode_block, guardrails_block)
+        if block and block.strip()
+    ]
 
     if not prompt:
-        parts = [LANGUAGE_LEARNING_PAL_PROMPT]
+        parts = [LANGUAGE_LEARNING_PAL_PROMPT, *shaping]
         if child_block:
             parts.append(child_block)
         if preamble:
@@ -150,6 +162,7 @@ def build_session_prompt(
     voice = (voice_prompt or "").strip()
     if voice:
         parts.append(f"YOUR VOICE IS: {voice}")
+    parts.extend(shaping)
     if child_block:
         parts.append(child_block)
     if preamble:

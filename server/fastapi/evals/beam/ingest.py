@@ -106,11 +106,11 @@ class FakeStore:
     def user(self, user_id: str) -> _UserStore:
         return self.users.setdefault(user_id, _UserStore())
 
-    async def fetch_recent_segments(self, user_id, limit=2):
+    async def fetch_recent_segments(self, user_id, ip_key, limit=2):
         segments = self.user(user_id).segments
         return list(segments[-limit:]) if limit else []
 
-    async def insert_segment(self, user_id, chat_group_id, from_turn, to_turn, summary):
+    async def insert_segment(self, user_id, ip_key, chat_group_id, from_turn, to_turn, summary):
         self.user(user_id).segments.append(
             store.Segment(
                 summary=summary,
@@ -121,11 +121,11 @@ class FakeStore:
         )
         return True
 
-    async def fetch_active_facts(self, user_id, limit=200):
+    async def fetch_active_facts(self, user_id, ip_key, limit=200):
         active = [f for f in self.user(user_id).facts if f.superseded_by is None]
         return [store.Fact(fact_id=f.fact_id, content=f.content) for f in active[-limit:]]
 
-    async def insert_fact(self, user_id, chat_group_id, content):
+    async def insert_fact(self, user_id, ip_key, chat_group_id, content):
         fact_id = f"f{next(self._ids)}"
         self.user(user_id).facts.append(_FactRow(fact_id, content, chat_group_id))
         return fact_id
@@ -137,7 +137,7 @@ class FakeStore:
                 return True
         return False
 
-    async def insert_conversation_turn(self, user_id, role, content, personality_key, group):
+    async def insert_conversation_turn(self, user_id, ip_key, role, content, personality_key, group):
         self.user(user_id).transcript_rows += 1
         return True
 
@@ -213,7 +213,8 @@ class _AnchoredSession(MemorySession):
         day: date | None,
         neutral: bool = False,
     ):
-        super().__init__(user_id, language_code)
+        # One IP: BEAM scores one assistant's memory of one person.
+        super().__init__(user_id, "house", language_code)
         self._day = day
         self._neutral = neutral
 

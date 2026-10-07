@@ -186,17 +186,17 @@ class RecordingStore:
         self.facts_inserted = []
         self.superseded = []
 
-    async def fetch_recent_segments(self, user_id, limit=2):
+    async def fetch_recent_segments(self, user_id, ip_key, limit=2):
         return self.recent[-limit:] if limit else []
 
-    async def insert_segment(self, user_id, chat_group_id, from_turn, to_turn, summary):
+    async def insert_segment(self, user_id, ip_key, chat_group_id, from_turn, to_turn, summary):
         self.inserted.append((user_id, chat_group_id, from_turn, to_turn, summary))
         return True
 
-    async def fetch_active_facts(self, user_id, limit=200):
+    async def fetch_active_facts(self, user_id, ip_key, limit=200):
         return list(self.facts)
 
-    async def insert_fact(self, user_id, chat_group_id, content):
+    async def insert_fact(self, user_id, ip_key, chat_group_id, content):
         fact_id = f"fact-{len(self.facts_inserted) + 100}"
         self.facts_inserted.append((chat_group_id, content))
         self.facts.append(store.Fact(fact_id=fact_id, content=content))
@@ -241,7 +241,7 @@ async def test_a_boundary_writes_a_segment_and_updates_the_running_summary():
     original_consolidate = memory_session.consolidate
     memory_session.consolidate = consolidating("Talked about jellyfish.")
     try:
-        session = MemorySession("child-1")
+        session = MemorySession("child-1", "house")
         session.chat_group_id = "group-1"
         session._pending_episodes = [turn("i like jellyfish"), turn("they glow")]
         session._turns_seen = 2
@@ -267,7 +267,7 @@ async def test_a_failed_summary_does_not_replay_the_same_turns():
     original_consolidate = memory_session.consolidate
     memory_session.consolidate = consolidating("")
     try:
-        session = MemorySession("child-1")
+        session = MemorySession("child-1", "house")
         session._pending_episodes = [turn("one"), turn("two")]
         session._turns_seen = 2
         await session._summarise_pending(reason="test")
@@ -294,11 +294,11 @@ async def test_a_long_number_is_transcribed_but_not_remembered():
 
     conversation_rows = []
     original_insert = store.insert_conversation_turn
-    store.insert_conversation_turn = lambda user_id, role, content, *a: _record(
+    store.insert_conversation_turn = lambda user_id, ip_key, role, content, *a: _record(
         conversation_rows, (role, content), True
     )
     try:
-        session = MemorySession("child-1")
+        session = MemorySession("child-1", "house")
 
         await session._write_turn(turn("我的电话是13812345678", "好的，我记住了"))
         assert session._turns_seen == 0, session._turns_seen
@@ -327,7 +327,7 @@ async def test_the_opening_brief_is_loaded_at_session_start():
     saved = []
     patch_store(saved, fake)
     try:
-        session = MemorySession("child-1")
+        session = MemorySession("child-1", "house")
         await session._begin_session()
 
         block = session.opening_brief_block()
@@ -345,7 +345,7 @@ async def test_no_history_means_no_brief_block():
     saved = []
     patch_store(saved, fake)
     try:
-        session = MemorySession("child-1")
+        session = MemorySession("child-1", "house")
         await session._begin_session()
         assert session.opening_brief_block() == ""
         print("  ok: a first session gets no brief and no empty heading")
