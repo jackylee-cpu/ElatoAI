@@ -107,11 +107,6 @@ declare global {
         // region: null until chosen; the voice server then uses its own default.
         region_code?: string | null;
 
-        // mode and style: null until chosen, which gives the session the
-        // character alone, as before modes existed.
-        mode_key?: string | null;
-        style_key?: string | null;
-
         // device
         device?: IDevice;
         device_id: string | null;
@@ -468,6 +463,11 @@ declare global {
         is_hidden?: boolean;
         // The IP this character belongs to. Defaults to 'house', our own.
         ip_key?: string;
+        // What the character does and its manner, set by its author on the
+        // admin page. Null = none: the character prompt alone, as before
+        // modes existed. The child can still ask to switch mode mid-session.
+        mode_key?: string | null;
+        style_key?: string | null;
     }
 
     type PersonalityFilter = "is_child_voice" | "is_doctor" | "is_story";

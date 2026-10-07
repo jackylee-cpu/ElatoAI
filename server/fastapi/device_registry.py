@@ -56,10 +56,10 @@ _SELECT = (
     "user_id,"
     "user:user_id("
     "supervisee_name,supervisee_age,supervisee_persona,language_code,"
-    "memories_revision,mode_key,style_key,"
+    "memories_revision,"
     "region:region_code(name,timezone,latitude,longitude),"
     "personality:personality_id("
-    f"key,title,character_prompt,voice_prompt,oai_voice,voices,{_IP_SELECT}"
+    f"key,title,character_prompt,voice_prompt,oai_voice,voices,mode_key,style_key,{_IP_SELECT}"
     ")"
     ")"
 )
@@ -69,7 +69,6 @@ _SELECT = (
 # `user(...)` above so both rows can go through `_parse`.
 _USER_SELECT = (
     "supervisee_name,supervisee_age,supervisee_persona,language_code,memories_revision,"
-    "mode_key,style_key,"
     "region:region_code(name,timezone,latitude,longitude)"
 )
 
@@ -95,8 +94,8 @@ class DevicePersonality:
     # None when the account has not chosen one; world_context falls back to
     # the server's own place.
     region: Region | None = None
-    # What the character is doing and in what manner, as the account chose.
-    # None means not chosen, which leaves that block out of the prompt.
+    # What the character is doing and in what manner, as its author set it on
+    # the admin page. None means none, which leaves that block out.
     mode_key: str | None = None
     style_key: str | None = None
     # The character's IP. None when it could not be read, which is not the
@@ -166,8 +165,8 @@ def _parse(row: dict) -> DevicePersonality:
         language_code=_clean(user.get("language_code")),
         memories_revision=_int_or(user.get("memories_revision"), 0) or 0,
         region=_parse_region(user.get("region")),
-        mode_key=_clean(user.get("mode_key")),
-        style_key=_clean(user.get("style_key")),
+        mode_key=_clean(personality.get("mode_key")),
+        style_key=_clean(personality.get("style_key")),
         ip=_parse_ip(personality),
     )
 
@@ -306,29 +305,47 @@ async def fetch_user_personality(user_id: str | None) -> DevicePersonality:
     return personality
 
 
-async def fetch_character_ip(personality_key: str | None) -> IpRules | None:
-    """The IP of the character the browser picked, by its key.
+@dataclass(frozen=True)
+class CharacterSetup:
+    """What the browser route reads about its character server-side.
 
-    The browser route takes the character itself from the query string, but
-    not its IP: that decides whose memories load, so it is read here rather
-    than trusted from the client. No key is the built-in pal, an in-house
-    character. A key that cannot be resolved returns None, and the session
-    runs without memory.
+    `ip` is None when the character could not be read, and memory then stays
+    off (see memory.session.acquire).
+    """
+
+    ip: IpRules | None = None
+    mode_key: str | None = None
+    style_key: str | None = None
+
+
+async def fetch_character_setup(personality_key: str | None) -> CharacterSetup:
+    """The IP, mode and style of the character the browser picked, by its key.
+
+    The browser route takes the character's prompt and voice from the query
+    string, but not these: the IP decides whose memories load, so it is read
+    here rather than trusted from the client, and the mode and style come along
+    in the same request. No key is the built-in pal: an in-house character with
+    no mode or style.
     """
     if not personality_key:
-        return session_content.DEFAULT_IP
+        return CharacterSetup(ip=session_content.DEFAULT_IP)
 
-    if not _supabase_configured("character IP"):
-        return None
+    if not _supabase_configured("character setup"):
+        return CharacterSetup()
 
     url = (
         f"{SUPABASE_URL}/rest/v1/personalities"
         f"?key=eq.{quote(personality_key, safe='')}"
-        f"&select={quote('key,' + _IP_SELECT, safe='()*,:')}"
+        f"&select={quote('key,mode_key,style_key,' + _IP_SELECT, safe='()*,:')}"
         f"&limit=1"
     )
     rows = await _fetch_rows(url, f"character {personality_key}")
     if not rows:
         logger.warning("No character with key {}, running without memory", personality_key)
-        return None
-    return _parse_ip(rows[0])
+        return CharacterSetup()
+    row = rows[0]
+    return CharacterSetup(
+        ip=_parse_ip(row),
+        mode_key=_clean(row.get("mode_key")),
+        style_key=_clean(row.get("style_key")),
+    )

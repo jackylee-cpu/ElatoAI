@@ -120,9 +120,12 @@ def test_a_device_reads_its_characters_ip_mode_and_style():
     row = {
         "user_id": "child-1",
         "user": {
-            "mode_key": "story",
-            "style_key": "gentle",
-            "personality": {"key": "pig", "ip": {"ip_key": "licensed"}},
+            "personality": {
+                "key": "pig",
+                "mode_key": "story",
+                "style_key": "gentle",
+                "ip": {"ip_key": "licensed"},
+            },
         },
     }
     parsed = device_registry._parse(row)

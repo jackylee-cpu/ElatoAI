@@ -104,6 +104,8 @@ const EDITABLE_FIELDS = [
     "is_child_voice",
     "is_story",
     "ip_key",
+    "mode_key",
+    "style_key",
 ] as const;
 
 export async function updatePersonalityAction(

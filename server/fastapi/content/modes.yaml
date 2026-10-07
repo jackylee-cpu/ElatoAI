@@ -8,8 +8,8 @@
 #
 # The voice server reads `prompt` from here. On startup it also upserts the key,
 # name, description and sort_order into the `modes` table, which is what the
-# web app lists and what users.mode_key points at. Renaming a key orphans
-# every account that chose it, so add a new key and retire the old one instead.
+# web app lists and what personalities.mode_key points at. Renaming a key
+# orphans every character set to it, so add a new key and retire the old one.
 #
 # A prompt is spoken to by a model that is also reading the character's own
 # prompt above it. It says what to do now, not who to be.

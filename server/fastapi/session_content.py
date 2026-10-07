@@ -11,7 +11,9 @@ Modes and styles are platform content, written in content/*.yaml next to this
 file and reviewed like code. Their prompts are read from there and nowhere
 else. On startup `sync_catalog` upserts each key, name, description and
 sort_order into the `modes` and `styles` tables, which is what the web app
-lists and what users.mode_key and users.style_key point at.
+lists and what personalities.mode_key and personalities.style_key point at.
+A character's mode and style are set by its author on the admin page, not by
+parents.
 
 The child can switch modes by asking. Every mode the IP allows goes into the
 system prompt, with the chosen one marked as where to start, rather than a tool
@@ -198,7 +200,7 @@ def _mode_text(entry: Entry, ip: IpRules) -> str:
 def mode_block(mode_key: str | None, ip: IpRules = DEFAULT_IP) -> str | None:
     """The chosen mode, plus every other mode the IP allows, to switch to on request.
 
-    None when no mode was chosen: that account gets the session it had before
+    None when the character has no mode: it gets the session it had before
     modes existed, rather than having a mode picked for it.
     """
     if not mode_key:
@@ -261,7 +263,7 @@ async def sync_catalog() -> None:
     """Upsert the YAML's modes and styles into their tables.
 
     Runs on every startup, so deploying a YAML change is the whole of releasing
-    it. Never deletes: an account may still point at a key that left the YAML,
+    it. Never deletes: a character may still point at a key that left the YAML,
     and the server already leaves an unknown key out of the prompt.
     """
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:

@@ -21,7 +21,7 @@ import language_profiles
 from bot import create_esp32_auth_message, run_bot_session
 import session_content
 from device_registry import (
-    fetch_character_ip,
+    fetch_character_setup,
     fetch_device_personality,
     fetch_user_personality,
 )
@@ -336,12 +336,13 @@ def create_app() -> FastAPI:
         # forge -- a short-lived token signed by the Next.js server -- or
         # anyone who learns a user_id can read that child's memories.
         #
-        # The IP is looked up from the character's key, not taken from the
-        # query string with the rest of the character: it decides whose
-        # memories load.
-        profile, ip = await asyncio.gather(
-            fetch_user_personality(user_id), fetch_character_ip(personality_key)
+        # The IP, mode and style are looked up from the character's key, not
+        # taken from the query string with the rest of the character: the IP
+        # decides whose memories load.
+        profile, setup = await asyncio.gather(
+            fetch_user_personality(user_id), fetch_character_setup(personality_key)
         )
+        ip = setup.ip
         memory = await memory_session.acquire(
             profile.user_id, ip.ip_key if ip else None, profile.language_code
         )
@@ -380,8 +381,8 @@ def create_app() -> FastAPI:
                 language_code=profile.language_code,
                 region=profile.region,
                 ip=ip,
-                mode_key=profile.mode_key,
-                style_key=profile.style_key,
+                mode_key=setup.mode_key,
+                style_key=setup.style_key,
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off

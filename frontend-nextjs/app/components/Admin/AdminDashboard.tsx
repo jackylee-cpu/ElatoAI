@@ -83,7 +83,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <LatencyTab rows={turnMetrics} />
                         </TabsContent>
                         <TabsContent value="characters" className="mt-0">
-                            <CharactersTab personalities={personalities} ips={ips} />
+                            <CharactersTab
+                                personalities={personalities}
+                                ips={ips}
+                                modes={modes}
+                                styles={styles}
+                            />
                         </TabsContent>
                         <TabsContent value="ips" className="mt-0">
                             <IpsTab

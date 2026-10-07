@@ -157,18 +157,19 @@ ALTER TABLE public.personalities
     ADD COLUMN IF NOT EXISTS ip_key text NOT NULL DEFAULT 'house'
     REFERENCES public.ips (ip_key) ON UPDATE CASCADE;
 
--- ── the account's mode and style ─────────────────────────────────────────────
+-- ── each character's mode and style ──────────────────────────────────────────
 --
--- Beside personality_id, because that is where the character is chosen today:
--- an account has one device (users.device_id is unique) and the web
--- playground and the toy share the one choice. NULL means "not chosen", which
--- gives exactly the session every account had before this migration.
+-- Set by whoever writes the character, on the admin page, not by parents: a
+-- character is sold as "the storyteller" or "the language pal", and the parent
+-- picks the character. NULL means none, which gives exactly the session every
+-- character had before this migration. The child can still ask to switch to
+-- another mode the IP allows during a conversation.
 
-ALTER TABLE public.users
+ALTER TABLE public.personalities
     ADD COLUMN IF NOT EXISTS mode_key text
     REFERENCES public.modes (mode_key) ON UPDATE CASCADE ON DELETE SET NULL;
 
-ALTER TABLE public.users
+ALTER TABLE public.personalities
     ADD COLUMN IF NOT EXISTS style_key text
     REFERENCES public.styles (style_key) ON UPDATE CASCADE ON DELETE SET NULL;
 

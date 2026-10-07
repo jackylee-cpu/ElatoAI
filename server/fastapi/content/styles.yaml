@@ -2,7 +2,7 @@
 #
 # Same arrangement as modes.yaml: prompts are read from here, and the key,
 # name, description and sort_order are upserted into the `styles` table on
-# startup for the web app and for users.style_key.
+# startup for the web app and for personalities.style_key.
 #
 # A style changes how the character says things, never what it is allowed to
 # say. The IP's guardrails come after the style in the system prompt so that

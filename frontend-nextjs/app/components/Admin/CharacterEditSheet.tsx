@@ -34,6 +34,10 @@ import {
     createPersonalityAction,
     updatePersonalityAction,
 } from "@/app/home/admin/actions";
+import { modesAllowedBy, stylesAllowedBy } from "@/db/sessionOptions";
+
+// Radix Select cannot hold an empty value, so "none" stands for null.
+const NONE = "none";
 
 const EMPTY: Partial<IPersonality> = {
     key: "",
@@ -51,6 +55,8 @@ const EMPTY: Partial<IPersonality> = {
     is_story: false,
     is_hidden: false,
     ip_key: "house",
+    mode_key: null,
+    style_key: null,
 };
 
 interface CharacterEditSheetProps {
@@ -59,6 +65,8 @@ interface CharacterEditSheetProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     ips: IIp[];
+    modes: IMode[];
+    styles: IStyle[];
 }
 
 const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
@@ -66,6 +74,8 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
     open,
     onOpenChange,
     ips,
+    modes,
+    styles,
 }) => {
     const creating = personality === null;
     const [draft, setDraft] = useState<Partial<IPersonality>>(
@@ -134,6 +144,30 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
             : null;
     const previewImage = draft.image_url ?? bundledImage;
 
+    // Only what the character's IP allows is offered. Moving the character to
+    // an IP that does not allow its current mode or style clears it, rather
+    // than leaving a choice the voice server would silently drop.
+    const ipOf = (ipKey: string | undefined) =>
+        ips.find((ip) => ip.ip_key === (ipKey ?? "house"));
+    const allowedModes = modesAllowedBy(ipOf(draft.ip_key), modes);
+    const allowedStyles = stylesAllowedBy(ipOf(draft.ip_key), styles);
+    const onIpChange = (ipKey: string) =>
+        setDraft((current) => {
+            const ip = ipOf(ipKey);
+            const keepMode = modesAllowedBy(ip, modes).some(
+                (m) => m.mode_key === current.mode_key,
+            );
+            const keepStyle = stylesAllowedBy(ip, styles).some(
+                (s) => s.style_key === current.style_key,
+            );
+            return {
+                ...current,
+                ip_key: ipKey,
+                mode_key: keepMode ? current.mode_key : null,
+                style_key: keepStyle ? current.style_key : null,
+            };
+        });
+
     const setLangVoice = (code: string, value: string) =>
         setDraft((current) => ({
             ...current,
@@ -198,7 +232,7 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                             >
                                 <Select
                                     value={draft.ip_key ?? "house"}
-                                    onValueChange={(value) => set("ip_key", value)}
+                                    onValueChange={onIpChange}
                                 >
                                     <SelectTrigger>
                                         <SelectValue />
@@ -208,6 +242,58 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                                             <SelectItem key={ip.ip_key} value={ip.ip_key}>
                                                 {ip.name}
                                                 {ip.is_hidden ? " (hidden)" : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </Field>
+                        )}
+
+                        {modes.length > 0 && (
+                            <Field
+                                label="Activity"
+                                hint="What the character does when a conversation starts. The child can still ask it to switch to another activity its IP allows. None = the character prompt alone."
+                            >
+                                <Select
+                                    value={draft.mode_key ?? NONE}
+                                    onValueChange={(value) =>
+                                        set("mode_key", value === NONE ? null : value)
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={NONE}>None</SelectItem>
+                                        {allowedModes.map((mode) => (
+                                            <SelectItem key={mode.mode_key} value={mode.mode_key}>
+                                                {mode.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </Field>
+                        )}
+
+                        {styles.length > 0 && (
+                            <Field
+                                label="Personality"
+                                hint="The manner it speaks in, on top of the character prompt. It never overrides the IP's rules."
+                            >
+                                <Select
+                                    value={draft.style_key ?? NONE}
+                                    onValueChange={(value) =>
+                                        set("style_key", value === NONE ? null : value)
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={NONE}>None</SelectItem>
+                                        {allowedStyles.map((style) => (
+                                            <SelectItem key={style.style_key} value={style.style_key}>
+                                                {style.name}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>

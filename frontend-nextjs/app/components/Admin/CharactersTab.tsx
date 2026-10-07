@@ -32,9 +32,20 @@ type Scope = "all" | "builtin" | "user" | "hidden";
 interface CharactersTabProps {
     personalities: IAdminPersonality[];
     ips: IIp[];
+    modes: IMode[];
+    styles: IStyle[];
 }
 
-const CharactersTab: React.FC<CharactersTabProps> = ({ personalities, ips }) => {
+const CharactersTab: React.FC<CharactersTabProps> = ({
+    personalities,
+    ips,
+    modes,
+    styles,
+}) => {
+    const modeName = (key: string | null | undefined) =>
+        key ? (modes.find((m) => m.mode_key === key)?.name ?? key) : null;
+    const styleName = (key: string | null | undefined) =>
+        key ? (styles.find((s) => s.style_key === key)?.name ?? key) : null;
     const ipName = (ipKey: string | undefined) =>
         ips.find((ip) => ip.ip_key === (ipKey ?? "house"))?.name ?? ipKey ?? "house";
     const [search, setSearch] = useState("");
@@ -110,6 +121,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities, ips }) => 
                                 <TableHead>Title</TableHead>
                                 <TableHead>Key</TableHead>
                                 <TableHead>IP</TableHead>
+                                <TableHead>Activity · personality</TableHead>
                                 <TableHead>Owner</TableHead>
                                 <TableHead>Voice</TableHead>
                                 <TableHead className="text-right">Prompt</TableHead>
@@ -151,6 +163,13 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities, ips }) => 
                                     </TableCell>
                                     <TableCell className="text-xs whitespace-nowrap">
                                         {ipName(entry.ip_key)}
+                                    </TableCell>
+                                    <TableCell className="text-xs whitespace-nowrap">
+                                        {[modeName(entry.mode_key), styleName(entry.style_key)]
+                                            .filter(Boolean)
+                                            .join(" · ") || (
+                                            <span className="text-muted-foreground">—</span>
+                                        )}
                                     </TableCell>
                                     <TableCell className="text-xs">
                                         {entry.creator_id === null ? (
@@ -218,6 +237,8 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities, ips }) => 
                     open
                     onOpenChange={(open) => !open && setEditing(null)}
                     ips={ips}
+                    modes={modes}
+                    styles={styles}
                 />
             )}
             {creating && (
@@ -227,6 +248,8 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities, ips }) => 
                     open
                     onOpenChange={(open) => !open && setCreating(false)}
                     ips={ips}
+                    modes={modes}
+                    styles={styles}
                 />
             )}
         </div>

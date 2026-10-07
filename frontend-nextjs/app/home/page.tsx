@@ -5,7 +5,7 @@ import Playground from "../components/Playground/PlaygroundComponent";
 import { defaultPersonalityId } from "@/lib/data";
 import { getAllPersonalities, getMyPersonalities } from "@/db/personalities";
 import { isAdminEmail } from "@/lib/admin";
-import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
+import { getAllIps } from "@/db/sessionOptions";
 
 
 export const revalidate = 0; // disable cache for this route
@@ -36,15 +36,12 @@ export default async function Home() {
         }
     }
 
-    const [dbUser, allPersonalities, myPersonalities, ips, modes, styles] =
-        await Promise.all([
-            getUserById(supabase, user!.id),
-            getAllPersonalities(supabase),
-            getMyPersonalities(supabase, user?.id ?? ""),
-            getAllIps(supabase),
-            getAllModes(supabase),
-            getAllStyles(supabase),
-        ]);
+    const [dbUser, allPersonalities, myPersonalities, ips] = await Promise.all([
+        getUserById(supabase, user!.id),
+        getAllPersonalities(supabase),
+        getMyPersonalities(supabase, user?.id ?? ""),
+        getAllIps(supabase),
+    ]);
 
     return (
         <>
@@ -53,8 +50,6 @@ export default async function Home() {
                     allPersonalities={allPersonalities}
                     myPersonalities={myPersonalities}
                     ips={ips}
-                    modes={modes}
-                    styles={styles}
                     currentUser={dbUser}
                     isAdmin={isAdminEmail(dbUser.email)}
                 />
