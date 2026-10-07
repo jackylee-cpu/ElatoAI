@@ -38,7 +38,6 @@ const AppSettings: React.FC<AppSettingsProps> = ({
     const supabase = createClient();
     const { toast } = useToast();
     const [isConnected, setIsConnected] = React.useState(false);
-    const doctorFormRef = React.useRef<{ submitForm: () => void } | null>(null);
     const userFormRef = React.useRef<{ submitForm: () => void } | null>(null);
     const [deviceCode, setDeviceCode] = React.useState("");
     const [error, setError] = React.useState("");
@@ -48,11 +47,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
     const [busyDeviceId, setBusyDeviceId] = React.useState<string | null>(null);
 
     const handleSave = () => {
-        if (selectedUser.user_info.user_type === "doctor") {
-            doctorFormRef.current?.submitForm();
-        } else {
-            userFormRef.current?.submitForm();
-        }
+        userFormRef.current?.submitForm();
     };
 
     const checkIfUserHasDevice = useCallback(async () => {
@@ -132,7 +127,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
         debouncedUpdateVolume();
     };
 
-    const onSave = async (values: any, userType: "doctor" | "user", userId: string) => {
+    const onSave = async (values: any, userId: string) => {
 
         await updateUser(
             supabase,
@@ -140,10 +135,6 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                 supervisee_age: values.supervisee_age,
                 supervisee_name: values.supervisee_name,
                 supervisee_persona: values.supervisee_persona,
-                user_info: {
-                    user_type: userType,
-                    user_metadata: values,
-                },  
             },
             userId);
             toast({
@@ -167,7 +158,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                 <h2 className="text-lg font-semibold border-b border-gray-200 pb-2">
                     Device settings
                 </h2>
-                {skipDeviceRegistration && <div className="flex flex-col text-purple-500 text-xs gap-2">You don't need to register your device because NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION is set to True.</div>}
+                {skipDeviceRegistration && <div className="flex flex-col text-purple-500 text-xs gap-2">You don&apos;t need to register your device because NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION is set to True.</div>}
                 <div className="flex flex-col gap-6">
                 <div className="flex flex-col gap-2">
                     <div className="flex flex-row items-center gap-2">

@@ -5,23 +5,17 @@ interface PersonalityFiltersProps {
     setSelectedFilters: Dispatch<SetStateAction<PersonalityFilter[]>>;
     selectedFilters: PersonalityFilter[];
     languageState: string;
-    currentUser: IUser;
 }
 
 const PersonalityFilters = ({
     setSelectedFilters,
     selectedFilters,
-    currentUser,
 }: PersonalityFiltersProps) => {
-    const isDoctor = currentUser.user_info?.user_type === "doctor";
     const active = selectedFilters[0] ?? "is_story";
 
     const tabs: { value: PersonalityFilter; label: string }[] = [
         { value: "is_story", label: "Story" },
         { value: "is_child_voice", label: "Children" },
-        ...(!isDoctor
-            ? [{ value: "is_doctor" as const, label: "Caregiver" }]
-            : []),
     ];
 
     return (

@@ -36,7 +36,6 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
     const isDesktop = useMediaQuery("(min-width: 768px)");
 
     const isPersonalCharacter = openPersonality.creator_id !== null;
-    const isDoctor = openPersonality.is_doctor;
 
     const ButtonsComponent = () => {
         return (
@@ -132,7 +131,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                     <p className="text-gray-600">
                         {openPersonality.short_description}
                     </p>
-                    {(isPersonalCharacter || isDoctor) && (
+                    {isPersonalCharacter && (
                         <PersonalCharacterComponent />
                     )}
                 </div>

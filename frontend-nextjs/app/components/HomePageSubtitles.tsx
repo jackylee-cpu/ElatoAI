@@ -10,19 +10,11 @@ const HomePageSubtitles: React.FC<HomePageSubtitlesProps> = ({
     languageCode = "en-US",
 }) => {
     if (page === "home") {
-        if (user.user_info.user_type === "doctor") {
-            return (
-                <p className="text-sm text-gray-600">
-                    {"Use this playground or your device to engage your patients"}
-                </p>
-            );
-        } else {
-            return (
-                <p className="text-sm text-gray-600">
-                    {"Talk to any AI character below"}
-                </p>
-            );
-        }
+        return (
+            <p className="text-sm text-gray-600">
+                {"Talk to any AI character below"}
+            </p>
+        );
     } else if (page === "settings") {
         return (
             <p className="text-sm text-gray-600">

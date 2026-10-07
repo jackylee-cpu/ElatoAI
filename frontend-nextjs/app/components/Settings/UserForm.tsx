@@ -23,7 +23,7 @@ import { Loader2 } from "lucide-react";
 interface GeneralUserFormProps {
     selectedUser?: IUser;
     heading?: React.ReactNode;
-    onSave?: (values: any, userType: "doctor" | "user", userId: string) => void;
+    onSave?: (values: any, userId: string) => void;
     onClickCallback: () => void;
     userId: string;
     disabled?: boolean;
@@ -53,11 +53,11 @@ const GeneralUserForm = ({ selectedUser, onSave, onClickCallback, userId, headin
     });
 
     async function onSubmit(values: z.infer<typeof UserSettingsSchema>) {
-        onSave && onSave(values, "user", userId);
+        onSave && onSave(values, userId);
     }
 
     const handleSave = () => {
-        onSave && onSave(form.getValues(), "user", userId);
+        onSave && onSave(form.getValues(), userId);
         onClickCallback();
     };
 

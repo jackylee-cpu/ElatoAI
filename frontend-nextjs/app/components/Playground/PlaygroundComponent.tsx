@@ -33,7 +33,6 @@ const initialFilterForUser = (user: IUser): PersonalityFilter[] => {
     const personality = user.personality;
     if (personality?.is_story) return ["is_story"];
     if (personality?.is_child_voice) return ["is_child_voice"];
-    if (personality?.is_doctor) return ["is_doctor"];
     return ["is_story"];
 };
 
@@ -44,8 +43,6 @@ const Playground: React.FC<PlaygroundProps> = ({
     ips,
     isAdmin = false,
 }) => {
-    const isDoctor = currentUser.user_info.user_type === "doctor";
-
     const supabase = createClient();
 
     const [personalityIdState, setPersonalityIdState] = useState<string>(
@@ -146,7 +143,6 @@ const Playground: React.FC<PlaygroundProps> = ({
                                 setSelectedFilters={setSelectedFilters}
                                 selectedFilters={selectedFilters}
                                 languageState={"en-US"}
-                                currentUser={currentUser}
                             />
                         </div>
 
@@ -157,12 +153,7 @@ const Playground: React.FC<PlaygroundProps> = ({
                                 personalityIdState={personalityIdState}
                                 languageState={"en-US"}
                                 disableButtons={false}
-                                allPersonalities={(isDoctor
-                                    ? allPersonalities.filter(
-                                          (p) => p.is_story || p.is_doctor
-                                      )
-                                    : allPersonalities
-                                ).filter(inShownIp)}
+                                allPersonalities={allPersonalities.filter(inShownIp)}
                                 myPersonalities={myPersonalities.filter(inShownIp)}
                             />
                         </div>
@@ -171,7 +162,6 @@ const Playground: React.FC<PlaygroundProps> = ({
                     <PlaygroundBottomNav>
                         <App
                             personalityIdState={personalityIdState}
-                            isDoctor={isDoctor}
                             userId={currentUser.user_id}
                             renderTrigger={({
                                 sessionStatus,

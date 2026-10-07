@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { SessionStatus } from "@/app/components/Realtime/types";
-import { Paperclip, PhoneCall, Play, Stethoscope } from "lucide-react";
+import { Paperclip, PhoneCall, Play } from "lucide-react";
 import { Loader2, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 interface BottomToolbarProps {
   sessionStatus: SessionStatus;
   onToggleConnection: () => void;
-  isDoctor: boolean;
   personality: IPersonality;
   usesFastAPI?: boolean;
 }
@@ -15,7 +14,6 @@ interface BottomToolbarProps {
 function BottomToolbar({
   sessionStatus,
   onToggleConnection,
-  isDoctor,
   personality,
   usesFastAPI = false,
 }: BottomToolbarProps) {
@@ -25,19 +23,13 @@ function BottomToolbar({
   function getConnectionButtonIcon() {
     if (isConnected) return <X className="flex-shrink-0 h-4 w-4 md:h-4 md:w-4" size={12}  />;
     if (isConnecting) return <Loader2 className="flex-shrink-0 h-4 w-4 md:h-4 md:w-4" size={12} />;
-    return isDoctor ? <Stethoscope className="flex-shrink-0 h-4 w-4 md:h-4 md:w-4" size={12} /> : <PhoneCall className="flex-shrink-0 h-4 w-4 md:h-4 md:w-4" size={12} />;
+    return <PhoneCall className="flex-shrink-0 h-4 w-4 md:h-4 md:w-4" size={12} />;
   }
 
   function getConnectionButtonLabel() {
     if (isConnected) return "Disconnect";
     if (isConnecting) return "Connecting...";
     return "Talk";
-  }
-
-  function getConnectionButtonLabelForDoctor() {
-    if (isConnected) return "Submit";
-    if (isConnecting) return "Connecting...";
-    return "Doctor chat";
   }
 
   const isDisabled = isConnecting || (!usesFastAPI && personality.provider === "gemini");
@@ -71,7 +63,7 @@ function BottomToolbar({
         disabled={isDisabled}
       >
         {getConnectionButtonIcon()}
-        {isDoctor ? getConnectionButtonLabelForDoctor() : getConnectionButtonLabel()}
+        {getConnectionButtonLabel()}
       </button>
           </TooltipTrigger>
           {isDisabled && (

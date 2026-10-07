@@ -122,10 +122,6 @@ export const signOutAction = async () => {
     return redirect("/login");
 };
 
-export const checkDoctorAction = async (authCode: string) => {
-    return authCode === "kiwi-subtle-emu";
-};
-
 /*
  * Binding and unbinding write `devices.user_id` and `users.device_id`, which the
  * signed-in client is not granted (migration 20261007130000): an owner can only

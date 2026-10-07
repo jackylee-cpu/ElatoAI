@@ -120,15 +120,7 @@ const createSystemPrompt = async (
     return storyPrompt;
   }
 
-  let systemPrompt;
-  switch (user.user_info.user_type) {
-    case "user":
-      systemPrompt = UserPromptTemplate(user);
-      break;
-    default:
-      throw new Error("Invalid user type");
-  }
-  return systemPrompt + commonPrompt;
+  return UserPromptTemplate(user) + commonPrompt;
 };
 
 export async function GET(request: NextRequest) {

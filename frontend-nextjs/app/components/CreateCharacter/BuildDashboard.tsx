@@ -32,7 +32,6 @@ interface SettingsDashboardProps {
 const categoryOptions: { value: PersonalityFilter; label: string; description: string }[] = [
   { value: "is_story", label: "Story", description: "Storytelling characters" },
   { value: "is_child_voice", label: "Children", description: "Voices for kids" },
-  { value: "is_doctor", label: "Caregiver", description: "Care and companionship" },
 ];
 
 const formSchema = z.object({
@@ -40,7 +39,7 @@ const formSchema = z.object({
   // Which playground tab the character lives under. The picker shows one tab at
   // a time and requires the flag to be true, so a character without a category
   // would be listed nowhere.
-  category: z.enum(["is_story", "is_child_voice", "is_doctor"]),
+  category: z.enum(["is_story", "is_child_voice"]),
   title: z.string().min(1, "Title is required").max(50, "Maximum 50 characters"),
   description: z.string().max(200, "Maximum 200 characters"),
   prompt: z.string().max(1000, "Maximum 1000 characters"),
@@ -272,7 +271,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
         oai_voice: formData.voice,
         voice_prompt: formData.voiceCharacteristics.features + "\nThe voice should be " + formData.voiceCharacteristics.emotion,
         image_url: imageUrl,
-        is_doctor: formData.category === "is_doctor",
+        is_doctor: false,
         is_child_voice: formData.category === "is_child_voice",
         is_story: formData.category === "is_story",
         key: formData.title.toLowerCase().replace(/ /g, '_') + "_" + uuidv4(),

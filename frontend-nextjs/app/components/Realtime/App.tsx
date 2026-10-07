@@ -57,7 +57,6 @@ const BOT_REVEAL_INTERVAL_MS = 33;
 export type VoiceTriggerRenderProps = {
   sessionStatus: SessionStatus;
   onToggleConnection: () => void;
-  isDoctor: boolean;
   personality: IPersonality | null;
   usesFastAPI: boolean;
   disabled: boolean;
@@ -65,12 +64,11 @@ export type VoiceTriggerRenderProps = {
 
 interface AppProps {
   personalityIdState: string;
-  isDoctor: boolean;
   userId: string;
   renderTrigger?: (props: VoiceTriggerRenderProps) => React.ReactNode;
 }
 
-function App({ personalityIdState, isDoctor, userId, renderTrigger }: AppProps) {
+function App({ personalityIdState, userId, renderTrigger }: AppProps) {
   const supabase = createClient();
 
   const { transcriptItems, addTranscriptMessage, upsertTranscriptMessage, updateTranscriptItemStatus } =
@@ -733,7 +731,7 @@ function App({ personalityIdState, isDoctor, userId, renderTrigger }: AppProps) 
     sendClientEvent(sessionUpdateEvent);
 
     if (shouldTriggerResponse) {
-      sendSimulatedUserMessage(isDoctor ? "Ask the doctor if everything is good and how you can help them and their patient." : createFirstMessage());
+      sendSimulatedUserMessage(createFirstMessage());
     }
   };
 
@@ -868,7 +866,6 @@ function App({ personalityIdState, isDoctor, userId, renderTrigger }: AppProps) 
     renderTrigger({
       sessionStatus,
       onToggleConnection,
-      isDoctor,
       personality,
       usesFastAPI,
       disabled: triggerDisabled,
@@ -877,7 +874,6 @@ function App({ personalityIdState, isDoctor, userId, renderTrigger }: AppProps) 
     <BottomToolbar
       sessionStatus={sessionStatus}
       onToggleConnection={onToggleConnection}
-      isDoctor={isDoctor}
       personality={personality}
       usesFastAPI={usesFastAPI}
     />

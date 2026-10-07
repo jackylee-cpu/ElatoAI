@@ -124,27 +124,15 @@ declare global {
             user_metadata: IUserMetadata;
         }
         | {
-            user_type: "doctor";
-            user_metadata: IDoctorMetadata;
-        }
-        | {
             user_type: "business";
             user_metadata: IBusinessMetadata;
         };
 
     interface IBusinessMetadata {}
 
-    interface IDoctorMetadata {
-        doctor_name: string;
-        specialization: string;
-        hospital_name: string;
-        favorite_phrases: string;
-        hospital_layout: string;
-    }
-
     interface IUserMetadata {}
 
-    type Role = "user" | "assistant" | "doctor";
+    type Role = "user" | "assistant";
 
     /**
      * One thing the toy remembers, and what it answered at the time.
@@ -470,7 +458,7 @@ declare global {
         style_key?: string | null;
     }
 
-    type PersonalityFilter = "is_child_voice" | "is_doctor" | "is_story";
+    type PersonalityFilter = "is_child_voice" | "is_story";
 
     /** A character plus who owns it, for the admin list. */
     interface IAdminPersonality extends IPersonality {
