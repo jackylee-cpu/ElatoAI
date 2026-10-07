@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
-import { Gamepad2, Plus, Settings, SlidersHorizontal } from "lucide-react";
+import { Gamepad2, Settings, SlidersHorizontal } from "lucide-react";
 import { Metadata } from "next";
 import { getOpenGraphMetadata } from "@/lib/utils";
 import { getUserById } from "@/db/users";
@@ -29,12 +29,8 @@ const sidebarNavItems: SidebarNavItem[] = [
         href: "/home/settings",
         icon: <Settings size={ICON_SIZE} />,
     },
-    {
-        title: "Create new",
-        href: "/home/create",
-        icon: <Plus size={ICON_SIZE + 4} strokeWidth={2.5} />,
-        isPrimary: true,
-    },
+    // No "Create new": parents do not make characters in phase 1. See
+    // app/home/create/page.tsx.
 ];
 
 const adminNavItem: SidebarNavItem = {

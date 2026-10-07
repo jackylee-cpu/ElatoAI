@@ -41,6 +41,9 @@ export const uploadCharacterImage = async (
     return data.publicUrl;
 };
 
+// Refused by RLS since 20261007140000_personalities_server_writes_only.sql:
+// browsers cannot write characters. Only the retired /home/create form calls
+// this; characters are created through the admin page's server actions.
 export const createPersonality = async (
     supabase: SupabaseClient,
     userId: string,
