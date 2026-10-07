@@ -71,9 +71,7 @@ const AdminsTab: React.FC<AdminsTabProps> = ({ admins, currentUserId }) => {
                 <CardHeader className="pb-2">
                     <CardTitle className="text-base">Grant a role</CardTitle>
                     <CardDescription>
-                        The account must already exist. It sets up an
-                        authenticator app the first time it opens Admin, and
-                        cannot get in without one. Content admins edit
+                        The account must already exist. Content admins edit
                         characters and IPs; super admins also change the model
                         and this list. No role can read children&apos;s
                         conversations or memories.
@@ -115,7 +113,6 @@ const AdminsTab: React.FC<AdminsTabProps> = ({ admins, currentUserId }) => {
                             <TableRow>
                                 <TableHead>Email</TableHead>
                                 <TableHead>Role</TableHead>
-                                <TableHead>Authenticator</TableHead>
                                 <TableHead>Granted</TableHead>
                                 <TableHead className="w-[100px]" />
                             </TableRow>
@@ -133,15 +130,6 @@ const AdminsTab: React.FC<AdminsTabProps> = ({ admins, currentUserId }) => {
                                             <Badge variant="outline">
                                                 {ROLE_LABELS[entry.role] ?? entry.role}
                                             </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-xs">
-                                            {entry.has_totp ? (
-                                                "set up"
-                                            ) : (
-                                                <span className="text-muted-foreground">
-                                                    not yet
-                                                </span>
-                                            )}
                                         </TableCell>
                                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                                             {new Date(entry.granted_at).toLocaleDateString()}

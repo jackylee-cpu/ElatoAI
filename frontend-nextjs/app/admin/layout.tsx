@@ -6,9 +6,8 @@ export const dynamic = "force-dynamic";
 /**
  * The playground's backdrop, without the parents' navigation.
  *
- * No guard here: /admin/mfa sits under this layout and has to render for an
- * admin who has not passed TOTP yet. The console's own layout and every server
- * action check the role; middleware.ts checks before either.
+ * The console layout and every server action check the role; middleware.ts
+ * checks before either.
  */
 export default function AdminRootLayout({
     children,

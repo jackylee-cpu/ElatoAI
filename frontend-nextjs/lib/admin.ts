@@ -6,9 +6,9 @@ import { createClient } from "@/utils/supabase/server";
  * Who is allowed into /admin, and as what.
  *
  * Roles live in public.admin_roles and the database enforces them: every admin
- * read and write runs with the admin's own key, and RLS asks has_role(), which
- * also demands a TOTP-verified session (aal2). The checks here decide what to
- * render and fail early with a useful redirect; they are not the only gate.
+ * read and write runs with the admin's own key, and RLS asks has_role(). The
+ * checks here decide what to render and fail early with a useful redirect;
+ * they are not the only gate.
  *
  * super_admin can do everything content_admin can, exactly as has_role() says.
  */
@@ -39,21 +39,12 @@ export function roleAllows(roles: AdminRole[], required: AdminRole): boolean {
     return roles.includes("super_admin") || roles.includes(required);
 }
 
-/** Has this session passed TOTP? Read from the access token's aal claim. */
-export async function hasVerifiedTotp(supabase: SupabaseClient): Promise<boolean> {
-    const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (error) {
-        return false;
-    }
-    return data.currentLevel === "aal2";
-}
-
 /**
  * Guard for admin pages and server actions.
  *
  * Not signed in -> /login. No admin role -> 404, so the page does not confirm
- * it exists. Admin without TOTP this session -> /admin/mfa. Admin without the
- * role this needs -> /admin, which shows only what their roles allow.
+ * it exists. Admin without the role this needs -> /admin, which shows only
+ * what their roles allow.
  *
  * A server action is reachable without rendering the page it came from, so
  * every action calls this itself rather than trusting the layout.
@@ -67,9 +58,6 @@ export async function requireAdmin(
     }
     if (session.roles.length === 0) {
         notFound();
-    }
-    if (!(await hasVerifiedTotp(session.supabase))) {
-        redirect("/admin/mfa");
     }
     if (!roleAllows(session.roles, required)) {
         redirect("/admin");
@@ -85,11 +73,7 @@ export async function adminSessionOrNull(
     required: AdminRole = "content_admin",
 ): Promise<AdminSession | null> {
     const session = await getAdminSession();
-    if (
-        !session ||
-        !roleAllows(session.roles, required) ||
-        !(await hasVerifiedTotp(session.supabase))
-    ) {
+    if (!session || !roleAllows(session.roles, required)) {
         return null;
     }
     return session;

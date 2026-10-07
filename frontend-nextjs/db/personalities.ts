@@ -119,8 +119,8 @@ export const getMyPersonalities = async (
 
 
 // ── admin ────────────────────────────────────────────────────────────────────
-// Called with the admin's own key. RLS lets a content admin (has_role, which
-// also requires TOTP) insert and update built-in rows only -- creator_id NULL.
+// Called with the admin's own key. RLS lets a content admin (has_role) insert
+// and update built-in rows only -- creator_id NULL.
 // A refused UPDATE is not an error to PostgREST, just zero rows, so the
 // writers below ask for the row back and treat none as a failure.
 

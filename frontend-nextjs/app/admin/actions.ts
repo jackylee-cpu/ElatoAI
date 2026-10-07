@@ -408,7 +408,7 @@ export async function saveIpAction(
 
 const ADMIN_ROLES: AdminRole[] = ["super_admin", "content_admin"];
 
-/** Give an existing account an admin role. It enrols TOTP on its first visit. */
+/** Give an existing account an admin role. */
 export async function grantAdminRoleAction(
     email: string,
     role: AdminRole,

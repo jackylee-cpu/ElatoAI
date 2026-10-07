@@ -370,8 +370,48 @@ WHERE p.personality_id = u.personality_id
   AND p.creator_id IS NULL
   AND p.is_hidden = true;
 
--- The seeded admin account is a super admin locally. It still has to enrol
--- TOTP at /admin/mfa before has_role() answers true.
-INSERT INTO public.admin_roles (user_id, role)
-VALUES ('5af62b0e-3da4-4c44-adf7-5b1b7c9c4cb6', 'super_admin')
+-- The seeded admin account is a super admin locally. content@elatoai.com is a
+-- content admin; the login page lists both passwords in development.
+INSERT INTO auth.users (
+    instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+    confirmation_token, recovery_token, email_change_token_new, email_change,
+    email_change_token_current, reauthentication_token, is_sso_user, is_anonymous
+)
+SELECT
+    instance_id,
+    'c0150000-0000-4000-8000-000000000002',
+    'authenticated',
+    'authenticated',
+    'content@elatoai.com',
+    crypt('content', gen_salt('bf')),
+    now(),
+    '{"provider":"email","providers":["email"]}'::jsonb,
+    '{}'::jsonb,
+    now(),
+    now(),
+    '', '', '', '', '', '',
+    false,
+    false
+FROM auth.users
+WHERE id = '5af62b0e-3da4-4c44-adf7-5b1b7c9c4cb6'
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+VALUES (
+    'c0150000-0000-4000-8000-000000000002',
+    'c0150000-0000-4000-8000-000000000002',
+    '{"sub":"c0150000-0000-4000-8000-000000000002","email":"content@elatoai.com","email_verified":false,"phone_verified":false}'::jsonb,
+    'email',
+    now(), now(), now()
+)
+ON CONFLICT (provider_id, provider) DO NOTHING;
+
+INSERT INTO public.users (user_id, email, supervisor_name, supervisee_name)
+VALUES ('c0150000-0000-4000-8000-000000000002', 'content@elatoai.com', 'Content', 'Content')
+ON CONFLICT (user_id) DO NOTHING;
+
+INSERT INTO public.admin_roles (user_id, role) VALUES
+    ('5af62b0e-3da4-4c44-adf7-5b1b7c9c4cb6', 'super_admin'),
+    ('c0150000-0000-4000-8000-000000000002', 'content_admin')
 ON CONFLICT DO NOTHING;

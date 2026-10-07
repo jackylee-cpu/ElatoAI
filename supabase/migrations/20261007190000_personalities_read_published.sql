@@ -12,8 +12,8 @@
 --   its own characters    creator_id = auth.uid(), hidden or not. Existing
 --                         parent-made characters stay usable; nothing here
 --                         changes their rows.
---   every built-in        content admins (has_role, so a TOTP-verified
---                         session), hidden ones included, for the admin list.
+--   every built-in        content admins (has_role), hidden ones included,
+--                         for the admin list.
 --                         Not characters a parent made: those stay with the
 --                         family.
 --

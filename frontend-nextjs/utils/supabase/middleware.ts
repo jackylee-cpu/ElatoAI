@@ -4,9 +4,6 @@ import { type NextRequest, NextResponse } from "next/server";
 // Routes that need a signed-in account, and those that also need an admin role.
 const SIGNED_IN = ["/home", "/admin", "/api/admin"];
 const ADMIN = ["/admin", "/api/admin"];
-// Where an admin who has not passed TOTP this session is sent. It needs the
-// role but not aal2, or nobody could ever reach aal2.
-const MFA_PAGE = "/admin/mfa";
 
 function under(pathname: string, prefixes: string[]): boolean {
   return prefixes.some(
@@ -87,14 +84,6 @@ export const updateSession = async (request: NextRequest) => {
       .eq("user_id", user.id);
     if (error || !roles || roles.length === 0) {
       return deny(403, "/home");
-    }
-
-    if (pathname !== MFA_PAGE) {
-      const { data: aal } =
-        await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      if (aal?.currentLevel !== "aal2") {
-        return deny(403, MFA_PAGE);
-      }
     }
 
     return response;

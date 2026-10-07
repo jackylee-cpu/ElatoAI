@@ -11,7 +11,7 @@ import { adminSessionOrNull } from "@/lib/admin";
  */
 export async function GET(request: Request) {
     // The model picker is the super admin's Model tab. middleware.ts has
-    // already turned away anyone without a role or without TOTP.
+    // already turned away anyone without a role.
     if (!(await adminSessionOrNull("super_admin"))) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
