@@ -98,6 +98,7 @@
 // came out upside down on hardware (2026-09-23), R0 is right.
 #define BOARD_DISPLAY_ROTATION   U8G2_R0
 #define BOARD_NAME               "xiaozhi xmini-c3"
+#define BOARD_ID                 "xmini-c3"  // firmware_releases.board
 
 #elif defined(BOARD_SPOTPEAR_AI_TOY)
 
@@ -125,6 +126,7 @@
 // No I2C display; only here because Display.cpp names it.
 #define BOARD_DISPLAY_ROTATION   U8G2_R0
 #define BOARD_NAME               "Spotpear AI Toy (toy-ai-core-c3-1.54)"
+#define BOARD_ID                 "spotpear-ai-toy"  // firmware_releases.board
 
 #elif defined(BOARD_WAVESHARE_S3_AUDIO)
 
@@ -150,6 +152,7 @@
 #define BOARD_SLEEP_VIA_LIGHT_SLEEP 0
 #define BOARD_DISPLAY_ROTATION   U8G2_R0
 #define BOARD_NAME               "Waveshare ESP32-S3-AUDIO-Board"
+#define BOARD_ID                 "waveshare-s3-audio"  // firmware_releases.board
 
 #else
 
@@ -172,6 +175,7 @@
 #define BOARD_SLEEP_VIA_LIGHT_SLEEP 0
 #define BOARD_DISPLAY_ROTATION   U8G2_R0
 #define BOARD_NAME               "Elato breadboard kit"
+#define BOARD_ID                 "elato-breadboard"  // firmware_releases.board
 
 #endif
 

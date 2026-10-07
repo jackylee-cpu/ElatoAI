@@ -1428,10 +1428,19 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                 pitchShift.begin(pcfg);
             }
 
+            // The voice server answered, so this image works.
+            otaConfirmImage();
+
+            // "Update now": the check runs on every boot, so a restart is the
+            // whole job. Not if this boot's check failed, though -- the flag
+            // would still be set next time and the board would never stop.
             if (is_ota) {
-                Serial.println("OTA update received");
-                setOTAStatusInNVS(OTA_IN_PROGRESS);
-                ESP.restart();
+                if (otaCheckedThisBoot()) {
+                    Serial.println("OTA requested, restarting to check for an update");
+                    ESP.restart();
+                } else {
+                    Serial.println("OTA requested, but this boot could not reach the update check");
+                }
             }
 
             if (is_reset) {

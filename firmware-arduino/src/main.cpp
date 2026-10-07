@@ -456,11 +456,6 @@ void setupDeviceMetadata() {
     resetAuth();
   }
 
-  getOTAStatusFromNVS();
-
-  if (otaState == OTA_IN_PROGRESS || otaState == OTA_COMPLETE) {
-    deviceState = OTA;
-  }
   if (factory_reset_status) {
     deviceState = FACTORY_RESET;
   }
@@ -517,6 +512,7 @@ void setup() {
            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
            heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   Serial.printf("\n%s\n", bootBanner);
+  otaBootCheck();
 
 #ifdef AUDIO_SELFTEST
   // The `-audiotest` environment stops here: nothing else in setup() runs, so
@@ -733,7 +729,13 @@ void loop() {
   checkIdleTimeout();
   supplyMonitorPoll();
   processSleepRequest();
-  if (otaState == OTA_IN_PROGRESS) {
-    loopOTA();
+  otaPoll();
+#ifdef OTA_TEST_CRASH_MS
+  // A deliberately broken image, to watch the bootloader roll back (P0-13).
+  // Only ever set on the command line: PLATFORMIO_BUILD_FLAGS=-DOTA_TEST_CRASH_MS=3000
+  if (millis() > OTA_TEST_CRASH_MS) {
+    Serial.println("[OTA] Test build crashing on purpose");
+    abort();
   }
+#endif
 }

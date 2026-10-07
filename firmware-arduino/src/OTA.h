@@ -3,12 +3,33 @@
 
 #include "Config.h"
 
-extern const char *server_certificate;
-extern const char *ota_firmware_url;
-void performOTAUpdate();
-void markOTAUpdateComplete();
-void loopOTA();
-void setOTAStatusInNVS(OtaStatus status);
-void getOTAStatusFromNVS();
+// Bumped by hand for every release; tools/release_firmware.py reads it from
+// here and refuses to publish a version that is already out. The #ifndef is
+// for test builds only (release_firmware.py publish --dev --version).
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "1.0.0"
+#endif
+
+// Once at boot, before WiFi: is this image on probation, and did the last one
+// roll back?
+void otaBootCheck();
+
+// Whether this boot's check reached the backend. A server that keeps asking for
+// an update the check could not deliver must not restart the board in a loop.
+bool otaCheckedThisBoot();
+
+// After the device token, before the voice websocket: ask the backend whether
+// there is a new release for this board, and install it if so. Returns only if
+// there was nothing to install or the install failed; a successful install
+// restarts the board.
+void otaCheckAndUpdate();
+
+// The voice server answered (its "auth" frame): this image works. Cancels the
+// rollback if the image was on probation, otherwise does nothing.
+void otaConfirmImage();
+
+// From loop(): rolls back an image on probation that has not reached the voice
+// server in time.
+void otaPoll();
 
 #endif

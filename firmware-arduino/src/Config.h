@@ -35,14 +35,6 @@
 extern Preferences preferences;
 extern bool factory_reset_status;
 
-enum OtaStatus {
-    OTA_IDLE,
-    OTA_IN_PROGRESS,
-    OTA_COMPLETE
-};
-
-extern OtaStatus otaState;
-
 enum DeviceState
 {
     SETUP,

@@ -161,14 +161,10 @@ void startSessionIfReady() {
 void connectCb() {
   Serial.println("On connecting to Wifi");
   if (isDeviceRegistered())  {
-    if (otaState == OTA_IN_PROGRESS) {
-        performOTAUpdate();
-    } else if (otaState == OTA_COMPLETE) {
-        markOTAUpdateComplete();
-        ESP.restart();
-    } else {
-        websocketSetup(ws_server, ws_port, ws_path);
-    }
+    // Returns only when there is nothing to install or the install failed;
+    // a successful one restarts the board into the new image.
+    otaCheckAndUpdate();
+    websocketSetup(ws_server, ws_port, ws_path);
   } 
 }
 
