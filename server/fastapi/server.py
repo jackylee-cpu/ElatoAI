@@ -264,13 +264,19 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.get("/", include_in_schema=False)
-    async def root_redirect():
-        return RedirectResponse(url="/browser")
+    # The /browser page and its /ws/browser socket run a full session with no
+    # account and no token: anyone who finds them talks on our STT, LLM and TTS
+    # keys. Off unless asked for, which in practice means local development.
+    browser_test = os.getenv("ENABLE_BROWSER_TEST", "").strip().lower() in ("1", "true", "yes")
 
-    @app.get("/browser", response_class=HTMLResponse)
-    async def browser_page():
-        return HTMLResponse(BROWSER_HTML)
+    if browser_test:
+        @app.get("/", include_in_schema=False)
+        async def root_redirect():
+            return RedirectResponse(url="/browser")
+
+        @app.get("/browser", response_class=HTMLResponse)
+        async def browser_page():
+            return HTMLResponse(BROWSER_HTML)
 
     @app.get("/healthz")
     async def healthcheck():
@@ -297,12 +303,13 @@ def create_app() -> FastAPI:
             selected["tts"],
         )
 
-    @app.websocket("/ws/browser")
-    async def browser_websocket(websocket: WebSocket):
-        await websocket.accept()
-        logger.info("Browser websocket connected")
-        transport = create_browser_transport(websocket)
-        await run_bot_session(transport, "browser", False)
+    if browser_test:
+        @app.websocket("/ws/browser")
+        async def browser_websocket(websocket: WebSocket):
+            await websocket.accept()
+            logger.info("Browser websocket connected")
+            transport = create_browser_transport(websocket)
+            await run_bot_session(transport, "browser", False)
 
     @app.websocket("/ws/nextjs")
     async def nextjs_websocket(websocket: WebSocket):

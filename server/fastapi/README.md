@@ -195,7 +195,8 @@ The ESP32 route is:
 
 For browser or Next.js testing, the server also exposes:
 
-- `/ws/browser`
+- `/ws/browser` and the `/browser` test page -- only with
+  `ENABLE_BROWSER_TEST=true`, since they run a session with no login
 - `/ws/nextjs`
 
 ## Local Development With A Board That Is Already Paired
