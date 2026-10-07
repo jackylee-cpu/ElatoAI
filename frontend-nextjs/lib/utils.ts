@@ -66,10 +66,11 @@ export const isDefaultPersonality = (personality: IPersonality) => {
     return personality.personality_id === defaultPersonalityId;
 };
 
+// Where auth redirects land (server-side only). Set SITE_URL on a deployment:
+// it is read at runtime, so the prebuilt GHCR image picks it up. The upstream
+// fallback to elatoai.com sent signed-in users to someone else's site.
 export const getBaseUrl = () => {
-    return process.env.NEXT_PUBLIC_VERCEL_ENV === "production"
-        ? "https://elatoai.com"
-        : "http://localhost:3000";
+    return (process.env.SITE_URL || "http://localhost:3000").replace(/\/$/, "");
 };
 
 export const getUserAvatar = (avatar_url: string) => {

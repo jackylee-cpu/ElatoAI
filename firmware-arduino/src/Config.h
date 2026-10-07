@@ -10,22 +10,11 @@
 #include <WebSocketsClient.h>
 
 // ---------- CHOOSE YOUR MODE ----------
-// Pick one of the following (DEV_MODE, PROD_MODE, ELATO_MODE) , comment the rest
-// For ELATO_MODE, you will need to register your DIY Hardware on the Elato website
+// PROD_MODE talks to the deployed servers (Config.cpp); DEV_MODE to a machine
+// on the LAN. The voice server is always the FastAPI one in server/fastapi.
 
 // #define DEV_MODE
 #define PROD_MODE
-// #define ELATO_MODE
-
-// ---------- CHOOSE YOUR VOICE SERVER ----------
-// Keep this separate from DEV/PROD/ELATO so the deployment mode and the voice backend stay independent.
-// Pick one backend for websocket voice traffic.
-// Note: ELATO_MODE always uses Elato's hosted server, so this selector only
-// applies to DEV_MODE and PROD_MODE.
-
-// #define VOICE_SERVER_DENO
-// #define VOICE_SERVER_CLOUDFLARE
-#define VOICE_SERVER_FASTAPI
 
 
 // ---------- CHOOSE YOUR INPUT MODE ----------

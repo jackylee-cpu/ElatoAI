@@ -297,8 +297,8 @@ async def insert_conversation_turn(
 ) -> bool:
     """Persist one turn.
 
-    Columns match the Deno server's only writer (server/deno/supabase.ts:201) so
-    both transports produce the same shape of history. `chat_group_id` has
+    Columns match what the upstream Deno server wrote (role, content, user_id,
+    is_sensitive, personality_key), so older history has the same shape. `chat_group_id` has
     existed since the original schema but was never written by anyone; one uuid
     per session finally fills it in.
     """

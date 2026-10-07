@@ -1,18 +1,10 @@
-## ElatoAI: Realtime Voice AI Models on FastAPI
+## aibuddy voice server (FastAPI)
 
-`server/fastapi` is the simplest self-hosted Elato backend for people who want a normal Python server instead of an edge runtime.
+`server/fastapi` is the voice backend: the ESP32 boards and the web app both
+talk to it over websockets. It runs a classic `STT -> LLM -> TTS` pipeline on
+Pipecat, on your own machine or VM.
 
-Use this if you want:
-
-- a FastAPI server you can run on your own machine or VM
-- a classic `STT -> LLM -> TTS` voice pipeline
-- a smaller provider surface that is easy to understand
-- the same ESP32 transport shape as the rest of Elato
-
-If you are new to the project, read these first:
-
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/README.md`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/README.md`
+If you are new to the project, read the [top-level README](../../README.md) first.
 
 ## The Simple Provider Set
 
@@ -67,19 +59,15 @@ server/fastapi/
     └── tts/
 ```
 
-## How The FastAPI Server Fits Into Elato
+## Where This Server Fits
 
-Elato has three backend options right now:
+This is the only voice backend. The other two pieces are:
 
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/deno`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/cloudflare`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi`
+- `frontend-nextjs`: the parent web app and the device backend (auth token,
+  OTA, factory reset)
+- `firmware-arduino`: the ESP32 firmware, which opens `/ws/esp32` here
 
-A clean way to think about them is:
-
-- `Deno`: edge-first, mature provider integrations
-- `Cloudflare`: Workers + Durable Objects + Workers AI
-- `FastAPI`: normal Python server, easy to self-host, easy to reason about
+All three share one Supabase database.
 
 ## Quick Start
 
@@ -94,14 +82,14 @@ This repo uses `pyproject.toml`, so install from that environment rather than a 
 With `uv`:
 
 ```bash
-cd /Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi
+cd server/fastapi
 uv sync
 ```
 
 Or with plain pip in your venv:
 
 ```bash
-cd /Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi
+cd server/fastapi
 pip install -e .
 ```
 
@@ -109,7 +97,7 @@ pip install -e .
 
 Copy the example values from:
 
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/env.example`
+- `server/fastapi/env.example`
 
 Minimum example for the default route:
 
@@ -139,14 +127,14 @@ PORT=7860
 If you use `uv`:
 
 ```bash
-cd /Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi
+cd server/fastapi
 uv run server.py
 ```
 
 If you use your activated venv directly:
 
 ```bash
-cd /Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi
+cd server/fastapi
 python server.py
 ```
 
@@ -185,7 +173,9 @@ docker compose up --build -d
 
 ### 5. Point your ESP32 at the FastAPI backend
 
-Update the firmware config so your hardware connects to this server instead of the Deno or Cloudflare backend.
+The firmware already points here: `PROD_MODE` in `firmware-arduino/src/Config.h`
+uses the deployed host, and the `-localws` envs in `platformio.ini` move only
+the voice socket to a machine on the LAN.
 
 The ESP32 route is:
 
@@ -283,7 +273,7 @@ Pipecat handles the runtime orchestration for us:
 - the LLM receives conversation context and streams text back
 - TTS turns that streamed text into audio
 
-In other words, Pipecat stitches the pipeline together, but Elato still needs to provide:
+In other words, Pipecat stitches the pipeline together, but this server still needs to provide:
 
 - the provider selection UX
 - the transport protocol for ESP32
@@ -292,7 +282,7 @@ In other words, Pipecat stitches the pipeline together, but Elato still needs to
 
 That is why this FastAPI backend now has a simple provider catalog and validation layer in:
 
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/providers.py`
+- `server/fastapi/models/providers.py`
 
 This lets the app answer questions like:
 
@@ -324,19 +314,19 @@ At startup, the server now validates the selected `CLASSIC_*_PROVIDER` values an
 
 Each supported provider now has its own module file so the layout is easy to understand:
 
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/openai.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/anthropic.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/gemini.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/grok.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/openrouter.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/stt/deepgram.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/stt/whisper.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/stt/azure.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/elevenlabs.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/cartesia.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/deepgram.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/openai.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/minimax.py`
+- `server/fastapi/models/llm/openai.py`
+- `server/fastapi/models/llm/anthropic.py`
+- `server/fastapi/models/llm/gemini.py`
+- `server/fastapi/models/llm/grok.py`
+- `server/fastapi/models/llm/openrouter.py`
+- `server/fastapi/models/stt/deepgram.py`
+- `server/fastapi/models/stt/whisper.py`
+- `server/fastapi/models/stt/azure.py`
+- `server/fastapi/models/tts/elevenlabs.py`
+- `server/fastapi/models/tts/cartesia.py`
+- `server/fastapi/models/tts/deepgram.py`
+- `server/fastapi/models/tts/openai.py`
+- `server/fastapi/models/tts/minimax.py`
 
 Under the hood, these modules delegate to Pipecat service implementations. We keep that wiring thin on purpose so users mostly think in terms of:
 
@@ -398,48 +388,7 @@ If you do not have an Azure Speech key, you can fall back to local Whisper:
 CLASSIC_STT_PROVIDER=whisper
 ```
 
-## Unified Experience Across Elato
-
-A simple way to keep the product understandable is:
-
-- keep the Next.js frontend focused on character creation and device management
-- keep the ESP32 firmware focused on one transport protocol
-- let users choose one backend runtime:
-  - Deno
-  - Cloudflare
-  - FastAPI
-- inside each backend, expose the same conceptual knobs:
-  - `STT`
-  - `LLM`
-  - `TTS`
-
-That means the hardware story stays stable:
-
-- one firmware
-- one websocket-style mental model
-- three server deployment choices
-
-The cleanest unification strategy is not “every backend supports every provider.”
-It is:
-
-- every backend should expose the same categories
-- each backend should have one recommended default stack
-- advanced users can swap providers later
-
-## What This Looks Like In A UI
-
-For Elato, the cleanest UI model is:
-
-1. user picks a backend runtime:
-   - `deno`
-   - `cloudflare`
-   - `fastapi`
-2. user picks one option in each category:
-   - `stt`
-   - `llm`
-   - `tts`
-3. UI shows which API keys are required
-4. backend validates the selection before starting a session
+## Provider Catalog
 
 This FastAPI server now exposes a simple provider catalog at:
 
@@ -449,26 +398,20 @@ So your Next.js frontend can eventually fetch the available providers and render
 
 ## Recommended Defaults
 
-If you want a simple opinionated experience for users, keep one default combo per backend.
-
-Suggested defaults:
-
-- `Deno`: OpenAI realtime
-- `Cloudflare`: Workers AI STT/TTS + OpenAI LLM
-- `FastAPI`: Deepgram + OpenAI + ElevenLabs
-
-That gives users one obvious starting point without taking away flexibility.
+The generic default is Deepgram + OpenAI + ElevenLabs. The deployment runs
+Azure STT + OpenRouter + MiniMax (see "OR + MX" above), which is what the
+Cantonese voices need.
 
 ## Important Files
 
 If you want to change the FastAPI backend, start here:
 
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/server.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/voice_pipeline.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/esp32_transport.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/llm/__init__.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/stt/__init__.py`
-- `/Users/akashdeepdeb/Desktop/Projects/ElatoAI/server/fastapi/models/tts/__init__.py`
+- `server/fastapi/server.py`
+- `server/fastapi/voice_pipeline.py`
+- `server/fastapi/esp32_transport.py`
+- `server/fastapi/models/llm/__init__.py`
+- `server/fastapi/models/stt/__init__.py`
+- `server/fastapi/models/tts/__init__.py`
 
 ## Current Notes
 

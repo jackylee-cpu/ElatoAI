@@ -1,5 +1,5 @@
 # ESP32 WebSocket Audio Client
 
-For more details, visit the [Elato Firmware Docs](https://www.elatoai.com/docs/blog/firmware).
+The firmware for the aibuddy board. It connects to the voice server in [`server/fastapi`](../server/fastapi).
 
 Board support (two boards, one firmware): see [BOARDS.md](BOARDS.md).

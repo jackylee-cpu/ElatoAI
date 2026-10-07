@@ -83,8 +83,8 @@ def build_child_block(
 ) -> str:
     """Describe who the toy is talking to.
 
-    Wording follows the Deno route's UserPromptTemplate (server/deno/supabase.ts:96)
-    so a child meets the same character on either transport.
+    Wording comes from the upstream Deno route's UserPromptTemplate, which the
+    web app's history and the original prompts were written against.
     """
     name = (child_name or "").strip()
     persona = (child_persona or "").strip()

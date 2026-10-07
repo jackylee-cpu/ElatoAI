@@ -42,7 +42,7 @@ LOOKUP_TIMEOUT_SECONDS = float(os.getenv("DEVICE_LOOKUP_TIMEOUT", "3"))
 #
 # `user_id` and the child's own fields are pulled for long-term memory: the
 # memory store is keyed by user_id, and the child profile goes into the system
-# prompt the way the Deno route already does it (server/deno/supabase.ts:96).
+# prompt (character_prompt.build_child_block).
 #
 # The character's IP comes along with it: its guardrails and the modes and
 # styles it allows shape the prompt, and its key decides whose memories load.
