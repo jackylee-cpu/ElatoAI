@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SUPERSEDED -- never run. Use release-2026-10-07-security-batch.sh, which
+# ships everything here plus the later fixes. Kept for the record.
+exit 1
 # Release da98048 (security lock-down + device tokens + IPs) -- run ON THE SERVER.
 #
 #   bash release-2026-10-07-da98048.sh            # does everything, stops at the first problem
