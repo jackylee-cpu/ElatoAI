@@ -1,33 +1,15 @@
-import BuildDashboard from "@/app/components/CreateCharacter/BuildDashboard";
-import { getAllLanguages } from "@/db/languages";
-import { getUserById } from "@/db/users";
-import { getOpenGraphMetadata } from "@/lib/utils";
-import { createClient } from "@/utils/supabase/server";
-import { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-    title: "Settings",
-    ...getOpenGraphMetadata("Settings"),
-};
-
-export default async function Home() {
-    const supabase = createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-
-    const dbUser = user ? await getUserById(supabase, user.id) : null;
-    const allLanguages = await getAllLanguages(supabase);
-
-    return (
-        <div className="pb-4 flex flex-col gap-2">
-            {dbUser && (
-                <BuildDashboard
-                    selectedUser={dbUser}
-                    allLanguages={allLanguages}
-                />
-            )}
-        </div>
-    );
+// Parents do not make characters in phase 1: a character prompt is spoken to
+// children as written, and nothing moderates one a parent wrote yet. Characters
+// are made on the admin page through a server action, and browsers can no
+// longer write `personalities` at all (see
+// supabase/migrations/20261007140000_personalities_server_writes_only.sql).
+//
+// The route redirects rather than 404s so an old bookmark still lands
+// somewhere. The form itself, app/components/CreateCharacter/, is kept for a
+// later, constrained version: pick an admin-made template and change only the
+// name, picture and voice.
+export default function CreateCharacterPage() {
+    redirect("/home");
 }

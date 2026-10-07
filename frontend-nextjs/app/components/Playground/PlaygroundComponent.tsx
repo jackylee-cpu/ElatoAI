@@ -11,7 +11,6 @@ import { EventProvider } from "../Realtime/contexts/EventContext";
 import App from "../Realtime/App";
 import { defaultPersonalityId } from "@/lib/data";
 import UserPersonalities from "./UserPersonalities";
-import { PlusIcon } from "./icons";
 import { PlaygroundBottomNav } from "./PlaygroundBottomNav";
 import { PlaygroundMicButton } from "./PlaygroundMicButton";
 import { SlidersHorizontal } from "lucide-react";
@@ -83,13 +82,6 @@ const Playground: React.FC<PlaygroundProps> = ({
                             <h1 className="font-fredoka text-[28px] font-semibold tracking-tight text-gray-900 md:text-[32px]">
                                 Playground
                             </h1>
-                            <Link
-                                href="/home/create"
-                                className="absolute right-0 top-1/2 -translate-y-1/2 transition-transform hover:scale-105 active:scale-95"
-                                aria-label="Create character"
-                            >
-                                <PlusIcon className="h-10 w-10 md:h-11 md:w-11" />
-                            </Link>
                         </header>
 
                         <div className="shrink-0 pb-4 pt-1">
