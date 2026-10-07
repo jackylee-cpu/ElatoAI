@@ -23,7 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/use-toast";
 import { Check, ChevronsUpDown, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { saveVoiceStackAction } from "@/app/home/admin/actions";
+import { saveVoiceStackAction } from "@/app/admin/actions";
 
 const PROVIDER_SORTS: { value: OpenRouterProviderSort; label: string }[] = [
     { value: "latency", label: "latency — fastest first token" },

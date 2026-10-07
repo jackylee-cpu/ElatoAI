@@ -1,4 +1,4 @@
-import { SkeletonCard, SkeletonHeader, SkeletonTabs } from "../HomeSkeleton";
+import { SkeletonCard, SkeletonHeader, SkeletonTabs } from "@/app/home/HomeSkeleton";
 
 export default function Loading() {
     return (

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { assertAdmin } from "@/lib/admin";
+import { adminSessionOrNull } from "@/lib/admin";
 
 /**
  * Providers currently hosting one OpenRouter model.
@@ -10,7 +10,11 @@ import { assertAdmin } from "@/lib/admin";
  * actually accept in `provider.order`.
  */
 export async function GET(request: Request) {
-    await assertAdmin();
+    // The model picker is the super admin's Model tab. middleware.ts has
+    // already turned away anyone without a role or without TOTP.
+    if (!(await adminSessionOrNull("super_admin"))) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const model = new URL(request.url).searchParams.get("model")?.trim() ?? "";
     if (!MODEL_ID.test(model)) {

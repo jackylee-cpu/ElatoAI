@@ -1,16 +1,20 @@
 import { NextResponse } from "next/server";
-import { assertAdmin } from "@/lib/admin";
+import { adminSessionOrNull } from "@/lib/admin";
 
 /**
  * The OpenRouter catalogue, trimmed to what the model picker shows.
  *
  * Proxied rather than fetched from the browser for two reasons: it keeps the
- * admin allowlist in front of it, and OpenRouter's list is a few hundred KB of
+ * admin role check in front of it, and OpenRouter's list is a few hundred KB of
  * JSON that would otherwise cross the wire on every render. Their /models
  * endpoint is public, so no key is involved.
  */
 export async function GET() {
-    await assertAdmin();
+    // The model picker is the super admin's Model tab. middleware.ts has
+    // already turned away anyone without a role or without TOTP.
+    if (!(await adminSessionOrNull("super_admin"))) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     try {
         const response = await fetch("https://openrouter.ai/api/v1/models", {

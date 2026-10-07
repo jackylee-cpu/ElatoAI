@@ -119,17 +119,19 @@ export const getMyPersonalities = async (
 
 
 // ── admin ────────────────────────────────────────────────────────────────────
-// Everything below reaches across accounts and needs a service-role client:
-// `personalities` has a SELECT policy for everyone and no UPDATE or DELETE
-// policy at all, so an authenticated key writes nothing and reports success.
+// Called with the admin's own key. RLS lets a content admin (has_role, which
+// also requires TOTP) insert and update built-in rows only -- creator_id NULL.
+// A refused UPDATE is not an error to PostgREST, just zero rows, so the
+// writers below ask for the row back and treat none as a failure.
 
-/** Every character, built-in and user-made, hidden ones included. */
+/** Every built-in character, hidden ones included. */
 export const getAllPersonalitiesForAdmin = async (
     supabase: SupabaseClient,
 ): Promise<IAdminPersonality[]> => {
     const { data, error } = await supabase
         .from("personalities")
-        .select(`*, creator:creator_id(email)`)
+        .select("*")
+        .is("creator_id", null)
         .order("created_at", { ascending: false });
 
     if (error) {
@@ -137,15 +139,7 @@ export const getAllPersonalitiesForAdmin = async (
         return [];
     }
 
-    return (data ?? []).map((row) => {
-        const { creator, ...personality } = row as IAdminPersonality & {
-            creator?: { email?: string } | null;
-        };
-        return {
-            ...(personality as IAdminPersonality),
-            creator_email: creator?.email ?? null,
-        };
-    });
+    return (data ?? []) as IAdminPersonality[];
 };
 
 export const updatePersonalityAsAdmin = async (
@@ -153,14 +147,18 @@ export const updatePersonalityAsAdmin = async (
     personalityId: string,
     updates: Partial<IPersonality>,
 ) => {
-    const { error } = await supabase
+    const { data, error } = await supabase
         .from("personalities")
         .update(updates)
-        .eq("personality_id", personalityId);
+        .eq("personality_id", personalityId)
+        .select("personality_id");
 
     if (error) {
         console.error("error updatePersonalityAsAdmin", error);
         throw error;
+    }
+    if (!data || data.length === 0) {
+        throw new Error("Character not found or not editable");
     }
 };
 

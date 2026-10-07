@@ -2,8 +2,8 @@ import AdminDashboard from "@/app/components/Admin/AdminDashboard";
 import { getVoiceStackSettings } from "@/db/appSettings";
 import { getAllPersonalitiesForAdmin } from "@/db/personalities";
 import { getRecentTurnMetrics } from "@/db/turnMetrics";
-import { assertAdmin } from "@/lib/admin";
-import { createServiceClient } from "@/utils/supabase/service";
+import { listAdminRoles } from "@/db/adminRoles";
+import { requireAdmin, roleAllows } from "@/lib/admin";
 import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
 
 // Latency numbers are the point of the page, so it must not be served from a
@@ -11,17 +11,18 @@ import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
 export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
-    await assertAdmin();
+    const { supabase, user, roles } = await requireAdmin();
 
-    // Service role throughout: this page reads across every account, and
-    // `personalities` has no UPDATE policy at all, so nothing here works with
-    // an authenticated key.
-    const supabase = createServiceClient();
+    // The admin's own key throughout: RLS decides what each role may read, so
+    // a content admin asking for turn_metrics would get nothing even if this
+    // page forgot to skip it.
+    const isSuper = roleAllows(roles, "super_admin");
 
-    const [settings, turnMetrics, personalities, ips, modes, styles] =
+    const [settings, turnMetrics, admins, personalities, ips, modes, styles] =
         await Promise.all([
-            getVoiceStackSettings(supabase),
-            getRecentTurnMetrics(supabase),
+            isSuper ? getVoiceStackSettings(supabase) : Promise.resolve({}),
+            isSuper ? getRecentTurnMetrics(supabase) : Promise.resolve([]),
+            isSuper ? listAdminRoles(supabase) : Promise.resolve([]),
             getAllPersonalitiesForAdmin(supabase),
             getAllIps(supabase),
             getAllModes(supabase),
@@ -30,8 +31,11 @@ export default async function AdminPage() {
 
     return (
         <AdminDashboard
+            roles={roles}
+            currentUserId={user.id}
             settings={settings}
             turnMetrics={turnMetrics}
+            admins={admins}
             personalities={personalities}
             ips={ips}
             modes={modes}

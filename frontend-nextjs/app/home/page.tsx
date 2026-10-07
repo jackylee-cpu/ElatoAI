@@ -4,7 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import Playground from "../components/Playground/PlaygroundComponent";
 import { defaultPersonalityId } from "@/lib/data";
 import { getAllPersonalities, getMyPersonalities } from "@/db/personalities";
-import { isAdminEmail } from "@/lib/admin";
+import { getAdminRoles } from "@/lib/admin";
 import { getAllIps } from "@/db/sessionOptions";
 
 
@@ -36,12 +36,14 @@ export default async function Home() {
         }
     }
 
-    const [dbUser, allPersonalities, myPersonalities, ips] = await Promise.all([
-        getUserById(supabase, user!.id),
-        getAllPersonalities(supabase),
-        getMyPersonalities(supabase, user?.id ?? ""),
-        getAllIps(supabase),
-    ]);
+    const [dbUser, allPersonalities, myPersonalities, ips, adminRoles] =
+        await Promise.all([
+            getUserById(supabase, user!.id),
+            getAllPersonalities(supabase),
+            getMyPersonalities(supabase, user?.id ?? ""),
+            getAllIps(supabase),
+            getAdminRoles(supabase, user!.id),
+        ]);
 
     return (
         <>
@@ -51,7 +53,7 @@ export default async function Home() {
                     myPersonalities={myPersonalities}
                     ips={ips}
                     currentUser={dbUser}
-                    isAdmin={isAdminEmail(dbUser.email)}
+                    isAdmin={adminRoles.length > 0}
                 />
             )}
         </>

@@ -33,7 +33,7 @@ import {
 import {
     createPersonalityAction,
     updatePersonalityAction,
-} from "@/app/home/admin/actions";
+} from "@/app/admin/actions";
 import { modesAllowedBy, stylesAllowedBy } from "@/db/sessionOptions";
 
 // Radix Select cannot hold an empty value, so "none" stands for null.
@@ -204,9 +204,7 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                     <SheetDescription>
                         {creating
                             ? "Created as a built-in character, visible to every account."
-                            : personality?.creator_email
-                              ? `Made by ${personality.creator_email}`
-                              : "Built-in character"}
+                            : "Built-in character"}
                     </SheetDescription>
                 </SheetHeader>
 

@@ -1,56 +1,109 @@
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { SupabaseClient, User } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
-import { getUserById } from "@/db/users";
 
 /**
- * Who is allowed into /home/admin.
+ * Who is allowed into /admin, and as what.
  *
- * Any signed-in account, unless ADMIN_EMAILS is set -- then only the addresses
- * in it. That default is deliberate and it is wide: an admin can change the
- * model every session runs on and read or rewrite the character prompts
- * belonging to other people's children. Setting ADMIN_EMAILS before this is
- * exposed to real parents is the one line that closes that.
+ * Roles live in public.admin_roles and the database enforces them: every admin
+ * read and write runs with the admin's own key, and RLS asks has_role(), which
+ * also demands a TOTP-verified session (aal2). The checks here decide what to
+ * render and fail early with a useful redirect; they are not the only gate.
  *
- * There is no is_admin column and no role in the schema, so this is the whole
- * check. It has to run in the layout AND at the top of every server action:
- * middleware.ts currently guards nothing (the route protection in
- * utils/supabase/middleware.ts is commented out), and a server action is
- * reachable without ever rendering the page it came from.
+ * super_admin can do everything content_admin can, exactly as has_role() says.
  */
-export async function assertAdmin(): Promise<IUser> {
+export interface AdminSession {
+    supabase: SupabaseClient;
+    user: User;
+    roles: AdminRole[];
+}
+
+/** The roles this signed-in account holds, read through its own policy. */
+export async function getAdminRoles(
+    supabase: SupabaseClient,
+    userId: string,
+): Promise<AdminRole[]> {
+    const { data, error } = await supabase
+        .from("admin_roles")
+        .select("role")
+        .eq("user_id", userId);
+
+    if (error) {
+        console.error("error getAdminRoles", error);
+        return [];
+    }
+    return (data ?? []).map((row) => row.role as AdminRole);
+}
+
+export function roleAllows(roles: AdminRole[], required: AdminRole): boolean {
+    return roles.includes("super_admin") || roles.includes(required);
+}
+
+/** Has this session passed TOTP? Read from the access token's aal claim. */
+export async function hasVerifiedTotp(supabase: SupabaseClient): Promise<boolean> {
+    const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error) {
+        return false;
+    }
+    return data.currentLevel === "aal2";
+}
+
+/**
+ * Guard for admin pages and server actions.
+ *
+ * Not signed in -> /login. No admin role -> 404, so the page does not confirm
+ * it exists. Admin without TOTP this session -> /admin/mfa. Admin without the
+ * role this needs -> /admin, which shows only what their roles allow.
+ *
+ * A server action is reachable without rendering the page it came from, so
+ * every action calls this itself rather than trusting the layout.
+ */
+export async function requireAdmin(
+    required: AdminRole = "content_admin",
+): Promise<AdminSession> {
+    const session = await getAdminSession();
+    if (!session) {
+        redirect("/login");
+    }
+    if (session.roles.length === 0) {
+        notFound();
+    }
+    if (!(await hasVerifiedTotp(session.supabase))) {
+        redirect("/admin/mfa");
+    }
+    if (!roleAllows(session.roles, required)) {
+        redirect("/admin");
+    }
+    return session;
+}
+
+/**
+ * The same checks for route handlers, which answer with a status code instead
+ * of a redirect. Returns null when the caller may not proceed.
+ */
+export async function adminSessionOrNull(
+    required: AdminRole = "content_admin",
+): Promise<AdminSession | null> {
+    const session = await getAdminSession();
+    if (
+        !session ||
+        !roleAllows(session.roles, required) ||
+        !(await hasVerifiedTotp(session.supabase))
+    ) {
+        return null;
+    }
+    return session;
+}
+
+/** Signed-in account and its roles, or null when nobody is signed in. */
+export async function getAdminSession(): Promise<AdminSession | null> {
     const supabase = createClient();
     const {
         data: { user },
     } = await supabase.auth.getUser();
-
     if (!user) {
-        redirect("/login");
+        return null;
     }
-
-    const dbUser = await getUserById(supabase, user.id);
-    if (!dbUser) {
-        redirect("/login");
-    }
-
-    if (!isAdminEmail(dbUser.email)) {
-        redirect("/home");
-    }
-
-    return dbUser;
-}
-
-/** Is this address on the allowlist? An unset allowlist admits everyone. */
-export function isAdminEmail(email: string | null | undefined): boolean {
-    const allowlist = adminEmails();
-    if (allowlist.length === 0) {
-        return true;
-    }
-    return allowlist.includes((email ?? "").trim().toLowerCase());
-}
-
-function adminEmails(): string[] {
-    return (process.env.ADMIN_EMAILS ?? "")
-        .split(",")
-        .map((entry) => entry.trim().toLowerCase())
-        .filter(Boolean);
+    const roles = await getAdminRoles(supabase, user.id);
+    return { supabase, user, roles };
 }

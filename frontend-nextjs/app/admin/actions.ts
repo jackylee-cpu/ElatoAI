@@ -1,9 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { assertAdmin } from "@/lib/admin";
-import { createServiceClient } from "@/utils/supabase/service";
+import { requireAdmin } from "@/lib/admin";
 import { saveVoiceStackSettings } from "@/db/appSettings";
+import { grantAdminRole, revokeAdminRole } from "@/db/adminRoles";
 import {
     createBuiltinPersonality,
     updatePersonalityAsAdmin,
@@ -27,6 +27,12 @@ const REASONING_EFFORTS: OpenRouterReasoningEffort[] = [
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
+// Every action below runs with the admin's own key, never the service role:
+// RLS and has_role() decide in the database, and requireAdmin() here only
+// fails early with a readable message. Settings and admin roles are
+// super_admin; characters and IPs are content_admin, which super_admin also
+// holds.
+
 /**
  * Point every new session at a different model.
  *
@@ -37,7 +43,7 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 export async function saveVoiceStackAction(
     settings: IVoiceStackSettings,
 ): Promise<ActionResult> {
-    const admin = await assertAdmin();
+    const { supabase, user } = await requireAdmin("super_admin");
 
     const value: IVoiceStackSettings = {};
 
@@ -77,15 +83,14 @@ export async function saveVoiceStackAction(
     }
 
     try {
-        const supabase = createServiceClient();
-        await saveVoiceStackSettings(supabase, value, admin.user_id);
+        await saveVoiceStackSettings(supabase, value, user.id);
     } catch (error) {
         console.error("saveVoiceStackAction failed", error);
         return { ok: false, error: "Could not save the settings" };
     }
 
     await refreshVoiceServerSettings();
-    revalidatePath("/home/admin");
+    revalidatePath("/admin");
     return { ok: true };
 }
 
@@ -112,7 +117,7 @@ export async function updatePersonalityAction(
     personalityId: string,
     updates: Partial<IPersonality>,
 ): Promise<ActionResult> {
-    await assertAdmin();
+    const { supabase } = await requireAdmin("content_admin");
 
     if (!personalityId) {
         return { ok: false, error: "Missing character id" };
@@ -124,14 +129,13 @@ export async function updatePersonalityAction(
     }
 
     try {
-        const supabase = createServiceClient();
         await updatePersonalityAsAdmin(supabase, personalityId, clean);
     } catch (error) {
         console.error("updatePersonalityAction failed", error);
         return { ok: false, error: "Could not save the character" };
     }
 
-    revalidatePath("/home/admin");
+    revalidatePath("/admin");
     revalidatePath("/home");
     return { ok: true };
 }
@@ -153,7 +157,7 @@ export async function setPersonalityHiddenAction(
 export async function createPersonalityAction(
     personality: Partial<IPersonality>,
 ): Promise<ActionResult> {
-    await assertAdmin();
+    const { supabase } = await requireAdmin("content_admin");
 
     const key = (personality.key ?? "").trim().toLowerCase();
     const title = (personality.title ?? "").trim();
@@ -172,7 +176,6 @@ export async function createPersonalityAction(
     }
 
     try {
-        const supabase = createServiceClient();
         await createBuiltinPersonality(supabase, {
             ...pickEditable(personality),
             key,
@@ -187,7 +190,7 @@ export async function createPersonalityAction(
         return { ok: false, error: "Could not create the character" };
     }
 
-    revalidatePath("/home/admin");
+    revalidatePath("/admin");
     revalidatePath("/home");
     return { ok: true };
 }
@@ -318,7 +321,7 @@ export async function saveIpAction(
     draft: IpDraft,
     creating: boolean,
 ): Promise<ActionResult> {
-    await assertAdmin();
+    const { supabase } = await requireAdmin("content_admin");
 
     const ipKey = draft.ip_key.trim().toLowerCase();
     const name = draft.name.trim();
@@ -359,11 +362,16 @@ export async function saveIpAction(
     }
 
     try {
-        const supabase = createServiceClient();
-        const { error: ipError } = creating
-            ? await supabase.from("ips").insert(ipRow)
-            : await supabase.from("ips").update(ipRow).eq("ip_key", ipKey);
+        const { data: saved, error: ipError } = creating
+            ? await supabase.from("ips").insert(ipRow).select("ip_key")
+            : await supabase
+                  .from("ips")
+                  .update(ipRow)
+                  .eq("ip_key", ipKey)
+                  .select("ip_key");
         if (ipError) throw ipError;
+        // A refused UPDATE comes back as zero rows, not an error.
+        if (!saved || saved.length === 0) throw new Error("IP not saved");
 
         const { error: clearModes } = await supabase
             .from("ip_modes")
@@ -393,7 +401,62 @@ export async function saveIpAction(
         return { ok: false, error: "Could not save the IP" };
     }
 
-    revalidatePath("/home/admin");
+    revalidatePath("/admin");
     revalidatePath("/home");
+    return { ok: true };
+}
+
+const ADMIN_ROLES: AdminRole[] = ["super_admin", "content_admin"];
+
+/** Give an existing account an admin role. It enrols TOTP on its first visit. */
+export async function grantAdminRoleAction(
+    email: string,
+    role: AdminRole,
+): Promise<ActionResult> {
+    const { supabase } = await requireAdmin("super_admin");
+
+    const address = email.trim().toLowerCase();
+    if (!address.includes("@")) {
+        return { ok: false, error: "Enter the account's email" };
+    }
+    if (!ADMIN_ROLES.includes(role)) {
+        return { ok: false, error: `Unknown role "${role}"` };
+    }
+
+    try {
+        await grantAdminRole(supabase, address, role);
+    } catch (error) {
+        console.error("grantAdminRoleAction failed", error);
+        if ((error as { code?: string })?.code === "P0002") {
+            return {
+                ok: false,
+                error: "No account with that email -- they need to sign up first",
+            };
+        }
+        return { ok: false, error: "Could not grant the role" };
+    }
+
+    revalidatePath("/admin");
+    return { ok: true };
+}
+
+export async function revokeAdminRoleAction(
+    userId: string,
+    role: AdminRole,
+): Promise<ActionResult> {
+    const { supabase, user } = await requireAdmin("super_admin");
+
+    if (userId === user.id && role === "super_admin") {
+        return { ok: false, error: "You cannot remove your own super admin role" };
+    }
+
+    try {
+        await revokeAdminRole(supabase, userId, role);
+    } catch (error) {
+        console.error("revokeAdminRoleAction failed", error);
+        return { ok: false, error: "Could not revoke the role" };
+    }
+
+    revalidatePath("/admin");
     return { ok: true };
 }

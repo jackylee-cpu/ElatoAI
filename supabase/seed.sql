@@ -369,3 +369,9 @@ FROM public.personalities AS p
 WHERE p.personality_id = u.personality_id
   AND p.creator_id IS NULL
   AND p.is_hidden = true;
+
+-- The seeded admin account is a super admin locally. It still has to enrol
+-- TOTP at /admin/mfa before has_role() answers true.
+INSERT INTO public.admin_roles (user_id, role)
+VALUES ('5af62b0e-3da4-4c44-adf7-5b1b7c9c4cb6', 'super_admin')
+ON CONFLICT DO NOTHING;

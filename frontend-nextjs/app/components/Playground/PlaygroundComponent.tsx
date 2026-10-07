@@ -103,7 +103,7 @@ const Playground: React.FC<PlaygroundProps> = ({
                         <header className="relative flex h-14 shrink-0 items-center justify-center md:h-16">
                             {isAdmin && (
                                 <Link
-                                    href="/home/admin"
+                                    href="/admin"
                                     className="absolute left-0 hidden items-center gap-1 rounded-full bg-white/70 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm backdrop-blur-sm hover:bg-white md:flex"
                                 >
                                     <SlidersHorizontal size={14} />

@@ -122,12 +122,16 @@ export default function LoginForm({
           )}
         </form>
 
-        <p className="mt-3 rounded-2xl bg-[#F3F5FC] px-4 py-3 text-center text-xs leading-5 text-[#8B90A0]">
-          Local admin:{" "}
-          <span className="font-medium text-[#1A1C2B]">admin@elatoai.com</span>
-          {" / "}
-          <span className="font-medium text-[#1A1C2B]">admin</span>
-        </p>
+        {/* The seeded account from supabase/seed.sql. Only a local database
+            has it, so only a development build mentions it. */}
+        {process.env.NODE_ENV === "development" && (
+          <p className="mt-3 rounded-2xl bg-[#F3F5FC] px-4 py-3 text-center text-xs leading-5 text-[#8B90A0]">
+            Local admin:{" "}
+            <span className="font-medium text-[#1A1C2B]">admin@elatoai.com</span>
+            {" / "}
+            <span className="font-medium text-[#1A1C2B]">admin</span>
+          </p>
+        )}
 
         <div className="my-5 flex items-center gap-3">
           <div className="h-px flex-1 bg-[#E8EAF0]" />

@@ -25,9 +25,9 @@ import { Eye, EyeOff, Pencil, Plus } from "lucide-react";
 import Image from "next/image";
 import { getPersonalityAvatarSrc } from "@/lib/utils";
 import CharacterEditSheet from "./CharacterEditSheet";
-import { setPersonalityHiddenAction } from "@/app/home/admin/actions";
+import { setPersonalityHiddenAction } from "@/app/admin/actions";
 
-type Scope = "all" | "builtin" | "user" | "hidden";
+type Scope = "all" | "hidden";
 
 interface CharactersTabProps {
     personalities: IAdminPersonality[];
@@ -57,11 +57,9 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
     const filtered = useMemo(() => {
         const needle = search.trim().toLowerCase();
         return personalities.filter((entry) => {
-            if (scope === "builtin" && entry.creator_id !== null) return false;
-            if (scope === "user" && entry.creator_id === null) return false;
             if (scope === "hidden" && !entry.is_hidden) return false;
             if (!needle) return true;
-            return [entry.title, entry.key, entry.creator_email, entry.character_prompt]
+            return [entry.title, entry.key, entry.character_prompt]
                 .filter(Boolean)
                 .some((field) => field!.toLowerCase().includes(needle));
         });
@@ -83,7 +81,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
         <div className="flex flex-col gap-4">
             <div className="flex flex-row flex-wrap gap-2 items-center">
                 <Input
-                    placeholder="Search title, key, owner or prompt…"
+                    placeholder="Search title, key or prompt…"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     className="max-w-sm"
@@ -94,8 +92,6 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">All characters</SelectItem>
-                        <SelectItem value="builtin">Built-in</SelectItem>
-                        <SelectItem value="user">Made by users</SelectItem>
                         <SelectItem value="hidden">Hidden</SelectItem>
                     </SelectContent>
                 </Select>
@@ -112,6 +108,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
                     <CardDescription>
                         Editing a prompt takes effect the next time a session
                         starts. Hiding retires a character without deleting it.
+                        Characters parents made are theirs and are not listed.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -122,7 +119,6 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
                                 <TableHead>Key</TableHead>
                                 <TableHead>IP</TableHead>
                                 <TableHead>Activity · personality</TableHead>
-                                <TableHead>Owner</TableHead>
                                 <TableHead>Voice</TableHead>
                                 <TableHead className="text-right">Prompt</TableHead>
                                 <TableHead className="w-[100px]" />
@@ -169,15 +165,6 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
                                             .filter(Boolean)
                                             .join(" · ") || (
                                             <span className="text-muted-foreground">—</span>
-                                        )}
-                                    </TableCell>
-                                    <TableCell className="text-xs">
-                                        {entry.creator_id === null ? (
-                                            <span className="text-muted-foreground">
-                                                built-in
-                                            </span>
-                                        ) : (
-                                            (entry.creator_email ?? "unknown")
                                         )}
                                     </TableCell>
                                     <TableCell className="text-xs whitespace-nowrap">

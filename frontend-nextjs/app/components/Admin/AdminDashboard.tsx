@@ -7,12 +7,16 @@ import ModelSettingsTab from "./ModelSettingsTab";
 import LatencyTab from "./LatencyTab";
 import CharactersTab from "./CharactersTab";
 import IpsTab from "./IpsTab";
+import AdminsTab from "./AdminsTab";
 import { BackIcon } from "../Playground/icons";
 import { cn } from "@/lib/utils";
 
 interface AdminDashboardProps {
+    roles: AdminRole[];
+    currentUserId: string;
     settings: IVoiceStackSettings;
     turnMetrics: ITurnMetric[];
+    admins: IAdminRoleEntry[];
     personalities: IAdminPersonality[];
     ips: IIp[];
     modes: IMode[];
@@ -26,13 +30,33 @@ const tabTriggerClass = cn(
 );
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({
+    roles,
+    currentUserId,
     settings,
     turnMetrics,
+    admins,
     personalities,
     ips,
     modes,
     styles,
 }) => {
+    // Content admins see characters and IPs only. Hiding the rest is for
+    // clarity; RLS is what stops them, and the page does not even fetch the
+    // super admin's data for them.
+    const isSuper = roles.includes("super_admin");
+    const tabs = isSuper
+        ? [
+              { value: "model", label: "Model" },
+              { value: "latency", label: "Latency" },
+              { value: "characters", label: "Characters" },
+              { value: "ips", label: "IPs" },
+              { value: "admins", label: "Admins" },
+          ]
+        : [
+              { value: "characters", label: "Characters" },
+              { value: "ips", label: "IPs" },
+          ];
+
     return (
         <div className="relative z-10 mx-auto flex h-full w-full max-w-5xl flex-col px-4 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-8 md:pt-8">
             <header className="relative mb-3 flex h-14 shrink-0 items-center justify-center md:h-16">
@@ -49,25 +73,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </header>
 
             <Tabs
-                defaultValue="model"
+                defaultValue={tabs[0].value}
                 className="flex min-h-0 flex-1 flex-col"
             >
-                <TabsList className="mx-auto mb-5 grid h-auto w-full max-w-xl grid-cols-4 rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)]">
-                    <TabsTrigger value="model" className={tabTriggerClass}>
-                        Model
-                    </TabsTrigger>
-                    <TabsTrigger value="latency" className={tabTriggerClass}>
-                        Latency
-                    </TabsTrigger>
-                    <TabsTrigger
-                        value="characters"
-                        className={tabTriggerClass}
-                    >
-                        Characters
-                    </TabsTrigger>
-                    <TabsTrigger value="ips" className={tabTriggerClass}>
-                        IPs
-                    </TabsTrigger>
+                <TabsList
+                    className="mx-auto mb-5 grid h-auto w-full max-w-2xl rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)]"
+                    style={{
+                        gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
+                    }}
+                >
+                    {tabs.map((tab) => (
+                        <TabsTrigger
+                            key={tab.value}
+                            value={tab.value}
+                            className={tabTriggerClass}
+                        >
+                            {tab.label}
+                        </TabsTrigger>
+                    ))}
                 </TabsList>
 
                 <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto pb-8">
@@ -76,12 +99,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             Settings here apply to every session, on the web
                             app and on the toys.
                         </p>
-                        <TabsContent value="model" className="mt-0">
-                            <ModelSettingsTab settings={settings} />
-                        </TabsContent>
-                        <TabsContent value="latency" className="mt-0">
-                            <LatencyTab rows={turnMetrics} />
-                        </TabsContent>
+                        {isSuper && (
+                            <>
+                                <TabsContent value="model" className="mt-0">
+                                    <ModelSettingsTab settings={settings} />
+                                </TabsContent>
+                                <TabsContent value="latency" className="mt-0">
+                                    <LatencyTab rows={turnMetrics} />
+                                </TabsContent>
+                                <TabsContent value="admins" className="mt-0">
+                                    <AdminsTab
+                                        admins={admins}
+                                        currentUserId={currentUserId}
+                                    />
+                                </TabsContent>
+                            </>
+                        )}
                         <TabsContent value="characters" className="mt-0">
                             <CharactersTab
                                 personalities={personalities}

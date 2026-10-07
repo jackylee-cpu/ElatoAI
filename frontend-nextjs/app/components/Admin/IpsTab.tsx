@@ -26,7 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/use-toast";
 import { Loader2, Pencil, Plus } from "lucide-react";
 import { Field, Toggle } from "./CharacterEditSheet";
-import { saveIpAction, type IpDraft } from "@/app/home/admin/actions";
+import { saveIpAction, type IpDraft } from "@/app/admin/actions";
 
 interface IpsTabProps {
     ips: IIp[];

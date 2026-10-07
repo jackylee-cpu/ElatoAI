@@ -4,7 +4,7 @@ import { Gamepad2, Settings, SlidersHorizontal } from "lucide-react";
 import { Metadata } from "next";
 import { getOpenGraphMetadata } from "@/lib/utils";
 import { getUserById } from "@/db/users";
-import { isAdminEmail } from "@/lib/admin";
+import { getAdminRoles } from "@/lib/admin";
 import { HomeShell } from "./HomeShell";
 
 const ICON_SIZE = 20;
@@ -35,7 +35,7 @@ const sidebarNavItems: SidebarNavItem[] = [
 
 const adminNavItem: SidebarNavItem = {
     title: "Admin",
-    href: "/home/admin",
+    href: "/admin",
     icon: <SlidersHorizontal size={ICON_SIZE} />,
 };
 
@@ -60,18 +60,15 @@ export default async function RootLayout({
         redirect("/login");
     }
 
-    // Admin is a desktop page and the mobile bar is a fixed three buttons, so
-    // it goes in the sidebar only. Adding it to the array below would shift the
-    // indices these three are picked by.
-    const navItems = isAdminEmail(dbUser.email)
+    // Admin is a desktop page, so it goes in the sidebar only.
+    const adminRoles = await getAdminRoles(supabase, user.id);
+    const navItems = adminRoles.length > 0
         ? [...sidebarNavItems, adminNavItem]
         : sidebarNavItems;
 
-    const mobileNavItems = [
-        sidebarNavItems[0], // Playground
-        sidebarNavItems[2], // Create
-        sidebarNavItems[1], // Settings
-    ];
+    // Playground and Settings. "Create" used to sit between them and is gone
+    // with /home/create; indexing [2] here would hand MobileNav undefined.
+    const mobileNavItems = sidebarNavItems;
 
     return (
         <HomeShell navItems={navItems} mobileNavItems={mobileNavItems}>

@@ -30,9 +30,9 @@ export const getVoiceStackSettings = async (
 /**
  * Replace the voice settings row.
  *
- * Needs a service-role client: app_settings has a SELECT policy for signed-in
- * users and no write policy at all, so an anon or authenticated key silently
- * writes nothing.
+ * Called with a super admin's own key: RLS lets has_role('super_admin') read
+ * and write app_settings and nobody else. The voice server reads it as
+ * service_role.
  */
 export const saveVoiceStackSettings = async (
     supabase: SupabaseClient,

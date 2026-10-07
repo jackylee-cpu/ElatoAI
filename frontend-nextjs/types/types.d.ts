@@ -460,14 +460,22 @@ declare global {
 
     type PersonalityFilter = "is_child_voice" | "is_story";
 
-    /** A character plus who owns it, for the admin list. */
+    /** A built-in character, for the admin list. */
     interface IAdminPersonality extends IPersonality {
         personality_id: string;
         created_at?: string;
-        // Null for a built-in character, which is also what creator_id being
-        // null means -- kept separate so the list can say "built-in" rather
-        // than showing a blank owner column.
-        creator_email: string | null;
+    }
+
+    type AdminRole = "super_admin" | "content_admin";
+
+    /** One role held by one account, for the super admin's list. */
+    interface IAdminRoleEntry {
+        user_id: string;
+        email: string;
+        role: AdminRole;
+        granted_by_email: string | null;
+        granted_at: string;
+        has_totp: boolean;
     }
 
     type Module = "math" | "science" | "spelling" | "general_trivia";
