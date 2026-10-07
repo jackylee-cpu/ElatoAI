@@ -138,7 +138,10 @@ const Playground: React.FC<PlaygroundProps> = ({
                             />
                         </div>
 
-                        <div className="scrollbar-hide flex-1 overflow-y-auto pb-32 md:pb-36">
+                        {/* overflow-y-auto clips x as well, so the negative
+                            margin + padding gives hovered cards room to scale
+                            without their border being cut off at the edges. */}
+                        <div className="scrollbar-hide -mx-3 -mt-3 flex-1 overflow-y-auto px-3 pb-32 pt-3 md:pb-36">
                             <UserPersonalities
                                 selectedFilters={selectedFilters}
                                 onPersonalityPicked={onPersonalityPicked}
