@@ -28,7 +28,17 @@ include = ["memory*", "models*"]
 dev = [
     "pyright>=1.1.404,<2",
     "ruff>=0.12.11,<1",
+    "pytest>=9,<10",
+    "pytest-asyncio>=1.4,<2",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The async tests are plain `async def test_...` with no marker. In the default
+# strict mode pytest-asyncio skips them and pytest reports each as a failure
+# ("async def functions are not natively supported") -- 60 of them, which read
+# as broken code rather than a missing setting.
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
