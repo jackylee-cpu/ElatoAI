@@ -97,6 +97,7 @@ const EDITABLE_FIELDS = [
     "first_message_prompt",
     "voice_prompt",
     "oai_voice",
+    "voices",
     "provider",
     "image_url",
     "is_hidden",
@@ -223,7 +224,29 @@ function pickEditable(updates: Partial<IPersonality>): Partial<IPersonality> {
             clean[field] = updates[field];
         }
     }
+    if (clean.voices !== undefined) {
+        clean.voices = cleanVoices(clean.voices);
+    }
     return clean as Partial<IPersonality>;
+}
+
+/** language_code -> MiniMax voice id. Empty strings are dropped so clearing a
+ *  field in admin actually unsets it rather than storing "". */
+function cleanVoices(voices: unknown): Record<string, string> {
+    if (!voices || typeof voices !== "object" || Array.isArray(voices)) {
+        return {};
+    }
+    const allowed = new Set(["en-US", "zh-HK", "zh-CN"]);
+    const clean: Record<string, string> = {};
+    for (const [rawCode, rawVoice] of Object.entries(
+        voices as Record<string, unknown>,
+    )) {
+        const code = rawCode.trim();
+        if (!allowed.has(code) || typeof rawVoice !== "string") continue;
+        const voice = rawVoice.trim();
+        if (voice) clean[code] = voice;
+    }
+    return clean;
 }
 
 /**

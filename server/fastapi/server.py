@@ -17,6 +17,7 @@ from loguru import logger
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 import app_settings
+import language_profiles
 from bot import create_esp32_auth_message, run_bot_session
 from device_registry import fetch_device_personality, fetch_user_personality
 from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
@@ -294,6 +295,9 @@ def create_app() -> FastAPI:
     async def nextjs_websocket(websocket: WebSocket):
         await websocket.accept()
         tts_voice = websocket.query_params.get("voice")
+        tts_voices = language_profiles.parse_voices(
+            websocket.query_params.get("voices")
+        )
         title = websocket.query_params.get("title")
         character_prompt = websocket.query_params.get("character_prompt")
         voice_prompt = websocket.query_params.get("voice_prompt")
@@ -345,6 +349,7 @@ def create_app() -> FastAPI:
                 "browser",
                 False,
                 tts_voice=tts_voice,
+                tts_voices=tts_voices,
                 title=title,
                 character_prompt=character_prompt,
                 voice_prompt=voice_prompt,
@@ -416,6 +421,7 @@ def create_app() -> FastAPI:
                 "esp32",
                 False,
                 tts_voice=personality.tts_voice,
+                tts_voices=personality.tts_voices,
                 title=personality.title,
                 character_prompt=personality.character_prompt,
                 voice_prompt=personality.voice_prompt,

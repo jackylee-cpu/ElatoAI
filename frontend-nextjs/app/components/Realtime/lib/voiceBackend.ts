@@ -6,6 +6,10 @@ export const FASTAPI_WS_URL =
 
 export type FastAPISessionParams = {
   voice?: string | null;
+  // language_code -> MiniMax voice id, the same map admin writes to
+  // personalities.voices. JSON on the query string so the voice server can
+  // pick Cantonese/Mandarin without another database round-trip.
+  voices?: Record<string, string> | null;
   title?: string | null;
   characterPrompt?: string | null;
   voicePrompt?: string | null;
@@ -26,6 +30,10 @@ export function shouldUseFastAPIVoice(provider?: string | null) {
 export function getFastAPIVoiceUrl(params?: FastAPISessionParams) {
   const search = new URLSearchParams();
   if (params?.voice) search.set("voice", params.voice);
+  const voices = params?.voices;
+  if (voices && Object.keys(voices).length > 0) {
+    search.set("voices", JSON.stringify(voices));
+  }
   if (params?.title) search.set("title", params.title);
   if (params?.characterPrompt) search.set("character_prompt", params.characterPrompt);
   if (params?.voicePrompt) search.set("voice_prompt", params.voicePrompt);

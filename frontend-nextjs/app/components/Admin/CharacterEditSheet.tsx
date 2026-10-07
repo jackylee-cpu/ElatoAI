@@ -37,6 +37,7 @@ const EMPTY: Partial<IPersonality> = {
     first_message_prompt: "",
     voice_prompt: "",
     oai_voice: "Friendly_Person",
+    voices: {},
     provider: "openrouter",
     image_url: null,
     is_child_voice: false,
@@ -122,6 +123,12 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
             ? getPersonalityImageSrc(draft.key)
             : null;
     const previewImage = draft.image_url ?? bundledImage;
+
+    const setLangVoice = (code: string, value: string) =>
+        setDraft((current) => ({
+            ...current,
+            voices: { ...(current.voices ?? {}), [code]: value },
+        }));
 
     const onSave = async () => {
         setSaving(true);
@@ -301,12 +308,36 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                         </Field>
 
                         <Field
-                            label="Voice id"
-                            hint="For the OpenRouter route this is a MiniMax voice, e.g. Calm_Woman or Lively_Girl."
+                            label="English voice id"
+                            hint="MiniMax, e.g. Calm_Woman or Lively_Girl. Used on English sessions and as the fallback."
                         >
                             <Input
                                 value={draft.oai_voice ?? ""}
                                 onChange={(event) => set("oai_voice", event.target.value)}
+                            />
+                        </Field>
+
+                        <Field
+                            label="Cantonese voice id"
+                            hint="e.g. Cantonese_CuteGirl or Cantonese_KindWoman. Empty uses the language default."
+                        >
+                            <Input
+                                value={draft.voices?.["zh-HK"] ?? ""}
+                                onChange={(event) =>
+                                    setLangVoice("zh-HK", event.target.value)
+                                }
+                            />
+                        </Field>
+
+                        <Field
+                            label="Mandarin voice id"
+                            hint="e.g. Chinese (Mandarin)_Warm_Girl. Empty uses the language default."
+                        >
+                            <Input
+                                value={draft.voices?.["zh-CN"] ?? ""}
+                                onChange={(event) =>
+                                    setLangVoice("zh-CN", event.target.value)
+                                }
                             />
                         </Field>
 

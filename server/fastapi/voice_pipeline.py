@@ -105,6 +105,7 @@ def build_voice_pipeline(
     input_processor,
     context: LLMContext,
     tts_voice: str | None = None,
+    tts_voices: dict[str, str] | None = None,
     title: str | None = None,
     character_prompt: str | None = None,
     voice_prompt: str | None = None,
@@ -164,10 +165,13 @@ def build_voice_pipeline(
 
     # The voice is part of the language, not a free choice beside it: a MiniMax
     # voice id speaks exactly one language. `voice_for` keeps the character's
-    # own voice when it can say these words and substitutes the language's
-    # otherwise, so a Cantonese session never runs an English voice id.
+    # own voice when it can say these words -- including a per-language id
+    # from `tts_voices` -- and substitutes the language's otherwise, so a
+    # Cantonese session never runs an English voice id.
     session_voice = (
-        language_profiles.voice_for(language, tts_voice) if language else tts_voice
+        language_profiles.voice_for(language, tts_voice, tts_voices)
+        if language
+        else tts_voice
     )
 
     logger.info(
@@ -182,13 +186,17 @@ def build_voice_pipeline(
         session_voice or "default",
         title or "default",
     )
-    if language and tts_voice and session_voice != tts_voice:
-        logger.info(
-            "Character voice {} cannot speak {}, using {} instead",
-            tts_voice,
-            language.label,
-            session_voice,
+    if language:
+        intended = language_profiles.intended_voice(
+            language, tts_voice, tts_voices
         )
+        if intended and session_voice != intended:
+            logger.info(
+                "Character voice {} cannot speak {}, using {} instead",
+                intended,
+                language.label,
+                session_voice,
+            )
 
     stt_kwargs = {"language": language.stt_language} if language else {}
     stt = create_stt_service(stt_provider, **stt_kwargs)

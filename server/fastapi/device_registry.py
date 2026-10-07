@@ -22,6 +22,7 @@ from urllib.parse import quote
 import aiohttp
 from loguru import logger
 
+import language_profiles
 from world_context import Region
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -34,6 +35,8 @@ LOOKUP_TIMEOUT_SECONDS = float(os.getenv("DEVICE_LOOKUP_TIMEOUT", "3"))
 
 # `oai_voice` is the field the web app passes as `voice` on the browser route,
 # so the device resolves the same column and the two transports stay in sync.
+# `voices` is the per-language map the admin page writes; the browser sends
+# it as a query param, the toy has to load it here.
 #
 # `user_id` and the child's own fields are pulled for long-term memory: the
 # memory store is keyed by user_id, and the child profile goes into the system
@@ -46,7 +49,7 @@ _SELECT = (
     "memories_revision,"
     "region:region_code(name,timezone,latitude,longitude),"
     "personality:personality_id("
-    "key,title,character_prompt,voice_prompt,oai_voice"
+    "key,title,character_prompt,voice_prompt,oai_voice,voices"
     ")"
     ")"
 )
@@ -66,6 +69,7 @@ class DevicePersonality:
     character_prompt: str | None = None
     voice_prompt: str | None = None
     tts_voice: str | None = None
+    tts_voices: dict[str, str] | None = None
     volume: int | None = None
     # Identity and child profile. All optional: a device that cannot be
     # resolved still gets a session, just without memory or personalisation.
@@ -133,6 +137,7 @@ def _parse(row: dict) -> DevicePersonality:
         character_prompt=_clean(personality.get("character_prompt")),
         voice_prompt=_clean(personality.get("voice_prompt")),
         tts_voice=_clean(personality.get("oai_voice")),
+        tts_voices=language_profiles.parse_voices(personality.get("voices")),
         volume=volume,
         user_id=_clean(row.get("user_id")),
         personality_key=_clean(personality.get("key")),

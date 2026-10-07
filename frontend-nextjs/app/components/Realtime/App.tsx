@@ -532,6 +532,7 @@ function App({ personalityIdState, isDoctor, userId, renderTrigger }: AppProps) 
       updateVoiceStatus("connecting");
       const voiceUrl = getFastAPIVoiceUrl({
         voice: personality?.oai_voice,
+        voices: personality?.voices,
         title: personality?.title,
         characterPrompt: personality?.character_prompt,
         voicePrompt: personality?.voice_prompt,

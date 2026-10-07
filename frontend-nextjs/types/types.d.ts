@@ -400,6 +400,11 @@ declare global {
         is_story: boolean;
         key: string;
         oai_voice: string;
+        // MiniMax voice id per language_code (en-US, zh-HK, zh-CN). Absent
+        // keys keep oai_voice when it can speak that language, otherwise the
+        // language default. English stays in oai_voice so older clients that
+        // only read that column keep working.
+        voices?: Record<string, string>;
         provider: ModelProvider;
         title: string;
         subtitle: string;

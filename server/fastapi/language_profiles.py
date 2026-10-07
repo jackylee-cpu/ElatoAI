@@ -19,6 +19,7 @@ both Cantonese and Mandarin, so choosing the language chooses the voice.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -147,7 +148,53 @@ def resolve(language_code: str | None) -> LanguageProfile | None:
     return PROFILES.get(language_code.strip())
 
 
-def voice_for(profile: LanguageProfile, character_voice: str | None) -> str:
+def parse_voices(value: object) -> dict[str, str] | None:
+    """Normalise a personalities.voices jsonb or query-param JSON to a map.
+
+    None means "this character has no per-language voices", which is what
+    every existing row looks like (`{}` or the column missing) and what the
+    browser sends when the admin left Cantonese and Mandarin blank.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    out: dict[str, str] = {}
+    for key, raw in value.items():
+        if not isinstance(key, str) or not isinstance(raw, str):
+            continue
+        code = key.strip()
+        voice = raw.strip()
+        if code and voice:
+            out[code] = voice
+    return out or None
+
+
+def intended_voice(
+    profile: LanguageProfile,
+    character_voice: str | None,
+    voices: dict[str, str] | None = None,
+) -> str:
+    """The id the character asked for in this language, before the prefix check.
+
+    The per-language map wins so Pepa can be Cantonese_CuteGirl while Sherlock
+    is Cantonese_PlayfulMan. `character_voice` is personalities.oai_voice, the
+    English default and what older rows have as their only voice.
+    """
+    mapped = ""
+    if voices:
+        mapped = (voices.get(profile.code) or "").strip()
+    return mapped or (character_voice or "").strip()
+
+
+def voice_for(
+    profile: LanguageProfile,
+    character_voice: str | None,
+    voices: dict[str, str] | None = None,
+) -> str:
     """Which MiniMax voice this session speaks with.
 
     The character's own voice wins when it can say these words -- when its id
@@ -156,7 +203,7 @@ def voice_for(profile: LanguageProfile, character_voice: str | None) -> str:
     because a Cantonese session running an English voice id is not a session
     in Cantonese at all.
     """
-    voice = (character_voice or "").strip()
+    voice = intended_voice(profile, character_voice, voices)
     if voice:
         if voice.startswith(profile.voice_prefixes):
             return voice

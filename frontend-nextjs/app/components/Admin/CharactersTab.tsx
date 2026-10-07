@@ -155,7 +155,17 @@ const CharactersTab: React.FC<CharactersTabProps> = ({ personalities }) => {
                                         )}
                                     </TableCell>
                                     <TableCell className="text-xs whitespace-nowrap">
-                                        {entry.oai_voice}
+                                        <div>{entry.oai_voice}</div>
+                                        {entry.voices?.["zh-HK"] && (
+                                            <div className="text-muted-foreground">
+                                                yue {entry.voices["zh-HK"]}
+                                            </div>
+                                        )}
+                                        {entry.voices?.["zh-CN"] && (
+                                            <div className="text-muted-foreground">
+                                                zh {entry.voices["zh-CN"]}
+                                            </div>
+                                        )}
                                     </TableCell>
                                     <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
                                         {entry.character_prompt?.length ?? 0} chars

@@ -70,6 +70,46 @@ def test_the_voice_can_be_overridden_without_a_code_change(monkeypatch):
     assert language_profiles.voice_for(cantonese, "Calm_Woman") == "Cantonese_PlayfulMan"
 
 
+def test_a_character_can_name_a_different_voice_per_language():
+    cantonese = language_profiles.resolve("zh-HK")
+    mandarin = language_profiles.resolve("zh-CN")
+    english = language_profiles.resolve("en-US")
+    voices = {
+        "zh-HK": "Cantonese_CuteGirl",
+        "zh-CN": "Chinese (Mandarin)_Warm_Girl",
+    }
+    # The map is what lets two characters on the same language sound different.
+    assert (
+        language_profiles.voice_for(cantonese, "Calm_Woman", voices)
+        == "Cantonese_CuteGirl"
+    )
+    assert (
+        language_profiles.voice_for(mandarin, "Calm_Woman", voices)
+        == "Chinese (Mandarin)_Warm_Girl"
+    )
+    # English still uses oai_voice when the map has no en-US entry.
+    assert language_profiles.voice_for(english, "Lively_Girl", voices) == "Lively_Girl"
+
+
+def test_a_wrong_language_in_the_map_is_still_replaced():
+    # An English id typed into the Cantonese field is the same mistake as
+    # putting it in oai_voice: it cannot say these words.
+    cantonese = language_profiles.resolve("zh-HK")
+    voices = {"zh-HK": "Calm_Woman"}
+    assert language_profiles.voice_for(cantonese, "Lively_Girl", voices).startswith(
+        "Cantonese_"
+    )
+
+
+def test_parse_voices_drops_blanks_and_junk():
+    assert language_profiles.parse_voices({}) is None
+    assert language_profiles.parse_voices(None) is None
+    assert language_profiles.parse_voices("not-json") is None
+    assert language_profiles.parse_voices(
+        '{"zh-HK":"Cantonese_CuteGirl","zh-CN":"  "}'
+    ) == {"zh-HK": "Cantonese_CuteGirl"}
+
+
 def test_the_language_instruction_outranks_the_character_prompt():
     cantonese = language_profiles.resolve("zh-HK")
     prompt = build_session_prompt(
