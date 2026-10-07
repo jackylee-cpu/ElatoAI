@@ -44,6 +44,15 @@ if step 0; then
         [ -f "$f" ] || { echo "missing $f -- set REPO=..."; exit 1; }
     done
     docker ps --format '{{.Names}}' | grep -qx "$DB" || { echo "no container $DB -- set DB=..."; exit 1; }
+    docker network inspect aibuddy-internal >/dev/null 2>&1 \
+        || { echo "network aibuddy-internal missing -- wrong host?"; exit 1; }
+    # Same lesson as helpercom's 502: compose must Recreate the running
+    # containers, not Create a second project next to them. A project that has
+    # no container here means the directory (and so the project name) is wrong.
+    for d in "$FASTAPI_DIR" "$FRONTEND_DIR"; do
+        [ -n "$(cd "$d" && docker compose -f docker-compose.ghcr.yml ps -q)" ] \
+            || { echo "no running container for the compose project in $d -- this is not where it was started"; exit 1; }
+    done
     grep -q '^SUPABASE_SERVICE_ROLE_KEY=.\+' "$FRONTEND_DIR/.env.production" \
         || { echo "web app env has no SUPABASE_SERVICE_ROLE_KEY; claiming needs it"; exit 1; }
     echo "  NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION in web env: $(grep -E '^NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION=' "$FRONTEND_DIR/.env.production" | cut -d= -f2- || echo unset) (True lets unclaimed boards in)"
@@ -97,7 +106,10 @@ if step 4; then
     say "4. Images $RELEASE (waits for CI)"
     for img in fastapi frontend; do
         tries=0
-        until docker pull -q "ghcr.io/jackylee-cpu/aibuddy/$img:$RELEASE" >/dev/null 2>&1; do
+        until out="$(docker pull -q "ghcr.io/jackylee-cpu/aibuddy/$img:$RELEASE" 2>&1)"; do
+            if echo "$out" | grep -qiE "unauthorized|denied|authentication"; then
+                echo "  GHCR refused the pull: docker login ghcr.io with a read:packages PAT first"; exit 1
+            fi
             tries=$((tries + 1)); [ "$tries" -le 40 ] || { echo "  $img:$RELEASE not on GHCR after 20 min -- check Actions"; exit 1; }
             echo "  waiting for $img:$RELEASE ..."; sleep 30
         done
