@@ -5,6 +5,8 @@
 # and 24h device tokens (P0-06/08), signed browser voice tokens (P0-09),
 # /browser off (P0-10), admin roles (P0-12), character read/write rules
 # (P0-15), the doctor identity gone (P0-16), the Cantonese cast (R-02).
+# Since 2026-10-08 also: OpenRouter provider pinning (P2-10), firmware OTA with
+# rollback (P0-13) and the C3 playback freeze (P2-11) -- release p0-13-ota.
 # Supersedes release-2026-10-07-da98048.sh, which was never run: production is
 # still on the schema from before 20260911170000.
 #
@@ -115,7 +117,7 @@ if step 1; then
     git -C "$REPO" pull --ff-only origin main
     git -C "$REPO" merge-base --is-ancestor "$RELEASE" HEAD \
         || { echo "checkout does not contain $RELEASE"; exit 1; }
-    for m in "${RESTRICTING[@]}" 20261007150000_add_device_secrets.sql; do
+    for m in "${RESTRICTING[@]}" 20261007150000_add_device_secrets.sql 20261008100000_firmware_releases.sql; do
         [ -f "$REPO/supabase/migrations/$m" ] || { echo "  missing migration $m -- wrong release?"; exit 1; }
     done
     git -C "$REPO" log --oneline -1
@@ -158,10 +160,11 @@ if step 4; then
     has_table memory_facts          || apply 20260924120000_add_memory_facts.sql
     has_table ips                   || apply 20261007120000_add_ips_modes_styles.sql
     has_table device_secrets        || apply 20261007150000_add_device_secrets.sql
-    for t in regions memory_facts ips modes styles device_secrets; do
+    has_table firmware_releases     || apply 20261008100000_firmware_releases.sql
+    for t in regions memory_facts ips modes styles device_secrets firmware_releases; do
         has_table "$t" || { echo "  $t still missing"; exit 1; }
     done
-    has_column personalities voices && has_column conversations ip_key \
+    has_column personalities voices && has_column conversations ip_key && has_column devices firmware_version \
         || { echo "  columns still missing"; exit 1; }
     q "NOTIFY pgrst, 'reload schema'" >/dev/null
     echo "  schema ok"
@@ -217,7 +220,7 @@ if step 8; then
     bad() { echo "  FAIL  $*"; fails=$((fails + 1)); }
 
     # -- database --
-    [ "$(q "select count(*) from information_schema.role_table_grants where table_schema='public' and table_name in ('users','devices','conversations','memory_facts','memory_segments','memories','admin_roles','app_settings','turn_metrics','device_secrets') and grantee='anon'")" = "0" ] \
+    [ "$(q "select count(*) from information_schema.role_table_grants where table_schema='public' and table_name in ('users','devices','conversations','memory_facts','memory_segments','memories','admin_roles','app_settings','turn_metrics','device_secrets','firmware_releases') and grantee='anon'")" = "0" ] \
         && ok "anon holds no grant on private tables" || bad "anon still holds grants on private tables"
     [ "$(q "select count(*) from pg_policies where schemaname='public' and qual='true' and tablename <> all(array['ips','ip_modes','ip_styles','modes','styles','regions','languages','voices'])")" = "0" ] \
         && ok "no USING (true) policy on private tables" \
@@ -226,6 +229,10 @@ if step 8; then
         && ok "no admin policy on conversations or memory (Q7)" || bad "an admin policy reaches conversations or memory"
     q "select pg_get_functiondef('public.has_role(text)'::regprocedure)" | grep -q "aal" \
         && bad "has_role() still requires TOTP (20261007191000 not applied?)" || ok "has_role() is role-only"
+    [ "$(q "select count(*) from storage.buckets where id='firmware' and not public")" = "1" ] \
+        && ok "firmware bucket exists and is private" || bad "firmware bucket missing or public"
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "$SITE/api/ota/firmware/00000000-0000-0000-0000-000000000000")" = "401" ] \
+        && ok "firmware download refuses a request without a device token" || bad "firmware download answered without a device token"
     [ "$(q "select count(*) from public.admin_roles where role='super_admin'")" -ge 1 ] \
         && ok "super admins: $(q "select count(*) from public.admin_roles where role='super_admin'")" || bad "no super admin"
     [ "$(q "select count(*) from public.personalities where creator_id is null and not is_hidden")" = "6" ] \
@@ -294,6 +301,15 @@ if step 8; then
   - a parent account signs in -> no Admin link; typing /admin lands on /home
   - the playground lists the six Cantonese characters; a voice chat works and
     its turns appear in Settings
-  - re-flash a board, claim it, talk to it
+  - re-flash a board, claim it, talk to it. Use env spotpear-ai-toy (cloud),
+    never -localws/-localall: those boards depend on a laptop and cannot OTA
+    from the cloud.
+  - OTA, from the dev Mac, on ONE test board before any board leaves the
+    building (every Spotpear board installs the current release):
+      export SUPABASE_URL=$SUPA SUPABASE_SERVICE_ROLE_KEY=<service key>
+      bump FIRMWARE_VERSION in firmware-arduino/src/OTA.h, pio run -e spotpear-ai-toy
+      python3 firmware-arduino/tools/release_firmware.py publish spotpear-ai-toy --current
+    reboot the board: it downloads over HTTPS, reboots, confirms ~2 min after
+    the greeting, and devices.firmware_version shows the new version.
 EOF
 fi
