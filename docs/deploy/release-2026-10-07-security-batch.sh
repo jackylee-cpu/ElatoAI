@@ -58,6 +58,11 @@ RESTRICTING=(
     20261007180000_admin_roles.sql
     20261007190000_personalities_read_published.sql
     20261007191000_admin_role_without_totp.sql
+    # Not additive after all: its policy calls has_role(), which 180000 creates.
+    # As step 4 it failed on production with "function public.has_role(unknown)
+    # does not exist" (2026-10-08). The new web app copes without it meanwhile:
+    # the token answer just carries no `ota`.
+    20261008100000_firmware_releases.sql
 )
 
 step() { [ "$1" -ge "$STEP" ] && [ "$1" -le "$LAST" ]; }
@@ -117,7 +122,7 @@ if step 1; then
     git -C "$REPO" pull --ff-only origin main
     git -C "$REPO" merge-base --is-ancestor "$RELEASE" HEAD \
         || { echo "checkout does not contain $RELEASE"; exit 1; }
-    for m in "${RESTRICTING[@]}" 20261007150000_add_device_secrets.sql 20261008100000_firmware_releases.sql; do
+    for m in "${RESTRICTING[@]}" 20261007150000_add_device_secrets.sql; do
         [ -f "$REPO/supabase/migrations/$m" ] || { echo "  missing migration $m -- wrong release?"; exit 1; }
     done
     git -C "$REPO" log --oneline -1
@@ -160,11 +165,10 @@ if step 4; then
     has_table memory_facts          || apply 20260924120000_add_memory_facts.sql
     has_table ips                   || apply 20261007120000_add_ips_modes_styles.sql
     has_table device_secrets        || apply 20261007150000_add_device_secrets.sql
-    has_table firmware_releases     || apply 20261008100000_firmware_releases.sql
-    for t in regions memory_facts ips modes styles device_secrets firmware_releases; do
+    for t in regions memory_facts ips modes styles device_secrets; do
         has_table "$t" || { echo "  $t still missing"; exit 1; }
     done
-    has_column personalities voices && has_column conversations ip_key && has_column devices firmware_version \
+    has_column personalities voices && has_column conversations ip_key \
         || { echo "  columns still missing"; exit 1; }
     q "NOTIFY pgrst, 'reload schema'" >/dev/null
     echo "  schema ok"
