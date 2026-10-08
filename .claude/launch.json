@@ -10,6 +10,13 @@
       "autoPort": true
     },
     {
+      "name": "frontend-devboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "-p", "52727"],
+      "cwd": "frontend-nextjs",
+      "port": 52727
+    },
+    {
       "name": "voice-server",
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["server.py"],
