@@ -48,7 +48,13 @@ static const uint32_t OTA_STALL_MS = 20000;
 static bool onProbation = false;
 static bool checkedThisBoot = false;
 static String failedVersion;
+// Each start time comes with its own flag. Marking "set" by forcing the low
+// bit (millis() | 1) put the time up to 1ms in the future, so the next poll's
+// unsigned millis() - t wrapped to ~49 days: 1.1.1 rolled itself back the
+// instant WiFi came up (device test, 2026-10-08).
+static bool wifiUp = false;
 static uint32_t wifiUpAt = 0;
+static bool serverReached = false;
 static uint32_t serverReachedAt = 0;
 
 // Weak in the Arduino core (esp32-hal-misc.c, C linkage). Returning true
@@ -265,8 +271,9 @@ void otaCheckAndUpdate() {
 bool otaCheckedThisBoot() { return checkedThisBoot; }
 
 void otaServerReached() {
-    if (onProbation && serverReachedAt == 0) {
-        serverReachedAt = millis() | 1;
+    if (onProbation && !serverReached) {
+        serverReached = true;
+        serverReachedAt = millis();
         Serial.printf("[OTA] Voice server reached; confirming %s if it stays up %us\n", FIRMWARE_VERSION,
                       (unsigned)(OTA_STABLE_MS / 1000));
     }
@@ -276,7 +283,7 @@ static void confirmImage() {
     const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err != ESP_OK) {
         Serial.printf("[OTA] Could not confirm this image: %s\n", esp_err_to_name(err));
-        serverReachedAt = millis() | 1;  // try again after another stable window
+        serverReachedAt = millis();  // try again after another stable window
         return;
     }
     onProbation = false;
@@ -288,15 +295,16 @@ void otaPoll() {
     if (!onProbation) {
         return;
     }
-    if (serverReachedAt != 0) {
+    if (serverReached) {
         if (millis() - serverReachedAt >= OTA_STABLE_MS) {
             confirmImage();
         }
         return;
     }
-    if (wifiUpAt == 0) {
+    if (!wifiUp) {
         if (WiFi.status() == WL_CONNECTED) {
-            wifiUpAt = millis() | 1;
+            wifiUp = true;
+            wifiUpAt = millis();
         }
         return;
     }
