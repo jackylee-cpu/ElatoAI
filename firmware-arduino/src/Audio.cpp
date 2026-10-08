@@ -714,6 +714,10 @@ static bool audioQueueOpusPacket(const uint8_t *payload, size_t length) {
 }
 
 // decodeTask -> opusDecoder.write() -> bufferPrint.write() -> audioBuffer
+// The most PCM one Opus packet can decode to: 120ms, the longest frame Opus
+// can express, of mono s16 at the output rate (5760 bytes at 24kHz).
+static const size_t MAX_DECODED_PACKET_BYTES = SAMPLE_RATE * 2 * 120 / 1000;
+
 void decodeTask(void *parameter) {
     OpusSettings cfg;
     cfg.sample_rate = SAMPLE_RATE;
@@ -864,7 +868,15 @@ void decodeTask(void *parameter) {
         // Safe to suspend for: the I2S DMA holds 64ms (6 x 256 frames) and the
         // ring behind it holds up to 416ms, so audioStreamTask losing a couple
         // of milliseconds cannot reach the amplifier. ISRs still run.
-        const bool cpuSample = decodeStatsWantsCpuSample();
+        //
+        // Only with room in the ring for the whole decoded packet, though.
+        // writeArray() waits for space, and with the scheduler stopped the
+        // speaker task that makes space can never run: the board froze
+        // mid-turn until the task watchdog rebooted it -- about one boot in
+        // seven on the C3, whose ring is smaller (P2-11, 2026-10-08). A
+        // skipped sample just waits for the next one.
+        const bool cpuSample = decodeStatsWantsCpuSample() &&
+                               audioBuffer.availableForWrite() >= (int)MAX_DECODED_PACKET_BYTES;
         if (cpuSample) vTaskSuspendAll();
 
         const int64_t decodeStartedAt = esp_timer_get_time();
