@@ -1428,8 +1428,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                 pitchShift.begin(pcfg);
             }
 
-            // The voice server answered, so this image works.
-            otaConfirmImage();
+            // The voice server answered. A new image is confirmed if it now
+            // stays up (OTA.cpp).
+            otaServerReached();
 
             // "Update now": the check runs on every boot, so a restart is the
             // whole job. Not if this boot's check failed, though -- the flag

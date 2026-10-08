@@ -24,12 +24,12 @@ bool otaCheckedThisBoot();
 // restarts the board.
 void otaCheckAndUpdate();
 
-// The voice server answered (its "auth" frame): this image works. Cancels the
-// rollback if the image was on probation, otherwise does nothing.
-void otaConfirmImage();
+// The voice server answered (its "auth" frame). An image on probation is
+// confirmed once it has stayed up a while after this; otherwise does nothing.
+void otaServerReached();
 
-// From loop(): rolls back an image on probation that has not reached the voice
-// server in time.
+// From loop(): confirms an image on probation that reached the voice server
+// and stayed up, and rolls back one that has not reached it in time.
 void otaPoll();
 
 #endif

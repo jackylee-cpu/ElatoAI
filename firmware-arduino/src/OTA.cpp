@@ -19,10 +19,17 @@
  *
  * The new image boots on probation. The Arduino core would normally declare
  * every image good the moment it starts; verifyRollbackLater() below stops
- * that, and the image is only marked valid once the voice server answers.
- * Until then any reset -- a crash, a watchdog, a brownout, a power cut --
- * makes the bootloader go back to the previous image, and so does running
- * OTA_PROBATION_MS on WiFi without reaching the server. The rollback relies on
+ * that. The image is only marked valid once the voice server has answered AND
+ * it has then stayed up for OTA_STABLE_MS. Until then any reset -- a crash, a
+ * watchdog, a brownout, a power cut -- makes the bootloader go back to the
+ * previous image, and so does running OTA_PROBATION_MS on WiFi without
+ * reaching the server.
+ *
+ * Reaching the server alone is not enough: the board connects about a second
+ * after boot, and an image that crashed three seconds in was confirmed first
+ * and then crash-looped with nothing left to roll back to (device test,
+ * 2026-10-08). The stable window covers the greeting being decoded and played,
+ * which is where a broken audio path shows up. The rollback relies on
  * CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE, which the Arduino 2.0.17 bootloader
  * for both the C3 and the S3 has.
  *
@@ -35,20 +42,23 @@
 // Long enough for a slow DHCP and the device-token round trip, short enough
 // that a broken image does not keep a child waiting for long.
 static const uint32_t OTA_PROBATION_MS = 10UL * 60UL * 1000UL;
+static const uint32_t OTA_STABLE_MS = 2UL * 60UL * 1000UL;
 static const uint32_t OTA_STALL_MS = 20000;
 
 static bool onProbation = false;
 static bool checkedThisBoot = false;
 static String failedVersion;
 static uint32_t wifiUpAt = 0;
+static uint32_t serverReachedAt = 0;
 
 // Weak in the Arduino core (esp32-hal-misc.c, C linkage). Returning true
-// leaves the image's rollback state alone at startup; otaConfirmImage() settles it.
+// leaves the image's rollback state alone at startup; otaPoll() settles it.
 extern "C" bool verifyRollbackLater() { return true; }
 
 static String nvsTarget() {
     Preferences p;
-    p.begin("ota", true);
+    // Read-write so a board that never updated does not log NOT_FOUND each boot.
+    p.begin("ota", false);
     String target = p.getString("target", "");
     p.end();
     return target;
@@ -254,13 +264,19 @@ void otaCheckAndUpdate() {
 
 bool otaCheckedThisBoot() { return checkedThisBoot; }
 
-void otaConfirmImage() {
-    if (!onProbation) {
-        return;
+void otaServerReached() {
+    if (onProbation && serverReachedAt == 0) {
+        serverReachedAt = millis() | 1;
+        Serial.printf("[OTA] Voice server reached; confirming %s if it stays up %us\n", FIRMWARE_VERSION,
+                      (unsigned)(OTA_STABLE_MS / 1000));
     }
+}
+
+static void confirmImage() {
     const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err != ESP_OK) {
         Serial.printf("[OTA] Could not confirm this image: %s\n", esp_err_to_name(err));
+        serverReachedAt = millis() | 1;  // try again after another stable window
         return;
     }
     onProbation = false;
@@ -270,6 +286,12 @@ void otaConfirmImage() {
 
 void otaPoll() {
     if (!onProbation) {
+        return;
+    }
+    if (serverReachedAt != 0) {
+        if (millis() - serverReachedAt >= OTA_STABLE_MS) {
+            confirmImage();
+        }
         return;
     }
     if (wifiUpAt == 0) {

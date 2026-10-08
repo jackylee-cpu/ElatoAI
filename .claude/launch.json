@@ -8,6 +8,13 @@
       "cwd": "frontend-nextjs",
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "voice-server",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["server.py"],
+      "cwd": "server/fastapi",
+      "port": 7860
     }
   ]
 }
