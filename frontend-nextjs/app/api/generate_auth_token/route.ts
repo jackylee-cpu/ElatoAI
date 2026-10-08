@@ -7,6 +7,7 @@ import {
     newDeviceSecret,
     signDeviceToken,
 } from "@/lib/deviceAuth";
+import { type OtaAnswer, parseFirmwareReport, recordReportAndDecide } from "@/lib/ota";
 
 const skipDeviceRegistration =
     process.env.NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION === "True";
@@ -137,14 +138,20 @@ export async function GET() {
 }
 
 /**
- * The board's only way in: POST { macAddress, deviceSecret? }.
+ * The board's only way in: POST { macAddress, deviceSecret?, firmware? }.
  *
  *   401  the board did not prove itself: a known device with a secret, and
  *        none or the wrong one presented
  *   202  { status: "unclaimed", user_code }  -- online, nobody owns it yet;
  *        the firmware polls this and needs to tell "not yours yet" apart from
  *        "the server is broken"
- *   200  { token, expires_in }  -- a device token for the voice websocket
+ *   200  { token, expires_in, ota? }  -- a device token for the voice websocket
+ *
+ * `firmware` is what the board runs ({ board, version, failed_version? }).
+ * With it, a 200 also carries `ota`: whether to install the current release
+ * for that board, and where to get it (lib/ota.ts). It rides on this request
+ * so a boot costs the board one TLS handshake, not two -- about 1.3s of CPU
+ * each on the C3.
  *
  * Either success also carries `device_secret` when one was just issued, which
  * the board must keep: it is never shown again.
@@ -194,10 +201,23 @@ export async function POST(req: Request) {
             );
         }
 
+        // A broken release table must not keep a board from talking: without
+        // `ota` the board just stays on what it runs.
+        let ota: OtaAnswer | undefined;
+        const report = parseFirmwareReport(body?.firmware);
+        if (report) {
+            try {
+                ota = await recordReportAndDecide(createServiceClient(), device.device_id, report);
+            } catch (otaError) {
+                console.error("generate_auth_token: OTA check failed", otaError);
+            }
+        }
+
         return NextResponse.json({
             token: signDeviceToken(device),
             expires_in: DEVICE_TOKEN_TTL_SECONDS,
             ...secretField,
+            ...(ota ? { ota } : {}),
         });
     } catch (error) {
         return NextResponse.json(

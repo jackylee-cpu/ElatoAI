@@ -10,10 +10,12 @@
 /*
  * Firmware updates, and getting back from a bad one (P0-13).
  *
- * Every boot, once the device token is in hand, the board tells the backend
- * what it is running (/api/ota/check). If the current release for its board is
- * a different version, it downloads it (/api/ota/firmware/<id>, device token
- * in the header), checks the SHA-256 the backend gave it, and restarts into it.
+ * Every boot, the request that trades the device secret for a device token
+ * (/api/generate_auth_token) also tells the backend what this board runs, and
+ * the answer says whether the current release for its board is a different
+ * version. If so, the board downloads it (/api/ota/firmware/<id>, device token
+ * in the header), checks the SHA-256 the backend gave it, and restarts into
+ * it. Riding on the token request keeps a boot at one TLS handshake.
  * The download happens before the voice websocket opens, so the C3's heap only
  * ever holds one TLS session.
  *
@@ -199,34 +201,28 @@ static bool installImage(const String &path, size_t size, const String &sha256) 
     return true;
 }
 
-void otaCheckAndUpdate() {
-    HTTPClient http;
-    WiFiClientSecure client;
-    beginBackendRequest(http, client, "/api/ota/check");
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + authTokenGlobal);
-    http.setTimeout(10000);
+// The release the token answer offered this boot, if any.
+static struct {
+    bool offered = false;
+    String version;
+    String path;
+    String sha256;
+    size_t size = 0;
+} offer;
 
-    JsonDocument request;
-    request["board"] = BOARD_ID;
-    request["version"] = FIRMWARE_VERSION;
+void otaAddReport(JsonDocument &request) {
+    JsonObject firmware = request["firmware"].to<JsonObject>();
+    firmware["board"] = BOARD_ID;
+    firmware["version"] = FIRMWARE_VERSION;
     if (!failedVersion.isEmpty()) {
-        request["failed_version"] = failedVersion;
+        firmware["failed_version"] = failedVersion;
     }
-    String body;
-    serializeJson(request, body);
+}
 
-    const int code = http.POST(body);
-    if (code != HTTP_CODE_OK) {
-        Serial.printf("[OTA] Check failed: HTTP %d\n", code);
-        http.end();
-        return;
-    }
-    JsonDocument answer;
-    const DeserializationError parseError = deserializeJson(answer, http.getString());
-    http.end();
-    if (parseError) {
-        Serial.printf("[OTA] Check answer unreadable: %s\n", parseError.c_str());
+void otaTakeAnswer(JsonVariantConst ota) {
+    // Absent when the backend predates OTA or its release lookup failed. The
+    // report did not land then, so keep the failure to send next time.
+    if (ota.isNull()) {
         return;
     }
     checkedThisBoot = true;
@@ -237,33 +233,40 @@ void otaCheckAndUpdate() {
         setNvsTarget("");
     }
 
-    if (!(answer["update"] | false)) {
-        Serial.println("[OTA] Up to date");
+    offer.offered = ota["update"] | false;
+    if (offer.offered) {
+        offer.version = ota["version"] | "";
+        offer.path = ota["url"] | "";
+        offer.sha256 = ota["sha256"] | "";
+        offer.size = ota["size"] | 0;
+    }
+}
+
+void otaCheckAndUpdate() {
+    if (!offer.offered) {
+        Serial.println(checkedThisBoot ? "[OTA] Up to date" : "[OTA] No update answer this boot");
         return;
     }
-    const String version = answer["version"] | "";
-    const String path = answer["url"] | "";
-    const String sha256 = answer["sha256"] | "";
-    const size_t size = answer["size"] | 0;
     if (onProbation) {
         // One unconfirmed image at a time: finish proving this one first.
-        Serial.printf("[OTA] %s is available; installing after this image is confirmed\n", version.c_str());
+        Serial.printf("[OTA] %s is available; installing after this image is confirmed\n", offer.version.c_str());
         return;
     }
-    if (version.isEmpty() || !path.startsWith("/api/ota/firmware/") || sha256.length() != 64 || size == 0) {
-        Serial.println("[OTA] Check answer incomplete, ignoring it");
+    if (offer.version.isEmpty() || !offer.path.startsWith("/api/ota/firmware/") || offer.sha256.length() != 64 ||
+        offer.size == 0) {
+        Serial.println("[OTA] Update offer incomplete, ignoring it");
         return;
     }
 
-    Serial.printf("[OTA] Installing %s (%u bytes)\n", version.c_str(), (unsigned)size);
+    Serial.printf("[OTA] Installing %s (%u bytes)\n", offer.version.c_str(), (unsigned)offer.size);
     const DeviceState before = deviceState;
     deviceState = OTA;
-    if (!installImage(path, size, sha256)) {
+    if (!installImage(offer.path, offer.size, offer.sha256)) {
         deviceState = before;
         return;
     }
-    setNvsTarget(version);
-    Serial.printf("[OTA] %s installed, restarting into it\n", version.c_str());
+    setNvsTarget(offer.version);
+    Serial.printf("[OTA] %s installed, restarting into it\n", offer.version.c_str());
     delay(200);
     ESP.restart();
 }

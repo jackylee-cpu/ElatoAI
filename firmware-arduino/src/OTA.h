@@ -14,14 +14,20 @@
 // roll back?
 void otaBootCheck();
 
+// The token request (WifiManager.cpp fetchDeviceToken) carries what this board
+// runs, and its answer says whether to update: one TLS handshake per boot
+// instead of two. Add the report to the request...
+void otaAddReport(JsonDocument &request);
+// ...and hand over the answer's "ota" field (null if the backend sent none).
+void otaTakeAnswer(JsonVariantConst ota);
+
 // Whether this boot's check reached the backend. A server that keeps asking for
 // an update the check could not deliver must not restart the board in a loop.
 bool otaCheckedThisBoot();
 
-// After the device token, before the voice websocket: ask the backend whether
-// there is a new release for this board, and install it if so. Returns only if
-// there was nothing to install or the install failed; a successful install
-// restarts the board.
+// After the device token, before the voice websocket: install the release the
+// token answer offered, if any. Returns only if there was nothing to install
+// or the install failed; a successful install restarts the board.
 void otaCheckAndUpdate();
 
 // The voice server answered (its "auth" frame). An image on probation is

@@ -68,6 +68,7 @@ static bool fetchDeviceToken() {
     if (!secret.isEmpty()) {
         request["deviceSecret"] = secret;
     }
+    otaAddReport(request);
     String body;
     serializeJson(request, body);
 
@@ -113,6 +114,7 @@ static bool fetchDeviceToken() {
     authTokenGlobal = token;
     authTokenExpiresAtMs = millis() + expiresIn * 1000UL;
     authTokenRejected = false;
+    otaTakeAnswer(doc["ota"]);
     Serial.printf("[AUTH] Device token valid for %us\n", (unsigned)expiresIn);
     return true;
 }
