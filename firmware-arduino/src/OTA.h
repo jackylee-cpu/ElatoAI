@@ -30,6 +30,9 @@ bool otaCheckedThisBoot();
 // or the install failed; a successful install restarts the board.
 void otaCheckAndUpdate();
 
+// Whether this image is still on probation (not yet confirmed).
+bool otaOnProbation();
+
 // The voice server answered (its "auth" frame). An image on probation is
 // confirmed once it has stayed up a while after this; otherwise does nothing.
 void otaServerReached();

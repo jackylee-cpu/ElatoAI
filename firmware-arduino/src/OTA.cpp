@@ -37,8 +37,19 @@
  *
  * The version that was installed is kept in NVS ("ota"/"target") until the
  * image is confirmed. Booting with a different version than that target means
- * the board rolled back; the next check reports it as failed, and the backend
- * does not offer that version to this board again.
+ * the board rolled back. Whether that counts against the image depends on the
+ * reset that caused it, which the old image can still read: a crash or a
+ * watchdog is the image's fault, and the next check reports it as failed so
+ * the backend never offers it to this board again. A power cut, a brownout or
+ * an external reset is not -- this board loses power on its own now and then
+ * (R-17) -- so the image is tried again, up to OTA_MAX_TRIES installs.
+ *
+ * Probation only covers the first minutes. An image that is confirmed and
+ * starts crash-looping later would otherwise need a USB cable to recover, and
+ * boards in the field have none. So every boot counts consecutive crash resets
+ * in RTC memory (kept across resets, cleared by a power cut or by staying up
+ * OTA_HEALTHY_MS); OTA_CRASH_LOOP in a row switch the board back to the other
+ * slot, once, and that version is reported as failed like a rollback.
  */
 
 // Long enough for a slow DHCP and the device-token round trip, short enough
@@ -46,6 +57,14 @@
 static const uint32_t OTA_PROBATION_MS = 10UL * 60UL * 1000UL;
 static const uint32_t OTA_STABLE_MS = 2UL * 60UL * 1000UL;
 static const uint32_t OTA_STALL_MS = 20000;
+// Installs of one version before a non-crash rollback counts as a failure: a
+// second power cut in the same probation window is no longer bad luck.
+static const uint8_t OTA_MAX_TRIES = 2;
+// Crash resets in a row that make a confirmed image give way to the other slot.
+static const uint32_t OTA_CRASH_LOOP = 3;
+// Uptime after which the crash streak is forgotten. A crash loop resets within
+// seconds; an image that has run this long is not in one.
+static const uint32_t OTA_HEALTHY_MS = 5UL * 60UL * 1000UL;
 
 static bool onProbation = false;
 static bool checkedThisBoot = false;
@@ -58,6 +77,19 @@ static bool wifiUp = false;
 static uint32_t wifiUpAt = 0;
 static bool serverReached = false;
 static uint32_t serverReachedAt = 0;
+static bool healthy = false;
+
+// Survive panic, watchdog and software resets; garbage after a power cut,
+// hence the magic.
+static const uint32_t CRASH_MAGIC = 0x0A7A11ED;
+RTC_NOINIT_ATTR static uint32_t crashMagic;
+RTC_NOINIT_ATTR static uint32_t crashStreak;
+RTC_NOINIT_ATTR static uint32_t fellBackThisStreak;
+
+static bool isCrashReset(esp_reset_reason_t reason) {
+    return reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT || reason == ESP_RST_TASK_WDT ||
+           reason == ESP_RST_WDT;
+}
 
 // Weak in the Arduino core (esp32-hal-misc.c, C linkage). Returning true
 // leaves the image's rollback state alone at startup; otaPoll() settles it.
@@ -72,15 +104,52 @@ static String nvsTarget() {
     return target;
 }
 
-static void setNvsTarget(const String &version) {
+// Clearing the target also clears what hangs off it: the install count and the
+// crash-loop verdict.
+static void setNvsTarget(const String &version, uint8_t tries = 0, bool crashed = false) {
     Preferences p;
     p.begin("ota", false);
     if (version.isEmpty()) {
         p.remove("target");
+        p.remove("tries");
+        p.remove("crashed");
     } else {
         p.putString("target", version);
+        p.putUChar("tries", tries);
+        p.putBool("crashed", crashed);
     }
     p.end();
+}
+
+static uint8_t nvsTries() {
+    Preferences p;
+    p.begin("ota", false);
+    const uint8_t tries = p.getUChar("tries", 0);
+    p.end();
+    return tries;
+}
+
+static bool nvsCrashed() {
+    Preferences p;
+    p.begin("ota", false);
+    const bool crashed = p.getBool("crashed", false);
+    p.end();
+    return crashed;
+}
+
+// The other OTA slot, if it holds an app the bootloader has not given up on.
+static const esp_partition_t *usableOtherSlot() {
+    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+    esp_app_desc_t desc;
+    if (!other || esp_ota_get_partition_description(other, &desc) != ESP_OK) {
+        return NULL;  // empty: a board that was only ever flashed over USB
+    }
+    esp_ota_img_states_t state;
+    if (esp_ota_get_state_partition(other, &state) == ESP_OK &&
+        (state == ESP_OTA_IMG_INVALID || state == ESP_OTA_IMG_ABORTED)) {
+        return NULL;
+    }
+    return other;
 }
 
 void otaBootCheck() {
@@ -89,13 +158,57 @@ void otaBootCheck() {
     onProbation = esp_ota_get_state_partition(running, &state) == ESP_OK &&
                   state == ESP_OTA_IMG_PENDING_VERIFY;
 
+    const esp_reset_reason_t reason = esp_reset_reason();
+    const bool crashed = isCrashReset(reason);
+    if (crashMagic != CRASH_MAGIC) {
+        crashMagic = CRASH_MAGIC;
+        crashStreak = 0;
+        fellBackThisStreak = 0;
+    }
+    crashStreak = crashed ? crashStreak + 1 : 0;
+
+    Serial.printf("[OTA] Firmware %s for %s on %s%s\n", FIRMWARE_VERSION, BOARD_ID,
+                  running ? running->label : "?", onProbation ? ", on probation" : "");
+
+    // Rolled back (or fell back) from another version: was it that image's fault?
     const String target = nvsTarget();
     if (!target.isEmpty() && target != FIRMWARE_VERSION) {
-        failedVersion = target;
+        const uint8_t tries = nvsTries();
+        const bool fellBack = nvsCrashed();
+        if (fellBack && onProbation) {
+            // We switched back here from a crash-looping image, and switching
+            // slots puts the target on probation again. This image was
+            // confirmed before; a power cut in a fresh probation would send the
+            // bootloader straight back to the image that crash-loops, with the
+            // one fall-back of this streak already spent.
+            if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+                onProbation = false;
+                Serial.printf("[OTA] Firmware %s confirmed again after the fall-back\n", FIRMWARE_VERSION);
+            }
+        }
+        if (fellBack || crashed || tries >= OTA_MAX_TRIES) {
+            failedVersion = target;
+            Serial.printf("[OTA] Back from %s (reset reason %d, install %u): reporting it as failed\n",
+                          target.c_str(), (int)reason, (unsigned)tries);
+        } else {
+            // Not its fault: keep target and count so the next install is try 2.
+            Serial.printf("[OTA] Back from %s after a non-crash reset (reason %d); will try it again\n",
+                          target.c_str(), (int)reason);
+        }
     }
-    Serial.printf("[OTA] Firmware %s for %s on %s%s%s\n", FIRMWARE_VERSION, BOARD_ID,
-                  running ? running->label : "?", onProbation ? ", on probation" : "",
-                  failedVersion.isEmpty() ? "" : (", rolled back from " + failedVersion).c_str());
+
+    // A confirmed image that keeps crashing: give way to the other slot, once.
+    if (!onProbation && crashStreak >= OTA_CRASH_LOOP && !fellBackThisStreak) {
+        const esp_partition_t *other = usableOtherSlot();
+        if (other && esp_ota_set_boot_partition(other) == ESP_OK) {
+            fellBackThisStreak = 1;
+            setNvsTarget(FIRMWARE_VERSION, nvsTries(), true);
+            Serial.printf("[OTA] %u crashes in a row: switching back to %s\n", (unsigned)crashStreak, other->label);
+            delay(100);
+            esp_restart();
+        }
+        Serial.printf("[OTA] %u crashes in a row and no other image to go back to\n", (unsigned)crashStreak);
+    }
 }
 
 static String hex(const uint8_t *bytes, size_t len) {
@@ -265,13 +378,16 @@ void otaCheckAndUpdate() {
         deviceState = before;
         return;
     }
-    setNvsTarget(offer.version);
-    Serial.printf("[OTA] %s installed, restarting into it\n", offer.version.c_str());
+    const uint8_t tries = nvsTarget() == offer.version ? nvsTries() + 1 : 1;
+    setNvsTarget(offer.version, tries);
+    Serial.printf("[OTA] %s installed (try %u), restarting into it\n", offer.version.c_str(), (unsigned)tries);
     delay(200);
     ESP.restart();
 }
 
 bool otaCheckedThisBoot() { return checkedThisBoot; }
+
+bool otaOnProbation() { return onProbation; }
 
 void otaServerReached() {
     if (onProbation && !serverReached) {
@@ -295,6 +411,11 @@ static void confirmImage() {
 }
 
 void otaPoll() {
+    if (!healthy && millis() > OTA_HEALTHY_MS) {
+        healthy = true;
+        crashStreak = 0;
+        fellBackThisStreak = 0;
+    }
     if (!onProbation) {
         return;
     }

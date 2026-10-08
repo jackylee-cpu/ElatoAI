@@ -730,6 +730,14 @@ void loop() {
   supplyMonitorPoll();
   processSleepRequest();
   otaPoll();
+#ifdef OTA_TEST_CRASH_AFTER_CONFIRM_MS
+  // A test image that passes probation and only then crash-loops, to watch the
+  // fall-back to the other slot (P0-13). Command line only.
+  if (!otaOnProbation() && millis() > OTA_TEST_CRASH_AFTER_CONFIRM_MS) {
+    Serial.println("[OTA] Test build crashing on purpose (confirmed image)");
+    abort();
+  }
+#endif
 #ifdef OTA_TEST_CRASH_MS
   // A deliberately broken image, to watch the bootloader roll back (P0-13).
   // Only ever set on the command line: PLATFORMIO_BUILD_FLAGS=-DOTA_TEST_CRASH_MS=3000
