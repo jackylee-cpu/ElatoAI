@@ -37,6 +37,14 @@ AUDIO_OUTPUT_SAMPLE_RATE = int(os.getenv("AUDIO_OUTPUT_SAMPLE_RATE", "24000"))
 # Shared secret for /internal/*. Unset means the endpoint refuses everything --
 # it must fail closed, since it can disconnect any device.
 INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+# Let a board nobody has claimed talk anyway, as the default character with no
+# memory. For local development only, alongside the web app's
+# NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION=True, which hands such a board a token.
+ALLOW_UNCLAIMED_DEVICES = os.getenv("ALLOW_UNCLAIMED_DEVICES", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # Live ESP32 sessions, keyed by uppercased MAC. A device can briefly appear
 # twice when a stale socket has not been reaped yet, hence the set.
@@ -340,7 +348,10 @@ def create_app() -> FastAPI:
             profile.title or "default",
         )
         memory = await memory_session.acquire(
-            profile.user_id, ip.ip_key if ip else None, profile.language_code
+            profile.user_id,
+            ip.ip_key if ip else None,
+            profile.language_code,
+            profile.memories_revision,
         )
         # One id per session, generated whether or not memory is running: it is
         # what ties a turn_metrics row to the conversation it was measured in.
@@ -418,6 +429,21 @@ def create_app() -> FastAPI:
         # The device has no query string to carry a character on, so resolve the
         # one assigned to it in Supabase. This fails open to the defaults.
         personality = await fetch_device_personality(mac_address)
+        # A device token lives 24 hours and the board only fetches a new one
+        # when it expires or is refused, so a board unbound a minute ago still
+        # holds a valid one. Refuse it here, before "auth" is sent: the board
+        # takes a close before auth as a refused token, asks for a new one,
+        # gets 202 and goes back to waiting to be claimed. Only a known
+        # unclaimed row counts -- a failed lookup (claimed is None) still fails
+        # open, as everything else here does.
+        if personality.claimed is False and not ALLOW_UNCLAIMED_DEVICES:
+            logger.warning(
+                "Refusing ESP32 websocket: device {} ({}) is not claimed by any account",
+                device.device_id,
+                mac_address,
+            )
+            await websocket.close(code=4401, reason="device not claimed")
+            return
         await websocket.send_text(
             json.dumps(create_esp32_auth_message(volume=personality.volume))
         )
@@ -431,6 +457,7 @@ def create_app() -> FastAPI:
             personality.user_id,
             personality.ip.ip_key if personality.ip else None,
             personality.language_code,
+            personality.memories_revision,
         )
         # Same reasoning as the browser route: the id exists for the metrics
         # even when there is no memory to attach it to.

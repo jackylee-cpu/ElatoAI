@@ -141,12 +141,23 @@ class MemorySession:
     five-turn sessions kept only their first turn.
     """
 
-    def __init__(self, user_id: str, ip_key: str, language_code: str | None = None):
+    def __init__(
+        self,
+        user_id: str,
+        ip_key: str,
+        language_code: str | None = None,
+        revision: int | None = None,
+    ):
         self.user_id = user_id
         # Whose world this memory belongs to. Every read and write is scoped
         # to it, so one IP's characters never hear what was told to another's.
         self.ip_key = ip_key
         self.language_code = language_code
+        # `users.memories_revision` as it was when this session started. Every
+        # write carries it, and the database refuses it once a parent has
+        # cleared the child's memory since (store._stamp). None writes
+        # unstamped, which nothing checks.
+        self.revision = revision
         self._refs = 0
         self._lock = asyncio.Lock()
         self._queue: asyncio.Queue[PendingTurn | None] = asyncio.Queue()
@@ -293,6 +304,7 @@ class MemorySession:
             turn.user_text,
             turn.personality_key,
             self.chat_group_id,
+            revision=self.revision,
         )
         if turn.agent_reply:
             await store.insert_conversation_turn(
@@ -302,6 +314,7 @@ class MemorySession:
                 turn.agent_reply,
                 turn.personality_key,
                 self.chat_group_id,
+                revision=self.revision,
             )
 
         # A turn carrying a phone number, an ID or a card number is transcribed
@@ -446,6 +459,7 @@ class MemorySession:
                 stretch.from_turn,
                 stretch.to_turn,
                 result.summary,
+                revision=self.revision,
             )
             logger.info(
                 "Wrote a session summary for {} at {} covering turns {}-{}: {}",
@@ -478,7 +492,9 @@ class MemorySession:
             if privacy.holds_sensitive_number(text):
                 logger.info("Dropped a fact about {} that held a long number", self.user_id)
                 continue
-            fact_id = await store.insert_fact(self.user_id, self.ip_key, chat_group_id, text)
+            fact_id = await store.insert_fact(
+                self.user_id, self.ip_key, chat_group_id, text, revision=self.revision
+            )
             if fact_id is None:
                 continue
             known_texts.add(text)
@@ -577,7 +593,10 @@ _registry_lock = asyncio.Lock()
 
 
 async def acquire(
-    user_id: str, ip_key: str | None, language_code: str | None = None
+    user_id: str,
+    ip_key: str | None,
+    language_code: str | None = None,
+    revision: int | None = None,
 ) -> MemorySession | None:
     """Get this child's memory for a new connection. None when unavailable.
 
@@ -617,9 +636,24 @@ async def acquire(
 
     async with _registry_lock:
         session = _sessions.get((user_id, ip_key))
+        if (
+            session is not None
+            and revision is not None
+            and (session.revision or 0) < revision
+        ):
+            # The memory was cleared while that session was live. It still
+            # holds what was cleared, and everything it writes is refused, so
+            # this connection starts its own. The old one stays alive for
+            # whoever still holds it and leaves the registry alone on release.
+            logger.info(
+                "Memory for {} was cleared since its live session started; "
+                "this connection starts a new one",
+                user_id,
+            )
+            session = None
         if session is None:
             session = _sessions[(user_id, ip_key)] = MemorySession(
-                user_id, ip_key, language_code
+                user_id, ip_key, language_code, revision
             )
     try:
         await session.acquire()

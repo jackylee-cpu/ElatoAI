@@ -84,6 +84,20 @@ def _clean(value: object) -> str | None:
     return stripped or None
 
 
+def _stamp(row: dict[str, Any], revision: int | None) -> None:
+    """Mark a write with the memory revision its session started under.
+
+    The database refuses a stamp older than the account's current
+    `users.memories_revision`, which goes up every time a parent clears the
+    child's memory (migration 20261009120000). That is what stops a session
+    that was live during the clear -- or the consolidation that finishes after
+    it -- from writing back what was just deleted. Such a refusal shows up here
+    as a failed write, which is the right outcome.
+    """
+    if revision is not None:
+        row["memories_revision"] = int(revision)
+
+
 # ── memory_segments table ────────────────────────────────────────────────────
 
 
@@ -150,6 +164,8 @@ async def insert_segment(
     from_turn: int,
     to_turn: int,
     summary: str,
+    *,
+    revision: int | None = None,
 ) -> bool:
     """Record one compressed stretch. Fails open like every other write here."""
     if not configured() or not user_id:
@@ -166,6 +182,7 @@ async def insert_segment(
     }
     if chat_group_id:
         row["chat_group_id"] = chat_group_id
+    _stamp(row, revision)
     return await _post_json(
         f"{SUPABASE_URL}/rest/v1/memory_segments",
         [row],
@@ -224,7 +241,12 @@ async def fetch_active_facts(
 
 
 async def insert_fact(
-    user_id: str, ip_key: str, chat_group_id: str | None, content: str
+    user_id: str,
+    ip_key: str,
+    chat_group_id: str | None,
+    content: str,
+    *,
+    revision: int | None = None,
 ) -> str | None:
     """Record one fact and return its id, or None if the write failed."""
     if not configured() or not user_id:
@@ -235,6 +257,7 @@ async def insert_fact(
     row: dict[str, Any] = {"user_id": user_id, "ip_key": ip_key, "content": content}
     if chat_group_id:
         row["chat_group_id"] = chat_group_id
+    _stamp(row, revision)
     rows = await _post_json_returning(
         f"{SUPABASE_URL}/rest/v1/memory_facts?select=fact_id",
         [row],
@@ -294,6 +317,8 @@ async def insert_conversation_turn(
     content: str,
     personality_key: str | None,
     chat_group_id: str | None,
+    *,
+    revision: int | None = None,
 ) -> bool:
     """Persist one turn.
 
@@ -319,6 +344,7 @@ async def insert_conversation_turn(
         row["personality_key"] = personality_key
     if chat_group_id:
         row["chat_group_id"] = chat_group_id
+    _stamp(row, revision)
 
     return await _post_json(
         f"{SUPABASE_URL}/rest/v1/conversations",

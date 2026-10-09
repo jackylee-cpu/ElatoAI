@@ -189,14 +189,16 @@ class RecordingStore:
     async def fetch_recent_segments(self, user_id, ip_key, limit=2):
         return self.recent[-limit:] if limit else []
 
-    async def insert_segment(self, user_id, ip_key, chat_group_id, from_turn, to_turn, summary):
+    async def insert_segment(
+        self, user_id, ip_key, chat_group_id, from_turn, to_turn, summary, *, revision=None
+    ):
         self.inserted.append((user_id, chat_group_id, from_turn, to_turn, summary))
         return True
 
     async def fetch_active_facts(self, user_id, ip_key, limit=200):
         return list(self.facts)
 
-    async def insert_fact(self, user_id, ip_key, chat_group_id, content):
+    async def insert_fact(self, user_id, ip_key, chat_group_id, content, *, revision=None):
         fact_id = f"fact-{len(self.facts_inserted) + 100}"
         self.facts_inserted.append((chat_group_id, content))
         self.facts.append(store.Fact(fact_id=fact_id, content=content))
@@ -294,7 +296,7 @@ async def test_a_long_number_is_transcribed_but_not_remembered():
 
     conversation_rows = []
     original_insert = store.insert_conversation_turn
-    store.insert_conversation_turn = lambda user_id, ip_key, role, content, *a: _record(
+    store.insert_conversation_turn = lambda user_id, ip_key, role, content, *a, **k: _record(
         conversation_rows, (role, content), True
     )
     try:

@@ -201,6 +201,58 @@ def test_live_token_gets_a_session_as_the_device_it_names(esp32):
     assert len(sessions) == 1
 
 
+# A token outlives an unbind by up to 24 hours, so the claim is checked on every
+# connection, not only when the token is issued (P1-12).
+
+
+def _resolve_as(monkeypatch, personality):
+    import server
+
+    async def lookup(mac):
+        return personality
+
+    monkeypatch.setattr(server, "fetch_device_personality", lookup)
+
+
+def test_live_token_on_an_unclaimed_device_is_closed_4401_before_auth(esp32, monkeypatch):
+    import server
+    from device_registry import DevicePersonality
+
+    client, _, sessions = esp32
+    monkeypatch.setattr(server, "ALLOW_UNCLAIMED_DEVICES", False)
+    _resolve_as(monkeypatch, DevicePersonality(volume=55, claimed=False))
+    # 4401 before any "auth" message is what the firmware reads as a refused
+    # token, which sends it back for a new one -- and a 202 with its code.
+    assert _close_code(client, {"Authorization": f"Bearer {sign()}"}) == 4401
+    assert sessions == []
+
+
+def test_a_failed_device_lookup_still_fails_open(esp32, monkeypatch):
+    import server
+    from device_registry import DevicePersonality
+
+    client, _, sessions = esp32
+    monkeypatch.setattr(server, "ALLOW_UNCLAIMED_DEVICES", False)
+    # claimed=None: the database could not say. A slow database must not
+    # silence every toy.
+    _resolve_as(monkeypatch, DevicePersonality(volume=55, claimed=None))
+    with client.websocket_connect("/ws/esp32", headers={"Authorization": f"Bearer {sign()}"}) as ws:
+        assert json.loads(ws.receive_text())["type"] == "auth"
+    assert len(sessions) == 1
+
+
+def test_unclaimed_device_may_talk_when_development_allows_it(esp32, monkeypatch):
+    import server
+    from device_registry import DevicePersonality
+
+    client, _, sessions = esp32
+    monkeypatch.setattr(server, "ALLOW_UNCLAIMED_DEVICES", True)
+    _resolve_as(monkeypatch, DevicePersonality(volume=55, claimed=False))
+    with client.websocket_connect("/ws/esp32", headers={"Authorization": f"Bearer {sign()}"}) as ws:
+        assert json.loads(ws.receive_text())["type"] == "auth"
+    assert len(sessions) == 1
+
+
 # ── web voice tokens and /ws/nextjs ──────────────────────────────────────────
 #
 # The browser route used to take user_id, the character's prompt and its voice

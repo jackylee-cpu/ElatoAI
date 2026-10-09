@@ -110,7 +110,9 @@ class FakeStore:
         segments = self.user(user_id).segments
         return list(segments[-limit:]) if limit else []
 
-    async def insert_segment(self, user_id, ip_key, chat_group_id, from_turn, to_turn, summary):
+    async def insert_segment(
+        self, user_id, ip_key, chat_group_id, from_turn, to_turn, summary, *, revision=None
+    ):
         self.user(user_id).segments.append(
             store.Segment(
                 summary=summary,
@@ -125,7 +127,7 @@ class FakeStore:
         active = [f for f in self.user(user_id).facts if f.superseded_by is None]
         return [store.Fact(fact_id=f.fact_id, content=f.content) for f in active[-limit:]]
 
-    async def insert_fact(self, user_id, ip_key, chat_group_id, content):
+    async def insert_fact(self, user_id, ip_key, chat_group_id, content, *, revision=None):
         fact_id = f"f{next(self._ids)}"
         self.user(user_id).facts.append(_FactRow(fact_id, content, chat_group_id))
         return fact_id
@@ -137,7 +139,9 @@ class FakeStore:
                 return True
         return False
 
-    async def insert_conversation_turn(self, user_id, ip_key, role, content, personality_key, group):
+    async def insert_conversation_turn(
+        self, user_id, ip_key, role, content, personality_key, group, *, revision=None
+    ):
         self.user(user_id).transcript_rows += 1
         return True
 

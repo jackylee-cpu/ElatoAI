@@ -16,7 +16,7 @@ worse than one running the default character.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import quote
 
 import aiohttp
@@ -87,6 +87,10 @@ class DevicePersonality:
     child_persona: str | None = None
     language_code: str | None = None
     memories_revision: int = 0
+    # Whether the device row has an owner. None when that is unknown -- the
+    # lookup failed, or this is the browser route, which has no device -- and
+    # only False means the board is unclaimed.
+    claimed: bool | None = None
     # Where the child lives, for the date, time and weather in the prompt.
     # None when the account has not chosen one; world_context falls back to
     # the server's own place.
@@ -249,7 +253,7 @@ async def fetch_device_personality(mac_address: str | None) -> DevicePersonality
         logger.info("No device row for mac={}, using default character", mac_address)
         return DevicePersonality()
 
-    personality = _parse(rows[0])
+    personality = replace(_parse(rows[0]), claimed=bool(_clean(rows[0].get("user_id"))))
     logger.info(
         "Device {} resolved to character={} ip={} mode={} style={} voice={} volume={} user={}",
         mac_address,
