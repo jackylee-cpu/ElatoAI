@@ -107,10 +107,6 @@ declare global {
         // region: null until chosen; the voice server then uses its own default.
         region_code?: string | null;
 
-        // device
-        device?: IDevice;
-        device_id: string | null;
-
         // Bumped whenever a memory is deleted. The voice server compares it at
         // session start and rebuilds the toy's memory when it has changed, so
         // a deletion takes effect on a live device rather than at some later

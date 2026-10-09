@@ -1,5 +1,4 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { updateUser } from "./users";
 
 export const dbCheckUserCode = async (
     supabase: SupabaseClient,
@@ -43,13 +42,7 @@ export const addUserToDevice = async (
         .select("*")
         .maybeSingle();
 
-    if (error || !data) {
-        return false;
-    }
-
-    await updateUser(supabase, { device_id: data.device_id }, userId);
-
-    return true;
+    return !error && !!data;
 };
 
 /**
@@ -91,12 +84,7 @@ export const claimDevice = async (
         .select("device_id")
         .maybeSingle();
 
-    if (error || !data) {
-        return false;
-    }
-
-    await updateUser(supabase, { device_id: data.device_id }, userId);
-    return true;
+    return !error && !!data;
 };
 
 export const unbindDevice = async (
@@ -110,27 +98,22 @@ export const unbindDevice = async (
         .eq("device_id", deviceId)
         .eq("user_id", userId);
 
-    if (error) {
-        return false;
-    }
-
-    await updateUser(supabase, { device_id: null }, userId);
-    return true;
+    return !error;
 };
 
-export const doesUserHaveADevice = async (
+/** Every device bound to this account, oldest first. An account can own any number. */
+export const getUserDevices = async (
     supabase: SupabaseClient,
     userId: string,
 ) => {
     const { data, error } = await supabase
         .from("devices")
-        .select("*")
+        .select("device_id, mac_address, user_code, volume")
         .eq("user_id", userId)
-        .maybeSingle();
+        .order("claimed_at", { ascending: true, nullsFirst: true });
 
     if (error) {
         throw error;
     }
-
-    return !!data;
+    return (data ?? []) as Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume">[];
 };

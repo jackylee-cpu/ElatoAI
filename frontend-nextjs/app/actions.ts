@@ -124,7 +124,7 @@ export const signOutAction = async () => {
 };
 
 /*
- * Binding and unbinding write `devices.user_id` and `users.device_id`, which the
+ * Binding and unbinding write `devices.user_id`, which the
  * signed-in client is not granted (migration 20261007130000): an owner can only
  * read their own devices and change their volume. So these actions take the
  * user from the session and do the write with the service role.
@@ -198,15 +198,17 @@ export const createVoiceSessionToken = async () => {
 };
 
 /**
- * Ask the voice server to drop this account's device session.
+ * Ask the voice server to drop the sessions of every device on this account.
  *
  * The character is baked into the LLM system prompt when the pipeline is built,
  * so it can only change on a fresh connection. The firmware reconnects about a
  * second after any drop and the server re-reads the personality then, which is
- * what makes a character switch land on the device almost immediately.
+ * what makes a character switch land on the devices almost immediately. An
+ * account can own several boards and they all share its character, so all of
+ * them are dropped.
  *
  * Best effort: if the voice server is unreachable the character still applies
- * the next time the device connects, so never let this failure surface as a
+ * the next time each device connects, so never let this failure surface as a
  * failed save.
  */
 export const refreshDeviceSession = async () => {
@@ -225,28 +227,33 @@ export const refreshDeviceSession = async () => {
     const { data } = await supabase
         .from("devices")
         .select("mac_address")
-        .eq("user_id", user.id)
-        .maybeSingle();
+        .eq("user_id", user.id);
 
-    if (!data?.mac_address) {
+    const macs = (data ?? [])
+        .map((device) => device.mac_address)
+        .filter((mac): mac is string => !!mac);
+    if (macs.length === 0) {
         return false;
     }
 
-    try {
-        const response = await fetch(`${internalUrl}/internal/device_refresh`, {
-            method: "POST",
-            cache: "no-store",
-            signal: AbortSignal.timeout(3000),
-            headers: {
-                "Content-Type": "application/json",
-                "X-Internal-Token": internalToken,
-            },
-            body: JSON.stringify({ mac: data.mac_address }),
-        });
-        return response.ok;
-    } catch {
-        return false;
-    }
+    const results = await Promise.all(macs.map(async (mac) => {
+        try {
+            const response = await fetch(`${internalUrl}/internal/device_refresh`, {
+                method: "POST",
+                cache: "no-store",
+                signal: AbortSignal.timeout(3000),
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Internal-Token": internalToken,
+                },
+                body: JSON.stringify({ mac }),
+            });
+            return response.ok;
+        } catch {
+            return false;
+        }
+    }));
+    return results.every(Boolean);
 };
 
 /**
