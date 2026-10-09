@@ -16,6 +16,7 @@
 #include <driver/touch_sensor.h>
 #endif
 #include <esp_heap_caps.h>
+#include <esp_mac.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
@@ -364,8 +365,16 @@ static void expanderKeyTask(void *parameter) {
 #endif
 
 void setupWiFi() {
+  // The setup AP is "AIBuddy-" plus the last 4 hex digits of the station MAC
+  // (the one the server and app know the device by), so two units in one
+  // home can be told apart. esp_read_mac() reads the eFuse, so it works
+  // before WiFi is started.
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char softApName[16];
+  snprintf(softApName, sizeof softApName, "AIBuddy-%02X%02X", mac[4], mac[5]);
   WifiManager.startBackgroundTask(
-      "ELATO-DEVICE"); // Run the background task to take care of our Wifi
+      softApName); // Run the background task to take care of our Wifi
   WifiManager.fallbackToSoftAp(
       true); // Run a SoftAP if no known AP can be reached
   WifiManager.attachWebServer(&webServer); // Attach our API to the Webserver

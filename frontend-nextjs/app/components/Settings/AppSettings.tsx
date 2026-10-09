@@ -183,8 +183,8 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                                         <p className="font-medium text-gray-700">No devices found yet.</p>
                                         <p className="mt-1">
                                             Power on your device, join its
-                                            {" "}<span className="font-mono">ELATO-DEVICE</span>{" "}
-                                            WiFi network, open
+                                            {" "}<span className="font-mono">AIBuddy-XXXX</span>{" "}
+                                            WiFi network (XXXX is the end of its MAC address), open
                                             {" "}<span className="font-mono">http://192.168.4.1/wifi</span>{" "}
                                             and give it your WiFi. Then come back here - it shows up
                                             within a few seconds of connecting.
