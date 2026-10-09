@@ -1,10 +1,11 @@
-"""A cleared memory stays cleared (P1-12).
+"""Memory per board, and a cleared memory stays cleared (P1-12).
 
-Every write the voice server makes is stamped with the `users.memories_revision`
-its session started under, and the database refuses a stamp older than the
-account's (migration 20261009120000). These check the server's half: that the
-stamp is on every write, and that a connection made after a clear does not join
-a session that started before it.
+Every write the voice server makes names its board and is stamped with the
+`devices.memories_revision` its session started under; the database refuses a
+stamp older than the board's (migration 20261009140000). These check the
+server's half: that every write carries both, that each board on an account is
+its own memory, and that a connection made after a clear does not join a
+session that started before it.
 
 Nothing leaves the machine; the store and the registry are stubbed.
 """
@@ -21,8 +22,7 @@ from memory import store  # noqa: E402
 from memory.session import MemorySession, _Stretch  # noqa: E402
 from memory.summarise import NewFact  # noqa: E402
 
-
-# ── store: the stamp goes on the row ────────────────────────────────────────
+# ── store: writes name the board and carry the stamp ────────────────────────
 
 
 async def _rows_posted(monkeypatch, call):
@@ -43,39 +43,68 @@ async def _rows_posted(monkeypatch, call):
     return posted
 
 
-async def test_every_write_carries_the_revision(monkeypatch):
+async def test_every_write_names_its_board_and_carries_the_revision(monkeypatch):
     async def writes():
-        await store.insert_conversation_turn("u", "house", "user", "hi", None, "g", revision=3)
-        await store.insert_segment("u", "house", "g", 0, 2, "talked", revision=3)
-        await store.insert_fact("u", "house", "g", "has a dog", revision=3)
+        await store.insert_conversation_turn(
+            "u", "board-1", "house", "user", "hi", None, "g", revision=3
+        )
+        await store.insert_segment("u", "board-1", "house", "g", 0, 2, "talked", revision=3)
+        await store.insert_fact("u", "board-1", "house", "g", "has a dog", revision=3)
 
     rows = await _rows_posted(monkeypatch, writes)
     assert len(rows) == 3
     assert all(row["memories_revision"] == 3 for row in rows), rows
+    assert all(row["device_id"] == "board-1" for row in rows), rows
 
 
 async def test_no_revision_writes_unstamped(monkeypatch):
     async def writes():
-        await store.insert_conversation_turn("u", "house", "user", "hi", None, "g")
+        await store.insert_conversation_turn("u", "board-1", "house", "user", "hi", None, "g")
 
     rows = await _rows_posted(monkeypatch, writes)
     assert "memories_revision" not in rows[0]
 
 
+async def test_nothing_is_written_without_a_board(monkeypatch):
+    async def writes():
+        await store.insert_conversation_turn("u", "", "house", "user", "hi", None, "g")
+        await store.insert_segment("u", "", "house", "g", 0, 2, "talked")
+        await store.insert_fact("u", "", "house", "g", "has a dog")
+
+    assert await _rows_posted(monkeypatch, writes) == []
+
+
+# ── store: reads are per board ──────────────────────────────────────────────
+
+
+async def test_reads_ask_for_one_board_only(monkeypatch):
+    seen = []
+
+    async def capture(url, **kwargs):
+        seen.append(url)
+        return []
+
+    monkeypatch.setattr(store, "configured", lambda: True)
+    monkeypatch.setattr(store, "_get_json", capture)
+    await store.fetch_recent_segments("u", "board-1", "house")
+    await store.fetch_active_facts("u", "board-1", "house")
+    assert len(seen) == 2
+    assert all("user_id=eq.u" in url and "device_id=eq.board-1" in url for url in seen), seen
+
+
 # ── session: it stamps with the revision it started under ───────────────────
 
 
-async def test_session_writes_with_its_starting_revision(monkeypatch):
+async def test_session_writes_with_its_board_and_starting_revision(monkeypatch):
     seen = []
 
-    async def record(*args, revision=None, **kwargs):
-        seen.append(revision)
+    async def record(user_id, device_id, *args, revision=None, **kwargs):
+        seen.append((device_id, revision))
         return "f1"
 
     monkeypatch.setattr(store, "insert_conversation_turn", record)
     monkeypatch.setattr(store, "insert_segment", record)
     monkeypatch.setattr(store, "insert_fact", record)
-    monkeypatch.setattr(store, "supersede_fact", record)
 
     async def no_facts(*args, **kwargs):
         return []
@@ -87,24 +116,20 @@ async def test_session_writes_with_its_starting_revision(monkeypatch):
         consolidating("talked about the dog", [NewFact("has a dog", None)]),
     )
 
-    session = MemorySession("child-1", "house", revision=4)
+    session = MemorySession("child-1", "board-1", "house", revision=4)
     session.chat_group_id = "g"
     await session._write_turn(turn("我有隻狗", "好可愛"))
     await session._consolidate(
         _Stretch(turns=[turn("我有隻狗")], from_turn=0, to_turn=1, chat_group_id="g", reason="t")
     )
     # Two transcript rows, one segment, one fact.
-    assert seen == [4, 4, 4, 4], seen
+    assert seen == [("board-1", 4)] * 4, seen
 
 
-# ── registry: a clear splits the live session ───────────────────────────────
+# ── registry ────────────────────────────────────────────────────────────────
 
 
-async def _acquire(monkeypatch, revision):
-    return await memory_session.acquire("child-1", "house", None, revision)
-
-
-async def test_a_connection_after_a_clear_gets_its_own_session(monkeypatch):
+def _no_reads(monkeypatch):
     monkeypatch.setattr(memory_session, "enabled", lambda: True)
     monkeypatch.setattr(store, "configured", lambda: True)
 
@@ -115,11 +140,32 @@ async def test_a_connection_after_a_clear_gets_its_own_session(monkeypatch):
     monkeypatch.setattr(store, "fetch_active_facts", nothing)
     monkeypatch.setattr(memory_session, "_sessions", {})
 
-    before = await _acquire(monkeypatch, 0)
-    same = await _acquire(monkeypatch, 0)
+
+async def test_no_board_means_no_memory(monkeypatch):
+    _no_reads(monkeypatch)
+    # The web playground: an account, but no board.
+    assert await memory_session.acquire("child-1", None, "house") is None
+
+
+async def test_two_boards_on_one_account_are_two_memories(monkeypatch):
+    _no_reads(monkeypatch)
+    first = await memory_session.acquire("child-1", "board-1", "house", None, 0)
+    second = await memory_session.acquire("child-1", "board-2", "house", None, 0)
+    assert first is not second
+    assert (first.device_id, second.device_id) == ("board-1", "board-2")
+    await memory_session.release(first)
+    await memory_session.release(second)
+
+
+async def test_a_connection_after_a_clear_gets_its_own_session(monkeypatch):
+    _no_reads(monkeypatch)
+    key = ("child-1", "board-1", "house")
+
+    before = await memory_session.acquire(*key, None, 0)
+    same = await memory_session.acquire(*key, None, 0)
     assert same is before, "two connections from before the clear share one session"
 
-    after = await _acquire(monkeypatch, 1)
+    after = await memory_session.acquire(*key, None, 1)
     assert after is not before, "a session from before the clear would have its writes refused"
     assert after.revision == 1
 
@@ -127,6 +173,6 @@ async def test_a_connection_after_a_clear_gets_its_own_session(monkeypatch):
     # the registry on its way.
     await memory_session.release(before)
     await memory_session.release(same)
-    assert memory_session._sessions[("child-1", "house")] is after
+    assert memory_session._sessions[key] is after
     await memory_session.release(after)
-    assert ("child-1", "house") not in memory_session._sessions
+    assert key not in memory_session._sessions

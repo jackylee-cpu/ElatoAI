@@ -36,7 +36,9 @@ export const userFormNameLabel = "Your Name";
 
 export const memorySectionTitle = "What your toy remembers";
 export const memorySectionSubtitle =
-    "What the toy knows about your child, and a short note from each conversation so it can pick up where it left off. Memory is shared across every character — it is the same child whichever one they talk to.";
+    "What each toy knows about its child, and a short note from each conversation so it can pick up where it left off. Every toy keeps its own memory, shared across every character on it — it is the same child whichever one they talk to.";
+export const memoryNoDevice =
+    "Memory belongs to a toy. Register one above, and what it learns about your child will show up here.";
 export const memorySectionEmpty =
     "Nothing remembered yet. After your child has a conversation, what the toy learned will show up here.";
 export const memoryFactsLabel = "What it knows about your child";

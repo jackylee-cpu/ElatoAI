@@ -40,9 +40,10 @@ LOOKUP_TIMEOUT_SECONDS = float(os.getenv("DEVICE_LOOKUP_TIMEOUT", "3"))
 # `voices` is the per-language map the admin page writes; the browser sends
 # it as a query param, the toy has to load it here.
 #
-# `user_id` and the child's own fields are pulled for long-term memory: the
-# memory store is keyed by user_id, and the child profile goes into the system
-# prompt (character_prompt.build_child_block).
+# `user_id` and the device's `memories_revision` are pulled for long-term
+# memory, which is keyed by account and device; the revision is how many times
+# the device's memory has been cleared (memory/store._stamp). The child profile
+# goes into the system prompt (character_prompt.build_child_block).
 #
 # The character's IP comes along with it: its guardrails and the modes and
 # styles it allows shape the prompt, and its key decides whose memories load.
@@ -56,7 +57,6 @@ _IP_SELECT = (
 # never disagree, and nothing about the character is taken from the client.
 _ACCOUNT_SELECT = (
     "supervisee_name,supervisee_age,supervisee_persona,language_code,"
-    "memories_revision,"
     "region:region_code(name,timezone,latitude,longitude),"
     "personality:personality_id("
     "key,title,character_prompt,voice_prompt,first_message_prompt,oai_voice,voices,"
@@ -64,7 +64,7 @@ _ACCOUNT_SELECT = (
     ")"
 )
 
-_SELECT = f"volume,user_id,user:user_id({_ACCOUNT_SELECT})"
+_SELECT = f"volume,user_id,memories_revision,user:user_id({_ACCOUNT_SELECT})"
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,8 @@ class DevicePersonality:
     child_age: int | None = None
     child_persona: str | None = None
     language_code: str | None = None
+    # The device's memory revision. 0 on the browser route, which has no
+    # device and no memory.
     memories_revision: int = 0
     # Whether the device row has an owner. None when that is unknown -- the
     # lookup failed, or this is the browser route, which has no device -- and
@@ -165,7 +167,7 @@ def _parse(row: dict) -> DevicePersonality:
         child_age=age,
         child_persona=_clean(user.get("supervisee_persona")),
         language_code=_clean(user.get("language_code")),
-        memories_revision=_int_or(user.get("memories_revision"), 0) or 0,
+        memories_revision=_int_or(row.get("memories_revision"), 0) or 0,
         region=_parse_region(user.get("region")),
         mode_key=_clean(personality.get("mode_key")),
         style_key=_clean(personality.get("style_key")),
@@ -299,11 +301,10 @@ async def fetch_user_personality(user_id: str | None) -> DevicePersonality:
     # than duplicating the parsing.
     personality = _parse({"user_id": user_id, "user": rows[0]})
     logger.info(
-        "User {} resolved to character={} ip={} child={} revision={}",
+        "User {} resolved to character={} ip={} child={}",
         user_id,
         personality.title or "default",
         personality.ip.ip_key if personality.ip else "unknown",
         personality.child_name or "unknown",
-        personality.memories_revision,
     )
     return personality

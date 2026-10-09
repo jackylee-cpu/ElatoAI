@@ -13,6 +13,7 @@ import {
     getUnclaimedDevices,
     unbindDevice,
 } from "@/db/devices";
+import { clearDeviceMemory } from "@/db/memories";
 import { getSimpleUserById } from "@/db/users";
 
 export async function deleteUserApiKey(userId: string) {
@@ -174,13 +175,50 @@ export const claimDeviceAction = async (deviceId: string) => {
     return await claimDevice(createServiceClient(), deviceId, user.id);
 };
 
-export const unbindDeviceAction = async (deviceId: string) => {
+/**
+ * Release one of the signed-in account's devices, erasing what it remembers
+ * when `clearMemory` is set. Then drop its live session: the voice server
+ * refuses an unclaimed board on reconnect, so it stops talking now and goes
+ * back to waiting to be paired, instead of carrying on until its token runs out.
+ */
+export const unbindDeviceAction = async (deviceId: string, clearMemory = false) => {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
         return false;
     }
-    return await unbindDevice(createServiceClient(), deviceId, user.id);
+    const mac = await unbindDevice(createServiceClient(), deviceId, user.id, clearMemory);
+    if (!mac) {
+        return false;
+    }
+    await dropDeviceSessions([mac]);
+    return true;
+};
+
+/**
+ * Erase everything one of the signed-in account's devices remembers, and drop
+ * its live session so it starts again with nothing in mind.
+ */
+export const clearDeviceMemoryAction = async (deviceId: string) => {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return false;
+    }
+    const service = createServiceClient();
+    if (!await clearDeviceMemory(service, user.id, deviceId)) {
+        return false;
+    }
+    const { data } = await service
+        .from("devices")
+        .select("mac_address")
+        .eq("device_id", deviceId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+    if (data?.mac_address) {
+        await dropDeviceSessions([data.mac_address]);
+    }
+    return true;
 };
 
 /**
@@ -212,12 +250,6 @@ export const createVoiceSessionToken = async () => {
  * failed save.
  */
 export const refreshDeviceSession = async () => {
-    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
-    const internalToken = process.env.INTERNAL_API_TOKEN;
-    if (!internalUrl || !internalToken) {
-        return false;
-    }
-
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -232,7 +264,18 @@ export const refreshDeviceSession = async () => {
     const macs = (data ?? [])
         .map((device) => device.mac_address)
         .filter((mac): mac is string => !!mac);
-    if (macs.length === 0) {
+    return await dropDeviceSessions(macs);
+};
+
+/**
+ * Close these boards' voice sessions; each reconnects about a second later and
+ * re-reads everything about itself. Best effort, like every caller: true only
+ * when the voice server confirmed every one.
+ */
+const dropDeviceSessions = async (macs: string[]) => {
+    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    if (!internalUrl || !internalToken || macs.length === 0) {
         return false;
     }
 

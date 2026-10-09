@@ -114,7 +114,7 @@ async def test_facts_are_recorded_and_a_replacement_retires_the_old_one():
         ],
     )
     try:
-        session = MemorySession("child-1", "house")
+        session = MemorySession("child-1", "board-1", "house")
         session.chat_group_id = "group-1"
         session.facts = [old]
         session._pending_episodes = [turn("豆豆今日四歲生日")]
@@ -148,7 +148,7 @@ async def test_a_failed_consolidation_is_retried_once():
 
     memory_session.consolidate = flaky
     try:
-        session = MemorySession("child-1", "house")
+        session = MemorySession("child-1", "board-1", "house")
         session._pending_episodes = [turn("i built a rocket")]
         session._turns_seen = 1
         await session._summarise_pending(reason="test")
@@ -175,7 +175,7 @@ async def test_the_session_end_stretch_survives_close_and_the_next_session():
 
     memory_session.consolidate = slow
     try:
-        session = MemorySession("child-1", "house")
+        session = MemorySession("child-1", "board-1", "house")
         session.chat_group_id = "group-1"
         session._pending_episodes = [turn("i want to go to the moon")]
         session._turns_seen = 1
@@ -216,7 +216,7 @@ async def test_a_boundary_does_not_hold_up_the_next_write():
     original_every = memory_session.SUMMARY_EVERY_TURNS
     memory_session.SUMMARY_EVERY_TURNS = 2
     try:
-        session = MemorySession("child-1", "house")
+        session = MemorySession("child-1", "board-1", "house")
         for index in range(3):
             await asyncio.wait_for(session._write_turn(turn(f"turn {index}")), timeout=1)
         assert session._turns_seen == 3
@@ -261,7 +261,7 @@ async def test_facts_and_brief_go_into_the_system_prompt_in_that_order():
     saved = []
     patch_store(saved, fake)
     try:
-        session = MemorySession("child-1", "house")
+        session = MemorySession("child-1", "board-1", "house")
         await session._begin_session()
         preamble = session.prompt_preamble()
         assert "- 希望被叫 Mia。" in preamble and "- 有隻柴犬叫豆豆。" in preamble, preamble
@@ -272,7 +272,7 @@ async def test_facts_and_brief_go_into_the_system_prompt_in_that_order():
 
 
 async def test_no_facts_means_no_heading():
-    session = MemorySession("child-1", "house")
+    session = MemorySession("child-1", "board-1", "house")
     assert session.facts_block() == ""
     assert session.prompt_preamble() == ""
     print("  ok: no facts, no empty heading")

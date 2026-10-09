@@ -153,8 +153,8 @@ async def test_memory_reads_are_scoped_to_the_ip():
     store._get_json = capture
     store.configured = lambda: True
     try:
-        await store.fetch_recent_segments("child-1", "licensed")
-        await store.fetch_active_facts("child-1", "licensed")
+        await store.fetch_recent_segments("child-1", "board-1", "licensed")
+        await store.fetch_active_facts("child-1", "board-1", "licensed")
     finally:
         store._get_json, store.configured = original
     assert len(seen) == 2
@@ -167,7 +167,7 @@ async def test_no_ip_means_no_memory():
     memory_session.enabled = lambda: True
     store.configured = lambda: True
     try:
-        assert await memory_session.acquire("child-1", None) is None
+        assert await memory_session.acquire("child-1", "board-1", None) is None
     finally:
         memory_session.enabled, store.configured = original
     print("  ok: an unreadable IP turns memory off instead of guessing")

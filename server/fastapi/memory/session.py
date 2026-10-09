@@ -128,8 +128,9 @@ def choose_brief(segments: list, count: int, min_turns: int) -> list:
 class MemorySession:
     """The memory for one child, for the duration of one connection.
 
-    Shared while live: two devices on the same account get the same instance,
-    and `acquire()` / `release()` reference-count so the last one out closes
+    Shared while live: two connections from the same board -- a reconnect that
+    lands before the old socket has closed -- get the same instance, and
+    `acquire()` / `release()` reference-count so the last one out closes
     it. Each new connection after that gets a fresh instance, which is cheap --
     everything it knows is read from Supabase in `_begin_session()`.
 
@@ -144,18 +145,22 @@ class MemorySession:
     def __init__(
         self,
         user_id: str,
+        device_id: str,
         ip_key: str,
         language_code: str | None = None,
         revision: int | None = None,
     ):
         self.user_id = user_id
+        # Which board on the account this memory is. Each board remembers its
+        # own child -- an account with two toys usually has two children.
+        self.device_id = device_id
         # Whose world this memory belongs to. Every read and write is scoped
         # to it, so one IP's characters never hear what was told to another's.
         self.ip_key = ip_key
         self.language_code = language_code
-        # `users.memories_revision` as it was when this session started. Every
+        # `devices.memories_revision` as it was when this session started. Every
         # write carries it, and the database refuses it once a parent has
-        # cleared the child's memory since (store._stamp). None writes
+        # cleared this board's memory since (store._stamp). None writes
         # unstamped, which nothing checks.
         self.revision = revision
         self._refs = 0
@@ -197,7 +202,7 @@ class MemorySession:
     async def start(self) -> None:
         """Load what this child's memory holds. Once per connection."""
         async with self._lock:
-            # Only the first device in. Resetting under the second one would
+            # Only the first connection in. Resetting under the second one would
             # restart the first one's summary mid-conversation.
             if self._refs <= 1:
                 await self._begin_session()
@@ -207,8 +212,8 @@ class MemorySession:
     async def _begin_session(self) -> None:
         """Reset per-session state and load what the last sessions ended on.
 
-        Guarded on the reference count by the caller: two devices on one
-        account share this instance, and resetting the counters under the
+        Guarded on the reference count by the caller: two connections from one
+        board share this instance, and resetting the counters under the
         second one would restart the first one's summary mid-conversation.
         """
         self._turns_seen = 0
@@ -217,8 +222,10 @@ class MemorySession:
         self._session_segments = []
         self.session_summary = ""
         recent, facts = await asyncio.gather(
-            store.fetch_recent_segments(self.user_id, self.ip_key, BRIEF_LOOKBACK_SEGMENTS),
-            store.fetch_active_facts(self.user_id, self.ip_key, FACTS_IN_PROMPT),
+            store.fetch_recent_segments(
+                self.user_id, self.device_id, self.ip_key, BRIEF_LOOKBACK_SEGMENTS
+            ),
+            store.fetch_active_facts(self.user_id, self.device_id, self.ip_key, FACTS_IN_PROMPT),
         )
         if facts is None:
             logger.warning(
@@ -299,6 +306,7 @@ class MemorySession:
     async def _write_turn(self, turn: PendingTurn) -> None:
         await store.insert_conversation_turn(
             self.user_id,
+            self.device_id,
             self.ip_key,
             "user",
             turn.user_text,
@@ -309,6 +317,7 @@ class MemorySession:
         if turn.agent_reply:
             await store.insert_conversation_turn(
                 self.user_id,
+                self.device_id,
                 self.ip_key,
                 "assistant",
                 turn.agent_reply,
@@ -417,7 +426,7 @@ class MemorySession:
         and longer stretch. They are still in `conversations`, so a stretch
         lost here can be recovered from the transcript.
         """
-        known = await store.fetch_active_facts(self.user_id, self.ip_key)
+        known = await store.fetch_active_facts(self.user_id, self.device_id, self.ip_key)
         if known is None:
             # Fall back to what this session loaded, so the model can still
             # see what it already knows rather than re-adding all of it.
@@ -454,6 +463,7 @@ class MemorySession:
                 self.session_summary = self._join_session_summary()
             await store.insert_segment(
                 self.user_id,
+                self.device_id,
                 self.ip_key,
                 stretch.chat_group_id,
                 stretch.from_turn,
@@ -493,7 +503,12 @@ class MemorySession:
                 logger.info("Dropped a fact about {} that held a long number", self.user_id)
                 continue
             fact_id = await store.insert_fact(
-                self.user_id, self.ip_key, chat_group_id, text, revision=self.revision
+                self.user_id,
+                self.device_id,
+                self.ip_key,
+                chat_group_id,
+                text,
+                revision=self.revision,
             )
             if fact_id is None:
                 continue
@@ -584,16 +599,18 @@ class MemorySession:
 
 # ── registry ─────────────────────────────────────────────────────────────────
 
-# Live sessions only, so two devices on one account share one. A session leaves
-# when its last connection does; a finishing consolidation keeps the object
-# alive on its own. Keyed by IP too: the web playground on one IP and the toy on
-# another are two memories, not one.
-_sessions: dict[tuple[str, str], MemorySession] = {}
+# Live sessions only, so two connections from one board share one (a board that
+# reconnects before its old socket has closed). A session leaves when its last
+# connection does; a finishing consolidation keeps the object alive on its own.
+# Keyed by board and by IP: each board on an account is its own memory, and so
+# is each IP on a board.
+_sessions: dict[tuple[str, str, str], MemorySession] = {}
 _registry_lock = asyncio.Lock()
 
 
 async def acquire(
     user_id: str,
+    device_id: str | None,
     ip_key: str | None,
     language_code: str | None = None,
     revision: int | None = None,
@@ -616,11 +633,14 @@ async def acquire(
         return None
     if not user_id:
         logger.warning(
-            "No user id for this session, running without memory. The browser "
-            "sends one on the websocket query string and a device resolves one "
-            "from its claimed account -- an empty one usually means the "
-            "Supabase lookup failed, so check the warning above it."
+            "No user id for this session, running without memory. A device "
+            "resolves one from its claimed account -- an empty one usually "
+            "means the Supabase lookup failed, so check the warning above it."
         )
+        return None
+    if not device_id:
+        # Memory is a board's. The web playground has none and runs without.
+        logger.info("No device for {}'s session, running without memory", user_id)
         return None
 
     if not ip_key:
@@ -634,8 +654,9 @@ async def acquire(
         )
         return None
 
+    key = (user_id, device_id, ip_key)
     async with _registry_lock:
-        session = _sessions.get((user_id, ip_key))
+        session = _sessions.get(key)
         if (
             session is not None
             and revision is not None
@@ -652,8 +673,8 @@ async def acquire(
             )
             session = None
         if session is None:
-            session = _sessions[(user_id, ip_key)] = MemorySession(
-                user_id, ip_key, language_code, revision
+            session = _sessions[key] = MemorySession(
+                user_id, device_id, ip_key, language_code, revision
             )
     try:
         await session.acquire()
@@ -668,6 +689,7 @@ async def release(session: MemorySession) -> None:
     """The connection is over. The last one out closes the session."""
     await session.release()
     if session._refs == 0:
+        key = (session.user_id, session.device_id, session.ip_key)
         async with _registry_lock:
-            if _sessions.get((session.user_id, session.ip_key)) is session:
-                del _sessions[(session.user_id, session.ip_key)]
+            if _sessions.get(key) is session:
+                del _sessions[key]

@@ -22,6 +22,9 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     allRegions,
 }) => {
     const [tab, setTab] = useState<SettingsTab>("info");
+    // Memory is listed per device, so claiming or unbinding one changes which
+    // memories the section below can show.
+    const [devicesVersion, setDevicesVersion] = useState(0);
 
     return (
         <div className="relative z-10 mx-auto flex h-full w-full max-w-lg flex-col px-4 pt-[max(0.75rem,env(safe-area-inset-top))] md:max-w-xl md:px-8 md:pt-8">
@@ -73,9 +76,13 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                         <AppSettings
                             selectedUser={selectedUser}
                             hideUserForm
+                            onDevicesChanged={() => setDevicesVersion((v) => v + 1)}
                         />
                         <div className="mt-8 border-t pt-6">
-                            <MemorySection selectedUser={selectedUser} />
+                            <MemorySection
+                                selectedUser={selectedUser}
+                                devicesVersion={devicesVersion}
+                            />
                         </div>
                     </div>
                 </div>

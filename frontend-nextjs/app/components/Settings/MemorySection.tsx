@@ -5,14 +5,12 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
 import { createClient } from "@/utils/supabase/client";
 import {
-    dbDeleteAllMemories,
-    dbDeleteAllMemoryFacts,
-    dbDeleteAllMemorySegments,
     dbDeleteMemoryFact,
     dbGetMemoryFacts,
     dbGetMemorySegments,
 } from "@/db/memories";
-import { invalidateMemories } from "@/app/actions";
+import { getUserDevices } from "@/db/devices";
+import { clearDeviceMemoryAction, invalidateMemories } from "@/app/actions";
 import { Trash2, Loader2 } from "lucide-react";
 import {
     memorySectionTitle,
@@ -21,11 +19,17 @@ import {
     memoryFactsLabel,
     memoryFactsDescription,
     memoryNotesLabel,
+    memoryNoDevice,
 } from "@/lib/data";
+import { cn } from "@/lib/utils";
 
 interface MemorySectionProps {
     selectedUser: IUser;
+    /** Bumped when a device is claimed or unbound, to re-list them. */
+    devicesVersion?: number;
 }
+
+type Device = Awaited<ReturnType<typeof getUserDevices>>[number];
 
 /**
  * What the toy remembers, and the way to take it back.
@@ -36,22 +40,51 @@ interface MemorySectionProps {
  * own. The notes underneath are what each conversation was about; the latest
  * couple are what the toy reads when it next says hello.
  *
- * The raw lines the old memory store kept (`memories`) are no longer shown:
- * nothing reads them since that store was removed, and "Clear all" still
- * wipes them.
+ * Memory belongs to a device: each toy remembers its own child. With more
+ * than one on the account, the parent picks which toy to look at.
  */
-const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
+const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser, devicesVersion }) => {
     const supabase = createClient();
     const { toast } = useToast();
+    const [devices, setDevices] = React.useState<Device[] | null>(null);
+    const [deviceId, setDeviceId] = React.useState<string | null>(null);
     const [segments, setSegments] = React.useState<IMemorySegment[] | null>(null);
     const [facts, setFacts] = React.useState<IMemoryFact[] | null>(null);
     const [busyId, setBusyId] = React.useState<string | null>(null);
 
+    React.useEffect(() => {
+        let cancelled = false;
+        getUserDevices(supabase, selectedUser.user_id)
+            .then((loaded) => {
+                if (cancelled) return;
+                setDevices(loaded);
+                // Keep the toy being looked at while it is still on the account.
+                setDeviceId((current) =>
+                    loaded.some((d) => d.device_id === current)
+                        ? current
+                        : loaded[0]?.device_id ?? null
+                );
+            })
+            .catch(() => {
+                if (!cancelled) setDevices([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [supabase, selectedUser.user_id, devicesVersion]);
+
     const load = React.useCallback(async () => {
+        if (!deviceId) {
+            setFacts([]);
+            setSegments([]);
+            return;
+        }
+        setFacts(null);
+        setSegments(null);
         try {
             const [loadedFacts, loadedSegments] = await Promise.all([
-                dbGetMemoryFacts(supabase),
-                dbGetMemorySegments(supabase),
+                dbGetMemoryFacts(supabase, deviceId),
+                dbGetMemorySegments(supabase, deviceId),
             ]);
             setFacts(loadedFacts);
             setSegments(loadedSegments);
@@ -63,11 +96,11 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
                 variant: "destructive",
             });
         }
-    }, [supabase, toast]);
+    }, [supabase, toast, deviceId]);
 
     React.useEffect(() => {
-        void load();
-    }, [load]);
+        if (devices !== null) void load();
+    }, [load, devices]);
 
     const afterDelete = async (message: string) => {
         // The toy read its memory into the prompt when it connected. Dropping
@@ -90,17 +123,16 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
     };
 
     const onDeleteAll = async () => {
+        if (!deviceId) return;
         setBusyId("all");
         try {
-            // What the toy reads first. If a later call fails, a parent is left
-            // with leftovers the toy never reads, which is merely untidy; the
-            // other order leaves facts behind, which reads as "it still
-            // remembers". `memories` is the old store's raw lines, cleared here
-            // so "Clear all" means it.
-            await dbDeleteAllMemoryFacts(supabase, selectedUser.user_id);
-            await dbDeleteAllMemorySegments(supabase, selectedUser.user_id);
-            await dbDeleteAllMemories(supabase, selectedUser.user_id);
-            await afterDelete("Your toy has forgotten everything.");
+            // One transaction on the server, transcript included, and the toy's
+            // live session is dropped so it cannot write any of it back.
+            if (!await clearDeviceMemoryAction(deviceId)) {
+                throw new Error("clear failed");
+            }
+            await load();
+            toast({ description: "This toy has forgotten everything." });
         } catch {
             toast({ description: "Could not clear memories.", variant: "destructive" });
         } finally {
@@ -108,7 +140,7 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
         }
     };
 
-    const loading = facts === null || segments === null;
+    const loading = devices === null || facts === null || segments === null;
     const hasAnything = (facts?.length ?? 0) > 0 || (segments?.length ?? 0) > 0;
 
     return (
@@ -136,11 +168,36 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser }) => {
                 )}
             </div>
 
+            {devices !== null && devices.length > 1 && (
+                <div className="flex flex-row flex-wrap gap-2">
+                    {devices.map((device) => (
+                        <button
+                            key={device.device_id}
+                            type="button"
+                            onClick={() => setDeviceId(device.device_id)}
+                            disabled={busyId !== null}
+                            className={cn(
+                                "rounded-full border px-3 py-1 text-xs transition-colors",
+                                device.device_id === deviceId
+                                    ? "border-gray-900 bg-gray-900 text-white"
+                                    : "border-gray-200 text-gray-600 hover:border-gray-400"
+                            )}
+                        >
+                            Device {device.user_code}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             {loading && (
                 <Loader2 className="animate-spin text-muted-foreground" size={16} />
             )}
 
-            {!loading && facts!.length === 0 && segments!.length === 0 && (
+            {devices !== null && devices.length === 0 && (
+                <p className="text-sm text-muted-foreground">{memoryNoDevice}</p>
+            )}
+
+            {!loading && deviceId && facts!.length === 0 && segments!.length === 0 && (
                 <p className="text-sm text-muted-foreground">{memorySectionEmpty}</p>
             )}
 

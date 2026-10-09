@@ -87,18 +87,30 @@ export const claimDevice = async (
     return !error && !!data;
 };
 
+/**
+ * Release a device from this account, erasing its memory first when asked.
+ *
+ * One transaction (unbind_device): if the erase fails, the device stays bound.
+ * Without it the memory is kept, and claiming this device again picks up where
+ * it left off. Returns the device's MAC, so its live session can be dropped,
+ * or null when the account does not own it -- in which case nothing changed.
+ */
 export const unbindDevice = async (
     supabase: SupabaseClient,
     deviceId: string,
     userId: string,
-) => {
-    const { error } = await supabase
-        .from("devices")
-        .update({ user_id: null, claimed_at: null })
-        .eq("device_id", deviceId)
-        .eq("user_id", userId);
+    clearMemory: boolean,
+): Promise<string | null> => {
+    const { data, error } = await supabase.rpc("unbind_device", {
+        p_device_id: deviceId,
+        p_user_id: userId,
+        p_clear_memory: clearMemory,
+    });
 
-    return !error;
+    if (error || typeof data !== "string") {
+        return null;
+    }
+    return data;
 };
 
 /** Every device bound to this account, oldest first. An account can own any number. */

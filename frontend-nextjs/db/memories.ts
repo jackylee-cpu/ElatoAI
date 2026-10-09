@@ -1,26 +1,10 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 
-/**
- * The old memory store's raw lines (`memories`), one per thing the child said.
- *
- * Nothing reads these since that store was removed; they are only cleared, so
- * that "Clear all" leaves nothing of the child behind.
- *
- * RLS scopes every query to the signed-in owner.
+/*
+ * Memory belongs to a device on an account: each toy remembers its own child
+ * (migration 20261009140000). Reads go through the signed-in client, and RLS
+ * scopes them to the owner; the device filter picks which toy.
  */
-export const dbDeleteAllMemories = async (
-    supabase: SupabaseClient,
-    userId: string
-) => {
-    const { error } = await supabase
-        .from("memories")
-        .delete()
-        .eq("user_id", userId);
-
-    if (error) {
-        throw error;
-    }
-};
 
 /**
  * The per-conversation summaries the toy actually reads on its next session.
@@ -32,11 +16,13 @@ export const dbDeleteAllMemories = async (
  */
 export const dbGetMemorySegments = async (
     supabase: SupabaseClient,
+    deviceId: string,
     limit: number = 50
 ): Promise<IMemorySegment[]> => {
     const { data, error } = await supabase
         .from("memory_segments")
         .select("segment_id, summary, from_turn, to_turn, chat_group_id, created_at")
+        .eq("device_id", deviceId)
         .order("created_at", { ascending: false })
         .limit(limit);
 
@@ -47,18 +33,20 @@ export const dbGetMemorySegments = async (
 };
 
 /**
- * The facts the toy currently holds about this child.
+ * The facts this toy currently holds about its child.
  *
  * Active ones only: a replaced fact stays in the table for tracing but is no
  * longer in any prompt, so showing it would read as the toy still believing it.
  */
 export const dbGetMemoryFacts = async (
     supabase: SupabaseClient,
+    deviceId: string,
     limit: number = 200
 ): Promise<IMemoryFact[]> => {
     const { data, error } = await supabase
         .from("memory_facts")
         .select("fact_id, content, chat_group_id, created_at")
+        .eq("device_id", deviceId)
         .is("superseded_at", null)
         .order("created_at", { ascending: false })
         .limit(limit);
@@ -87,38 +75,20 @@ export const dbDeleteMemoryFact = async (
     }
 };
 
-export const dbDeleteAllMemoryFacts = async (
-    supabase: SupabaseClient,
-    userId: string
-) => {
-    const { error } = await supabase
-        .from("memory_facts")
-        .delete()
-        .eq("user_id", userId);
-
-    if (error) {
-        throw error;
-    }
-};
-
 /**
- * Clear the summaries too.
- *
- * The voice server drops them by itself when it sees the memory revision move,
- * but only on a session that was already holding the old value -- a server that
- * has not run since the deletion has nothing to compare against. Clearing them
- * here makes "clear all" mean it immediately, whatever the server is doing.
+ * Erase everything one toy knows or heard: facts, notes and transcript, in one
+ * transaction that also stops a session talking right now from writing any of
+ * it back (clear_device_memory). Service role only, so the caller passes the
+ * account from the signed-in session, never from the client.
  */
-export const dbDeleteAllMemorySegments = async (
-    supabase: SupabaseClient,
-    userId: string
+export const clearDeviceMemory = async (
+    service: SupabaseClient,
+    userId: string,
+    deviceId: string
 ) => {
-    const { error } = await supabase
-        .from("memory_segments")
-        .delete()
-        .eq("user_id", userId);
-
-    if (error) {
-        throw error;
-    }
+    const { error } = await service.rpc("clear_device_memory", {
+        p_user_id: userId,
+        p_device_id: deviceId,
+    });
+    return !error;
 };

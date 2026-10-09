@@ -8,6 +8,15 @@ import {
     unbindDeviceAction,
 } from "@/app/actions";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { LogOut } from "lucide-react";
@@ -25,6 +34,8 @@ interface AppSettingsProps {
     selectedUser: IUser;
     heading?: React.ReactNode;
     hideUserForm?: boolean;
+    /** A device was claimed or unbound. */
+    onDevicesChanged?: () => void;
 }
 
 const skipDeviceRegistration = process.env.NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION === "True";
@@ -94,6 +105,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
     selectedUser,
     heading,
     hideUserForm = false,
+    onDevicesChanged,
 }) => {
     const supabase = createClient();
     const { toast } = useToast();
@@ -105,6 +117,9 @@ const AppSettings: React.FC<AppSettingsProps> = ({
         { device_id: string; mac_address: string; user_code: string }[]
     >([]);
     const [busyDeviceId, setBusyDeviceId] = React.useState<string | null>(null);
+    // The device a parent pressed Unbind on, waiting for them to confirm.
+    const [unbinding, setUnbinding] = React.useState<BoundDevice | null>(null);
+    const [eraseMemory, setEraseMemory] = React.useState(false);
 
     const handleSave = () => {
         userFormRef.current?.submitForm();
@@ -113,6 +128,13 @@ const AppSettings: React.FC<AppSettingsProps> = ({
     const loadDevices = useCallback(async () => {
         setDevices(await getUserDevices(supabase, selectedUser.user_id));
     }, [selectedUser.user_id, supabase]);
+
+    // After this account's devices changed, not on every load: the dashboard
+    // passes a fresh callback each render.
+    const devicesChanged = async () => {
+        await loadDevices();
+        onDevicesChanged?.();
+    };
 
     React.useEffect(() => {
         loadDevices();
@@ -151,17 +173,39 @@ const AppSettings: React.FC<AppSettingsProps> = ({
         }
         setError("");
         setUnclaimed((devices) => devices.filter((d) => d.device_id !== deviceId));
-        loadDevices();
+        devicesChanged();
     };
 
-    const handleUnbind = async (deviceId: string) => {
+    // Unbinding is never one click: it asks first, and keeps the device's
+    // memory unless the parent ticks the box to erase it.
+    const askToUnbind = (deviceId: string) => {
+        setEraseMemory(false);
+        setUnbinding(devices.find((d) => d.device_id === deviceId) ?? null);
+    };
+
+    const handleUnbind = async () => {
+        if (!unbinding) return;
+        const deviceId = unbinding.device_id;
         setBusyDeviceId(deviceId);
-        const ok = await unbindDeviceAction(deviceId);
+        const ok = await unbindDeviceAction(deviceId, eraseMemory);
         setBusyDeviceId(null);
-        if (ok) {
-            setError("");
-            loadDevices();
+        if (!ok) {
+            // One transaction on the server: a failure changed nothing, the
+            // memory included.
+            toast({
+                description: "Could not unbind that device. Nothing was changed.",
+                variant: "destructive",
+            });
+            return;
         }
+        setUnbinding(null);
+        setError("");
+        toast({
+            description: eraseMemory
+                ? "Device unbound, and what it remembered is erased."
+                : "Device unbound. Its memory is kept for when you claim it again.",
+        });
+        devicesChanged();
     };
 
     const onSave = async (values: any, userId: string) => {
@@ -216,7 +260,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                                     key={device.device_id}
                                     device={device}
                                     busy={busyDeviceId !== null}
-                                    onUnbind={handleUnbind}
+                                    onUnbind={askToUnbind}
                                 />
                             ))}
                         </div>
@@ -287,7 +331,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                                     setError("");
                                     setDeviceCode("");
                                 }
-                                loadDevices();
+                                devicesChanged();
                             }}
                         >
                             Register
@@ -328,6 +372,55 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                         </form>
                 </div>
             </div>
+            <Dialog
+                open={unbinding !== null}
+                onOpenChange={(open) => {
+                    if (!open && busyDeviceId === null) setUnbinding(null);
+                }}
+            >
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Unbind Device {unbinding?.user_code}?</DialogTitle>
+                        <DialogDescription>
+                            It stops talking and goes back to waiting to be paired.
+                            What it remembers about your child is kept: claim this
+                            device again and it picks up where it left off.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <label className="flex flex-row items-start gap-3 rounded-md border border-gray-200 p-3 text-sm">
+                        <Checkbox
+                            className="mt-0.5"
+                            checked={eraseMemory}
+                            onCheckedChange={(checked) => setEraseMemory(checked === true)}
+                            disabled={busyDeviceId !== null}
+                        />
+                        <span>
+                            Also erase everything this device remembers - what it
+                            knows about your child, its conversation notes and
+                            transcripts.{" "}
+                            <span className="font-medium text-red-600">This cannot be undone.</span>
+                        </span>
+                    </label>
+                    <DialogFooter className="gap-2">
+                        <Button
+                            variant="outline"
+                            disabled={busyDeviceId !== null}
+                            onClick={() => setUnbinding(null)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant={eraseMemory ? "destructive" : "default"}
+                            disabled={busyDeviceId !== null}
+                            onClick={handleUnbind}
+                        >
+                            {busyDeviceId !== null
+                                ? "Unbinding..."
+                                : eraseMemory ? "Unbind and erase" : "Unbind"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </>
     );
 };

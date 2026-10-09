@@ -337,9 +337,8 @@ def create_app() -> FastAPI:
 
         # The character is the one on the account, read with the child's
         # profile in one request: picking a character in the web app saves it
-        # there first. Memory is keyed by the account and the character's IP,
-        # as on the toy, so what a child tells the web app is there the next
-        # time they pick up the toy on the same IP.
+        # there first. No memory: memory belongs to a board, and the
+        # playground is not one (P1-12), so it neither reads nor writes any.
         profile = await fetch_user_personality(user_id)
         ip = profile.ip
         logger.info(
@@ -347,19 +346,8 @@ def create_app() -> FastAPI:
             user_id,
             profile.title or "default",
         )
-        memory = await memory_session.acquire(
-            profile.user_id,
-            ip.ip_key if ip else None,
-            profile.language_code,
-            profile.memories_revision,
-        )
-        # One id per session, generated whether or not memory is running: it is
-        # what ties a turn_metrics row to the conversation it was measured in.
+        # What ties a turn_metrics row to the conversation it was measured in.
         chat_group_id = str(uuid.uuid4())
-        if memory is not None:
-            memory.chat_group_id = chat_group_id
-            # For dating what the child says ("next Saturday") in their clock.
-            memory.timezone = profile.region.timezone if profile.region else None
         child = {
             "name": profile.child_name,
             "age": profile.child_age,
@@ -367,39 +355,26 @@ def create_app() -> FastAPI:
             "personality_key": profile.personality_key,
         }
 
-        try:
-            await run_bot_session(
-                transport,
-                "browser",
-                False,
-                tts_voice=profile.tts_voice,
-                tts_voices=profile.tts_voices,
-                title=profile.title,
-                character_prompt=profile.character_prompt,
-                voice_prompt=profile.voice_prompt,
-                first_message_prompt=profile.first_message_prompt,
-                memory=memory,
-                child=child,
-                user_id=profile.user_id,
-                chat_group_id=chat_group_id,
-                language_code=profile.language_code,
-                region=profile.region,
-                ip=ip,
-                mode_key=profile.mode_key,
-                style_key=profile.style_key,
-            )
-        finally:
-            # Draining pending writes and summarising the last stretch hang off
-            # this, and a browser tab closing is exactly the disconnect that
-            # would otherwise lose the last turn -- the same reason the esp32
-            # route releases in a finally.
-            if memory is not None:
-                try:
-                    await memory_session.release(memory)
-                except Exception as exc:  # noqa: BLE001 - teardown must not raise
-                    logger.warning(
-                        "Could not persist memory for {}: {}", user_id, exc
-                    )
+        await run_bot_session(
+            transport,
+            "browser",
+            False,
+            tts_voice=profile.tts_voice,
+            tts_voices=profile.tts_voices,
+            title=profile.title,
+            character_prompt=profile.character_prompt,
+            voice_prompt=profile.voice_prompt,
+            first_message_prompt=profile.first_message_prompt,
+            memory=None,
+            child=child,
+            user_id=profile.user_id,
+            chat_group_id=chat_group_id,
+            language_code=profile.language_code,
+            region=profile.region,
+            ip=ip,
+            mode_key=profile.mode_key,
+            style_key=profile.style_key,
+        )
 
     @app.websocket("/ws/esp32")
     async def esp32_websocket(websocket: WebSocket):
@@ -449,12 +424,13 @@ def create_app() -> FastAPI:
         )
         transport = create_esp32_transport(websocket)
 
-        # Memory is keyed by the account the device is claimed by and the
-        # character's IP, not by the device or the character: it is the same
-        # child either way, but one IP never hears what was told to another.
-        # An unclaimed device resolves to no user and runs without memory.
+        # Memory is keyed by the account the device is claimed by, the device
+        # itself and the character's IP: each board on an account remembers
+        # its own child, and one IP never hears what was told to another. The
+        # device comes from the verified token, never from the client.
         memory = await memory_session.acquire(
             personality.user_id,
+            device.device_id,
             personality.ip.ip_key if personality.ip else None,
             personality.language_code,
             personality.memories_revision,
