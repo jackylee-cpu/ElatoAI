@@ -62,7 +62,10 @@ class Supabase:
             sys.exit("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
 
     def call(self, method, path, body=None, headers=None, raw=None):
-        h = {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+        # Cloudflare in front of production answers urllib's default
+        # "Python-urllib/x.y" User-Agent with 403 "error code: 1010".
+        h = {"apikey": self.key, "Authorization": f"Bearer {self.key}",
+             "User-Agent": "aibuddy-release-firmware/1.0"}
         data = raw
         if body is not None:
             h["Content-Type"] = "application/json"
