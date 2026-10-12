@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from plan import FACTORY, FACTORY_TESTS, DATES, VERSION
+from plan import FACTORY, FACTORY_TESTS, DATES, FACTORY_VERSION
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -23,7 +23,7 @@ ws = wb.active
 ws.title = "時間表"
 ws["A1"] = "毛公仔打版與量產時間表（草案）"
 ws["A1"].font = Font(name=FONT, size=16, bold=True)
-ws["A2"] = f"目標：2027 年 1 月 15 日量產完成出貨 · {VERSION} · 款式 A 共 2,500 隻（兩個造型，各多少 11/20 前確定）／B 500 隻／C 數量另行通知"
+ws["A2"] = f"目標：2027 年 1 月 15 日量產完成出貨 · 草案 {FACTORY_VERSION} · 2026-10-12 · 款式 A 共 2,500 隻（兩個造型，各多少 11/20 前確定）／B 500 隻／C 數量另行通知"
 ws["A2"].font = Font(name=FONT, size=10, color="5B6474")
 ws.merge_cells("A1:G1"); ws.merge_cells("A2:G2")
 

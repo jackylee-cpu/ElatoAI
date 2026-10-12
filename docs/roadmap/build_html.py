@@ -262,7 +262,7 @@ ARCH = """
       <div class="shell"><b>品牌 B · 政協青年聯會版</b><span class="sub">成人會員 · 500 隻</span></div>
       <div class="shell"><b>品牌 C · AI Buddy</b><span class="sub">兒童陪伴（3–6 歲）· 自有 IP · 數量未定 · 用我們自己的開發者帳號</span></div>
     </div>
-    <div class="pillrow"><span class="pill">配網：加入 AIBuddy-XXXX 熱點</span><span class="pill">推送通知</span><span class="pill">麥克風權限</span><span class="pill">原生 Google／Apple 登入 → signInWithIdToken</span><span class="pill">App 內刪除帳號</span><span class="pill">深層連結</span></div>
+    <div class="pillrow"><span class="pill">藍牙配網和綁定</span><span class="pill">推送通知</span><span class="pill">麥克風權限</span><span class="pill">原生 Google／Apple 登入 → signInWithIdToken</span><span class="pill">App 內刪除帳號</span><span class="pill">深層連結</span></div>
   </div>
   <div class="down">▼ 每個殼打開自己品牌的網址</div>
   <div class="layer">
@@ -283,7 +283,7 @@ DECISIONS = [
     ("品牌從設備來", "設備出廠時寫入 brand_key。一個品牌的 App 只能認領自己品牌的設備；快活的設備鎖定快活 IP（多 IP 設計第一期跳過的「固定 IP」要補上）。"),
     ("帳號共用，資料按品牌分開", "Supabase 只有一個帳號池。同一個人如果有兩個品牌的玩具，用同一個 email 登入，每個 App 只顯示自己品牌的設備和記憶。"),
     ("各品牌的安全規則不同", "AI Buddy 兒童版用 3–6 歲尺度，並有家長鎖、家長同意、每日上限。快活和政協青年聯會版是成人：會員本人同意，記憶過濾敏感號碼；快活另外不提供貼士、只按知識庫回答。資料保留期按品牌設定（提案寫明「資料規則由馬會話事」）。"),
-    ("網頁和殼之間有一份橋接清單", "殼由同事做，我們不控制殼的程式碼。網頁需要殼提供的能力（配網、原生登入、推送、麥克風、刪除帳號入口）寫成一份清單和 JS 介面，雙方按清單開發，三個品牌共用同一份。"),
+    ("網頁和殼之間有一份橋接清單", "殼由同事做，我們不控制殼的程式碼。網頁需要殼提供的能力（藍牙配網、原生登入、推送、麥克風、刪除帳號入口）寫成一份清單和 JS 介面，雙方按清單開發，三個品牌共用同一份。"),
     ("殼過審之後，介面隨時可改", "畫面在網頁裡，改介面不用重新送審。所以殼 1.0 在 12/11 前過審就行，網頁可以一直改到交付。"),
 ]
 

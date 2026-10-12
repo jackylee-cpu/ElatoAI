@@ -93,7 +93,7 @@ def build(xlsx_name):
     a("一套網頁、一個原生殼專案，三個品牌只是三份設定。")
     a("")
     a("- **原生殼**：同事負責，我們不改殼的程式碼。建議一個專案、三個 build flavor，每個品牌各自的名稱、圖示、bundle id、開發者帳號。"
-      "殼提供：配網（加入 AIBuddy-XXXX 熱點）、原生 Google／Apple 登入後經 signInWithIdToken 交給網頁、推送、麥克風、刪除帳號、深層連結。")
+      "殼提供：藍牙配網與綁定（R-21）、原生 Google／Apple 登入後經 signInWithIdToken 交給網頁、推送、麥克風、刪除帳號、深層連結。")
     a("- **網頁**：現有 Next.js，一套。按網址判斷品牌，載入主題 token、文案、功能開關；首頁、上手流程、角色頁按品牌各一版。")
     a("- **共用平台**：Supabase（RLS 按品牌分開）、語音伺服器（pipecat）、IP Pack、OTA、管理後台。新增 brands 表；設備出廠時寫入 brand_key。")
     a("")
