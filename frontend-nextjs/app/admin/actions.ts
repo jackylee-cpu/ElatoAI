@@ -4,6 +4,9 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin";
 import { saveVoiceStackSettings } from "@/db/appSettings";
 import { grantAdminRole, revokeAdminRole } from "@/db/adminRoles";
+import { createAccount } from "@/db/accounts";
+import { createServiceClient } from "@/utils/supabase/service";
+import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
 import {
     createBuiltinPersonality,
     updatePersonalityAsAdmin,
@@ -31,7 +34,8 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 // RLS and has_role() decide in the database, and requireAdmin() here only
 // fails early with a readable message. Settings and admin roles are
 // super_admin; characters and IPs are content_admin, which super_admin also
-// holds.
+// holds. The one exception is createAccountAction: GoTrue only lets the
+// service role create a login, so there requireAdmin() is the whole gate.
 
 /**
  * Point every new session at a different model.
@@ -459,4 +463,70 @@ export async function revokeAdminRoleAction(
 
     revalidatePath("/admin");
     return { ok: true };
+}
+
+export type CreateAccountResult =
+    | { ok: true; userId: string; roleError?: string }
+    | { ok: false; error: string };
+
+/**
+ * Create a login for someone -- a family we are setting up, a tester -- that
+ * works at once, without the confirmation email self sign-up needs.
+ *
+ * Optionally grants an admin role in the same step. That part runs with the
+ * admin's own key like grantAdminRoleAction; if it fails the account still
+ * exists, and the result says so rather than reporting the whole thing failed.
+ */
+export async function createAccountAction(
+    email: string,
+    password: string,
+    role: AdminRole | null,
+): Promise<CreateAccountResult> {
+    const { supabase } = await requireAdmin("super_admin");
+
+    const address = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+        return { ok: false, error: "Enter a valid email address" };
+    }
+    if (password.length < MIN_PASSWORD_LENGTH) {
+        return {
+            ok: false,
+            error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+        };
+    }
+    if (role !== null && !ADMIN_ROLES.includes(role)) {
+        return { ok: false, error: `Unknown role "${role}"` };
+    }
+
+    let userId: string;
+    try {
+        userId = await createAccount(createServiceClient(), address, password);
+    } catch (error) {
+        console.error("createAccountAction failed", error);
+        const { code, message } = error as { code?: string; message?: string };
+        if (
+            code === "email_exists" ||
+            code === "user_already_exists" ||
+            /already (been )?registered/i.test(message ?? "")
+        ) {
+            return { ok: false, error: "An account with that email already exists" };
+        }
+        if (code === "weak_password") {
+            return { ok: false, error: message ?? "That password is too weak" };
+        }
+        return { ok: false, error: "Could not create the account" };
+    }
+
+    let roleError: string | undefined;
+    if (role !== null) {
+        try {
+            await grantAdminRole(supabase, address, role);
+        } catch (error) {
+            console.error("createAccountAction: grant failed", error);
+            roleError = "Account created, but the role could not be granted";
+        }
+    }
+
+    revalidatePath("/admin");
+    return { ok: true, userId, roleError };
 }

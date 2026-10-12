@@ -3,6 +3,8 @@ import { getVoiceStackSettings } from "@/db/appSettings";
 import { getAllPersonalitiesForAdmin } from "@/db/personalities";
 import { getRecentTurnMetrics } from "@/db/turnMetrics";
 import { listAdminRoles } from "@/db/adminRoles";
+import { listAccounts } from "@/db/accounts";
+import { createServiceClient } from "@/utils/supabase/service";
 import { requireAdmin, roleAllows } from "@/lib/admin";
 import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
 
@@ -18,11 +20,14 @@ export default async function AdminPage() {
     // page forgot to skip it.
     const isSuper = roleAllows(roles, "super_admin");
 
-    const [settings, turnMetrics, admins, personalities, ips, modes, styles] =
+    const [settings, turnMetrics, admins, accounts, personalities, ips, modes, styles] =
         await Promise.all([
             isSuper ? getVoiceStackSettings(supabase) : Promise.resolve({}),
             isSuper ? getRecentTurnMetrics(supabase) : Promise.resolve([]),
             isSuper ? listAdminRoles(supabase) : Promise.resolve([]),
+            // The one service-role read on this page: auth.users is not
+            // exposed to any key but that one. Only ever for a super admin.
+            isSuper ? listAccounts(createServiceClient()) : Promise.resolve([]),
             getAllPersonalitiesForAdmin(supabase),
             getAllIps(supabase),
             getAllModes(supabase),
@@ -36,6 +41,7 @@ export default async function AdminPage() {
             settings={settings}
             turnMetrics={turnMetrics}
             admins={admins}
+            accounts={accounts}
             personalities={personalities}
             ips={ips}
             modes={modes}

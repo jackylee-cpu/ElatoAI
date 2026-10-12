@@ -464,6 +464,15 @@ declare global {
 
     type AdminRole = "super_admin" | "content_admin";
 
+    /** A login account as the admin Accounts tab lists it. */
+    interface IAccountEntry {
+        user_id: string;
+        email: string;
+        created_at: string;
+        last_sign_in_at: string | null;
+        confirmed: boolean;
+    }
+
     /** One role held by one account, for the super admin's list. */
     interface IAdminRoleEntry {
         user_id: string;

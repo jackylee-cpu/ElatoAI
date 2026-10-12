@@ -8,6 +8,7 @@ import LatencyTab from "./LatencyTab";
 import CharactersTab from "./CharactersTab";
 import IpsTab from "./IpsTab";
 import AdminsTab from "./AdminsTab";
+import AccountsTab from "./AccountsTab";
 import { BackIcon } from "../Playground/icons";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ interface AdminDashboardProps {
     settings: IVoiceStackSettings;
     turnMetrics: ITurnMetric[];
     admins: IAdminRoleEntry[];
+    accounts: IAccountEntry[];
     personalities: IAdminPersonality[];
     ips: IIp[];
     modes: IMode[];
@@ -24,7 +26,7 @@ interface AdminDashboardProps {
 }
 
 const tabTriggerClass = cn(
-    "rounded-full py-2.5 text-sm font-medium text-gray-400 shadow-none",
+    "shrink-0 flex-1 rounded-full px-3 py-2.5 text-sm font-medium text-gray-400 shadow-none",
     "data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=active]:shadow-sm",
     "md:text-base"
 );
@@ -35,6 +37,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     settings,
     turnMetrics,
     admins,
+    accounts,
     personalities,
     ips,
     modes,
@@ -50,6 +53,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
               { value: "latency", label: "Latency" },
               { value: "characters", label: "Characters" },
               { value: "ips", label: "IPs" },
+              { value: "accounts", label: "Accounts" },
               { value: "admins", label: "Admins" },
           ]
         : [
@@ -77,7 +81,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="flex min-h-0 flex-1 flex-col"
             >
                 <TabsList
-                    className="mx-auto mb-5 grid h-auto w-full max-w-2xl rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)]"
+                    // A row that scrolls on a phone, where six labels do
+                    // not fit; an even grid once they do.
+                    className="scrollbar-hide mx-auto mb-5 flex h-auto w-full max-w-2xl justify-start overflow-x-auto rounded-full bg-white/90 p-1 shadow-[0_4px_16px_rgba(80,120,180,0.08)] md:grid"
                     style={{
                         gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
                     }}
@@ -106,6 +112,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </TabsContent>
                                 <TabsContent value="latency" className="mt-0">
                                     <LatencyTab rows={turnMetrics} />
+                                </TabsContent>
+                                <TabsContent value="accounts" className="mt-0">
+                                    <AccountsTab accounts={accounts} />
                                 </TabsContent>
                                 <TabsContent value="admins" className="mt-0">
                                     <AdminsTab
