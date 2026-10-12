@@ -99,6 +99,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length);
 void websocketSetup(const String& server_domain, int port, const String& path);
 String websocketExtraHeaders();
 extern bool websocketStarted;  // websocketSetup() has run; the socket now reconnects itself
+// The socket's token was refused, so it stops reconnecting until
+// startSessionIfReady() has a new one in its headers. Guarded by wsMutex.
+extern volatile bool websocketPaused;
 void networkTask(void *parameter);
 
 void transitionToIdle();

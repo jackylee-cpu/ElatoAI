@@ -67,6 +67,9 @@ extern const char *password_personal;
 extern String authTokenGlobal;
 extern uint32_t authTokenExpiresAtMs;  // millis() at which the token runs out
 extern volatile bool authTokenRejected; // the voice server closed us before "auth"
+// The backend answered 202: no account owns this board, so it waits to be
+// claimed with the websocket paused (R-36). Shown on the LED while idle.
+extern volatile bool deviceUnclaimed;
 
 // WebSocket server details
 extern const char *ws_server;

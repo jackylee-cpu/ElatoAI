@@ -366,6 +366,16 @@ void ledTask(void *parameter)
         switch (deviceState)
         {
         case IDLE:
+            if (deviceUnclaimed) {
+                // Nobody owns this board yet, so it cannot talk: a slow
+                // magenta blink, next to the steady magenta of WiFi setup.
+                if ((currentTime / 600) % 2) {
+                    setStaticColor(StaticColor::MAGENTA);
+                } else {
+                    turnOnLED();  // common anode: all HIGH is off
+                }
+                break;
+            }
             // Red instead of green once the battery is nearly flat. Only
             // boards with BOARD_LOW_BATTERY_VIA_VDD ever report low.
             setStaticColor(supplyLow() ? StaticColor::RED : StaticColor::GREEN);
