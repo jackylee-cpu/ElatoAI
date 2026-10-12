@@ -266,22 +266,23 @@ ARCH = """
   </div>
   <div class="down">▼ 每個殼打開自己品牌的網址</div>
   <div class="layer">
-    <div class="lt"><h3>網頁（現有 Next.js，一套）</h3><span>按網址判斷品牌，載入該品牌的設定</span></div>
-    <div class="pillrow"><span class="pill">主題 token：顏色、字體、圓角、圖示</span><span class="pill">文案與語言</span><span class="pill">功能開關</span><span class="pill">少數頁面的品牌版本：首頁、上手流程、角色頁</span></div>
+    <div class="lt"><h3>每個品牌一套後端（三套，先放同一台伺服器）</h3><span>同一組映像、同一個版本；只差環境變數、品牌包和資料庫內容</span></div>
+    <div class="pillrow"><span class="pill">網頁和管理後台（Next.js）</span><span class="pill">語音伺服器（pipecat）</span><span class="pill">Supabase：資料庫、帳號、儲存</span><span class="pill">自己的子網域和密鑰</span><span class="pill">OTA 各自提供</span></div>
   </div>
-  <div class="down">▼ 同一個後端</div>
+  <div class="down">▼ 三套共用</div>
   <div class="layer">
-    <div class="lt"><h3>共用平台</h3><span>新增 brands 表；設備出廠時寫入 brand_key</span></div>
-    <div class="pillrow"><span class="pill">Supabase：帳號、資料、RLS 按品牌分開</span><span class="pill">語音伺服器（pipecat）</span><span class="pill">IP Pack：角色、聲線、安全規則</span><span class="pill">OTA</span><span class="pill">管理後台</span></div>
+    <div class="lt"><h3>共用的只有工具和程式碼</h3><span>不共用任何客戶資料</span></div>
+    <div class="pillrow"><span class="pill">同一份程式碼和映像</span><span class="pill">同一個韌體：出廠寫入品牌和網址（R-35）</span><span class="pill">AI 供應商：同一個帳號，每個品牌一把 key</span><span class="pill">部署腳本、監控、備份工具</span></div>
   </div>
 </div>
 """
 
 DECISIONS = [
-    ("一套程式碼，三份品牌設定", "不做三份程式碼。品牌之間的差別放在設定裡：主題 token、文案、功能開關、允許的 IP，再加上少數幾頁的品牌版本。修一個 bug，三個 App 一起修好。"),
+    ("一套程式碼，部署三次", "不做三份程式碼，也不開品牌分支。品牌之間的差別只在三個地方：環境變數、品牌包（主題、文案、功能開關、允許的 IP）、資料庫內容（角色、知識庫）。程式碼裡不寫按品牌名稱的判斷。修一個 bug，三套一起修好。"),
     ("「不同 UI」做到哪一層", "顏色、字體、圖示、插畫、文案全部可換。版面只有首頁、上手流程、角色頁按品牌各寫一版，其餘頁面共用。如果某個客戶要完全不同的流程，再按頁加品牌版本。"),
-    ("品牌從設備來", "設備出廠時寫入 brand_key。一個品牌的 App 只能認領自己品牌的設備；快活的設備鎖定快活 IP（多 IP 設計第一期跳過的「固定 IP」要補上）。"),
-    ("帳號共用，資料按品牌分開", "Supabase 只有一個帳號池。同一個人如果有兩個品牌的玩具，用同一個 email 登入，每個 App 只顯示自己品牌的設備和記憶。"),
+    ("設備按品牌連到自己那套", "出廠工位寫入品牌和該品牌的伺服器網址（R-35）。網址是我們控制的固定子網域，搬機房只改 DNS。綁定票由品牌自己的伺服器發，設備只向自己那套認領，別的品牌的 App 綁不了它。快活的設備鎖定快活 IP。"),
+    ("資料和帳號按品牌完全分開", "每個品牌一個資料庫，不靠權限規則過濾。同一個人有兩個品牌的玩具，就在兩個 App 各有一個帳號。現有 elatoai.hkqft.com 改為 AI Buddy 那套，現有帳號和資料不動。"),
+    ("運維靠一個腳本", "migration、部署、冒煙測試、備份都由同一個腳本按品牌循環。每次發佈先上 AI Buddy（我們自己的品牌），觀察一天再上馬會和政協青年聯會，不用另開測試環境。"),
     ("各品牌的安全規則不同", "AI Buddy 兒童版用 3–6 歲尺度，並有家長鎖、家長同意、每日上限。快活和政協青年聯會版是成人：會員本人同意，記憶過濾敏感號碼；快活另外不提供貼士、只按知識庫回答。資料保留期按品牌設定（提案寫明「資料規則由馬會話事」）。"),
     ("網頁和殼之間有一份橋接清單", "殼由同事做，我們不控制殼的程式碼。網頁需要殼提供的能力（藍牙配網、原生登入、推送、麥克風、刪除帳號入口）寫成一份清單和 JS 介面，雙方按清單開發，三個品牌共用同一份。"),
     ("殼過審之後，介面隨時可改", "畫面在網頁裡，改介面不用重新送審。所以殼 1.0 在 12/11 前過審就行，網頁可以一直改到交付。"),
@@ -369,8 +370,8 @@ def build():
 </section>
 
 <section aria-labelledby="s-a">
-  <div class="sechead"><span class="eyebrow">討論</span><h2 id="s-a">三個 App 的架構</h2>
-    <p class="lede">建議做法：一套網頁、一個原生殼專案，三個品牌只是三份設定。三個客戶看到的是三個不同的 App，後面全部共用。</p></div>
+  <div class="sechead"><span class="eyebrow">已定 · 10/12</span><h2 id="s-a">三個 App 的架構</h2>
+    <p class="lede">一套程式碼部署三次。每個品牌有自己的資料庫、網頁和語音伺服器，三套用同一組映像和同一個版本，只差設定。殼由同事做，一個專案出三個 App。</p></div>
   {ARCH}
   <div class="dec">{decs}</div>
   <h3>上架規則：會影響架構和時間的幾條</h3>
