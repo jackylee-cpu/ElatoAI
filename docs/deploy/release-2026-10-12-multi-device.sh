@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SUPERSEDED -- never run. Use release-2026-10-12-p1-12.sh, which ships
+# everything here plus per-device memory (P1-12). Kept for the rollback notes.
+exit 1
 # Multi-device + sign-up release -- run ON THE SERVER.
 #
 # Ships three commits on top of ea960a0 (production runs bac24e9, and nothing
