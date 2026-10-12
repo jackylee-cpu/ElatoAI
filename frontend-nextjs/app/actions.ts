@@ -7,9 +7,7 @@ import { signWebVoiceToken } from "@/lib/deviceAuth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
-    addUserToDevice,
     claimDevice,
-    dbCheckUserCode,
     getUnclaimedDevices,
     unbindDevice,
 } from "@/db/devices";
@@ -131,29 +129,19 @@ export const signOutAction = async () => {
  * user from the session and do the write with the service role.
  */
 
-export const connectUserToDevice = async (userDeviceCode: string) => {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-        return false;
-    }
-    const service = createServiceClient();
+/**
+ * Development only: claiming from a list of every unowned board online, with
+ * no proof of holding it. In production a board is claimed with a bind ticket
+ * (/api/device_bind_ticket, P0-11), so these do nothing unless
+ * DEVICE_CLAIM_LIST=True.
+ */
+const claimListEnabled = () => process.env.DEVICE_CLAIM_LIST === "True";
 
-    // Codes get copied off a screen, so normalise once and use the same value
-    // for both the check and the write -- these used to disagree, which let a
-    // code with stray whitespace validate and then silently match no rows.
-    const code = userDeviceCode.trim().toUpperCase();
-
-    const isCodeValid = await dbCheckUserCode(service, code);
-    if (!isCodeValid) {
-        return false;
-    }
-
-    return await addUserToDevice(service, code, user.id);
-};
-
-/** Devices that are online but unowned, for the claim list in Settings. */
+/** Devices that are online but unowned, or null when the claim list is off. */
 export const listUnclaimedDevices = async () => {
+    if (!claimListEnabled()) {
+        return null;
+    }
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -163,10 +151,13 @@ export const listUnclaimedDevices = async () => {
 };
 
 /**
- * Bind a device to the signed-in account. The user id comes from the session,
- * never from the caller.
+ * Bind a device from the claim list to the signed-in account. The user id
+ * comes from the session, never from the caller.
  */
 export const claimDeviceAction = async (deviceId: string) => {
+    if (!claimListEnabled()) {
+        return false;
+    }
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {

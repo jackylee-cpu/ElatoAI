@@ -1,21 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 
-export const dbCheckUserCode = async (
-    supabase: SupabaseClient,
-    userCode: string,
-) => {
-    const { data, error } = await supabase
-        .from("devices")
-        .select("*")
-        .eq("user_code", userCode)
-        .maybeSingle();
-
-    if (error) {
-        throw error;
-    }
-    return !!data;
-};
-
 export const updateDevice = async (
     supabase: SupabaseClient,
     device: Partial<IDevice>,
@@ -30,26 +14,54 @@ export const updateDevice = async (
     }
 };
 
-export const addUserToDevice = async (
+/**
+ * Record a bind ticket for this account (supabase/migrations/
+ * 20261012170000_device_bind_tickets.sql). Returns when it expires, or null
+ * when the account has already asked for its quota this minute.
+ */
+export const issueBindTicket = async (
     supabase: SupabaseClient,
-    userCode: string,
     userId: string,
-) => {
-    const { data, error } = await supabase
-        .from("devices")
-        .update({ user_id: userId })
-        .eq("user_code", userCode)
-        .select("*")
-        .maybeSingle();
+    ticketHash: string,
+    ttlSeconds: number,
+    perMinute: number,
+): Promise<string | null> => {
+    const { data, error } = await supabase.rpc("issue_device_bind_ticket", {
+        p_user_id: userId,
+        p_ticket_hash: ticketHash,
+        p_ttl_seconds: ttlSeconds,
+        p_per_minute: perMinute,
+    });
+    if (error) {
+        throw error;
+    }
+    return data;
+};
 
-    return !error && !!data;
+export type TicketClaim = "claimed" | "already_yours" | "device_owned" | "ticket_invalid";
+
+/** Bind a board to its ticket's account; see claim_device_with_ticket for the answers. */
+export const claimDeviceWithTicket = async (
+    supabase: SupabaseClient,
+    deviceId: string,
+    ticketHash: string,
+): Promise<TicketClaim> => {
+    const { data, error } = await supabase.rpc("claim_device_with_ticket", {
+        p_device_id: deviceId,
+        p_ticket_hash: ticketHash,
+    });
+    if (error) {
+        throw error;
+    }
+    return data;
 };
 
 /**
- * Devices that have called home recently but nobody owns yet.
+ * Development only (DEVICE_CLAIM_LIST=True): devices that have called home
+ * recently but nobody owns yet, for claiming from Settings without a ticket.
  *
- * A board registers itself the first time it reaches generate_auth_token, so
- * this is what the owner picks from instead of typing a code. The time window
+ * Off in production. Anyone signed in could take any board on the list, so
+ * there a board is claimed only with a bind ticket (P0-11). The time window
  * keeps boards that were unplugged weeks ago out of the list.
  */
 export const getUnclaimedDevices = async (

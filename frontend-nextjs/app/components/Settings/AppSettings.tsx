@@ -2,7 +2,6 @@
 
 import {
     claimDeviceAction,
-    connectUserToDevice,
     listUnclaimedDevices,
     signOutAction,
     unbindDeviceAction,
@@ -111,11 +110,12 @@ const AppSettings: React.FC<AppSettingsProps> = ({
     const { toast } = useToast();
     const [devices, setDevices] = React.useState<BoundDevice[]>([]);
     const userFormRef = React.useRef<{ submitForm: () => void } | null>(null);
-    const [deviceCode, setDeviceCode] = React.useState("");
     const [error, setError] = React.useState("");
+    // Null when the claim list is off, as it is in production: there a board
+    // is added from the app, which hands it a bind ticket (P0-11).
     const [unclaimed, setUnclaimed] = React.useState<
-        { device_id: string; mac_address: string; user_code: string }[]
-    >([]);
+        { device_id: string; mac_address: string; user_code: string }[] | null
+    >(null);
     const [busyDeviceId, setBusyDeviceId] = React.useState<string | null>(null);
     // The device a parent pressed Unbind on, waiting for them to confirm.
     const [unbinding, setUnbinding] = React.useState<BoundDevice | null>(null);
@@ -140,23 +140,29 @@ const AppSettings: React.FC<AppSettingsProps> = ({
         loadDevices();
     }, [loadDevices]);
 
-    // A board registers itself the moment it gets online, so poll while the user
-    // is on this screen -- it should appear a few seconds after it joins their
-    // WiFi, without them having to reload. An account can own any number of
-    // boards, so this keeps going after the first one is claimed.
+    // Development only. A board registers itself the moment it gets online, so
+    // poll while the user is on this screen -- it should appear a few seconds
+    // after it joins their WiFi, without them having to reload. An account can
+    // own any number of boards, so this keeps going after the first one is
+    // claimed. With the list off the first answer is null and polling stops.
     React.useEffect(() => {
         let cancelled = false;
+        let timer: ReturnType<typeof setInterval> | undefined;
         const load = async () => {
             const devices = await listUnclaimedDevices();
-            if (!cancelled) {
-                // A server action can resolve to undefined -- in development
-                // whenever the poll lands mid-rebuild -- and `.length` on that
-                // took the whole settings panel down.
-                setUnclaimed(Array.isArray(devices) ? devices : []);
+            if (cancelled) return;
+            if (devices === null) {
+                clearInterval(timer);
+                setUnclaimed(null);
+                return;
             }
+            // A server action can resolve to undefined -- in development
+            // whenever the poll lands mid-rebuild -- and `.length` on that
+            // took the whole settings panel down.
+            setUnclaimed(Array.isArray(devices) ? devices : []);
         };
         load();
-        const timer = setInterval(load, 5000);
+        timer = setInterval(load, 5000);
         return () => {
             cancelled = true;
             clearInterval(timer);
@@ -172,7 +178,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
             return;
         }
         setError("");
-        setUnclaimed((devices) => devices.filter((d) => d.device_id !== deviceId));
+        setUnclaimed((devices) => devices && devices.filter((d) => d.device_id !== deviceId));
         devicesChanged();
     };
 
@@ -270,7 +276,13 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                         {devices.length > 0 ? "Add another device" : "Register your device"}
                     </Label>
                     <div className="flex flex-col gap-2">
-                        {unclaimed.length === 0 ? (
+                        {unclaimed === null ? (
+                            <div className="rounded-md border border-dashed border-gray-200 p-3 text-xs text-gray-500">
+                                Add a new device from the AI Buddy app: it finds the
+                                device over Bluetooth, gives it your WiFi and adds it
+                                to this account.
+                            </div>
+                        ) : unclaimed.length === 0 ? (
                             <div className="rounded-md border border-dashed border-gray-200 p-3 text-xs text-gray-500">
                                 <p className="font-medium text-gray-700">No new devices found yet.</p>
                                 <p className="mt-1">
@@ -307,40 +319,7 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                             ))
                         )}
                     </div>
-
-                    <div className="flex flex-row items-center gap-2 mt-2">
-                        <Input
-                            value={deviceCode}
-                            onChange={(e) =>
-                                setDeviceCode(
-                                    e.target.value.toUpperCase().replace(/[^A-Z2-9]/g, ""),
-                                )
-                            }
-                            placeholder="Or enter the device code"
-                            maxLength={6}
-                        />
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={deviceCode.length !== 6}
-                            onClick={async () => {
-                                const result = await connectUserToDevice(deviceCode);
-                                if (!result) {
-                                    setError("Error registering device");
-                                } else {
-                                    setError("");
-                                    setDeviceCode("");
-                                }
-                                devicesChanged();
-                            }}
-                        >
-                            Register
-                        </Button>
-                    </div>
-                    <p className="text-xs text-gray-400">
-                        {error ? <span className="text-red-500">{error}.</span> :
-                            "Enter a device code to add it to your account."}
-                    </p>
+                    {error && <p className="text-xs text-red-500">{error}.</p>}
                 </div>
                     <div className="flex flex-col gap-2 mt-2">
                         <Label className="text-sm font-medium text-gray-700">

@@ -42,6 +42,19 @@ export const deviceSecretMatches = (secret: string, storedHash: string) => {
         crypto.timingSafeEqual(presented, stored);
 };
 
+/**
+ * How a board gets an owner (P0-11). The signed-in app asks for a bind ticket
+ * and hands it to the board over Bluetooth with the WiFi password; the board
+ * presents it with its secret, and becomes that account's. 128 random bits
+ * keep it short enough for a Bluetooth write. Stored hashed, like the secret.
+ */
+export const BIND_TICKET_TTL_SECONDS = 5 * 60;
+export const BIND_TICKETS_PER_MINUTE = 5;
+
+export const newBindTicket = () => crypto.randomBytes(16).toString("base64url");
+
+export const hashBindTicket = (ticket: string) => hashDeviceSecret(ticket);
+
 const signingKey = () => {
     const key = process.env.DEVICE_JWT_SECRET;
     if (!key || key.length < 32) {
