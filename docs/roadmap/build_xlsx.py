@@ -51,13 +51,13 @@ for wk, dates, fac, we, key, accept in FACTORY:
         c.font = font(10.5, bold=(i == 5))
         c.alignment = CENTER if i <= 2 else WRAP
         c.border = B
-        if key:
+        if key and i >= 5:  # only the milestone and its acceptance criteria are highlighted
             c.fill = GATE
     ws.row_dimensions[r].height = max(24, 16 * max(lines(v, w) for v, w in zip(vals, widths)) + 8)
     r += 1
 
 r += 1
-for n in ["黃色行是關鍵節點：延誤的話，後面的日期會跟著推遲，請提早通知。",
+for n in ["黃色格是關鍵節點和驗收標準：延誤的話，後面的日期會跟著推遲，請提早通知。",
           "樣品寄出前請按「樣品測試項目」自檢；我方收到後 2 個工作天內回覆意見。"]:
     c = ws.cell(row=r, column=1, value=n)
     c.font = font(10, color="5B6474")
