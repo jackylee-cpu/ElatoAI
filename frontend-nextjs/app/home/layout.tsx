@@ -3,7 +3,8 @@ import { createClient } from "@/utils/supabase/server";
 import { Gamepad2, Settings, SlidersHorizontal } from "lucide-react";
 import { Metadata } from "next";
 import { getOpenGraphMetadata } from "@/lib/utils";
-import { getUserById } from "@/db/users";
+import { createUser, getUserById } from "@/db/users";
+import { defaultPersonalityId } from "@/lib/data";
 import { getAdminRoles } from "@/lib/admin";
 import { HomeShell } from "./HomeShell";
 
@@ -56,8 +57,17 @@ export default async function RootLayout({
 
     const dbUser = await getUserById(supabase, user.id);
 
+    // A new account has no public.users row yet: one that signed up without
+    // email confirmation, or one an admin created. Make it here rather than in
+    // page.tsx, which renders alongside this layout and so lost the race --
+    // the first visit bounced to /login and never reached /onboard.
     if (!dbUser) {
-        redirect("/login");
+        await createUser(supabase, user, {
+            personality_id:
+                user.user_metadata?.personality_id ?? defaultPersonalityId,
+            language_code: "en-US",
+        });
+        redirect("/onboard");
     }
 
     // Admin is a desktop page, so it goes in the sidebar only.

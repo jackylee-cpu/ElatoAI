@@ -1,8 +1,7 @@
-import { createUser, doesUserExist, getUserById } from "@/db/users";
+import { getUserById } from "@/db/users";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import Playground from "../components/Playground/PlaygroundComponent";
-import { defaultPersonalityId } from "@/lib/data";
 import { getAllPersonalities, getMyPersonalities } from "@/db/personalities";
 import { getAdminRoles } from "@/lib/admin";
 import { getAllIps } from "@/db/sessionOptions";
@@ -20,20 +19,6 @@ export default async function Home() {
 
     if (!user) {
         redirect("/login");
-    }
-
-    if (user) {
-        const userExists = await doesUserExist(supabase, user);
-        // await supabase.auth.signOut();
-        if (!userExists) {
-            // Create user if they don't exist
-            await createUser(supabase, user, {
-                personality_id:
-                    user?.user_metadata?.personality_id ?? defaultPersonalityId,
-                language_code: "en-US",
-            });
-            redirect("/onboard");
-        }
     }
 
     const [dbUser, allPersonalities, myPersonalities, ips, adminRoles] =

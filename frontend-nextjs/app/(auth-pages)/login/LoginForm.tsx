@@ -7,6 +7,7 @@ import { FaApple, FaFacebook, FaGoogle } from "react-icons/fa";
 import { SubmitButton } from "./submit-button";
 import { loginWithGoogle } from "../../components/GoogleLoginButton";
 import { defaultPersonalityId, defaultToyId } from "@/lib/data";
+import { authLink } from "../authLink";
 
 interface LoginFormProps {
   formAction: (formData: FormData) => Promise<void>;
@@ -176,7 +177,12 @@ export default function LoginForm({
 
         <p className="mt-6 text-center text-sm text-[#8B90A0] md:mt-8">
           Don&apos;t have an account?{" "}
-          <span className="font-semibold text-[#6B67FF]">Sign up</span>
+          <Link
+            href={authLink("/signup", toy_id, personality_id)}
+            className="font-semibold text-[#6B67FF] hover:text-[#4DA6FF]"
+          >
+            Sign up
+          </Link>
         </p>
       </div>
     </section>
