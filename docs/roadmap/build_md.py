@@ -23,7 +23,8 @@ def build(xlsx_name):
     a(f"> {VERSION}。**本檔由 `docs/roadmap/plan.py` 生成，請不要直接改。** 要改內容就改 plan.py，再執行 "
       "`python3 docs/roadmap/build.py`，會同時更新本檔、網頁版 `docs/roadmap/roadmap.html` 和給玩具廠的 Excel。")
     a(f"> 網頁版已發佈為 {ARTIFACT}（私人）。更新後用 Artifact 工具把 roadmap.html 以這個 url 重新發佈。")
-    a("> 任務進度以 `docs/production-readiness.xlsx` 為準（prod-readiness skill）；本檔的任務編號（P0-12、R-07…）對應那張表。")
+    a("> 三份文件的分工：本檔是計劃；`docs/project-schedule.xlsx` 每週一個里程碑，用來跟進時間；"
+      "任務細項和測試記錄在 `docs/production-readiness.xlsx`（prod-readiness skill），本檔的任務編號（P0-12、R-07…）對應那張表。")
     a("")
     a("## 概要")
     a("")
@@ -143,6 +144,7 @@ def build(xlsx_name):
     a("")
     a("## 相關檔案")
     a("")
+    a("- 每週里程碑跟進：`docs/project-schedule.xlsx`（每週一個里程碑，用戶在 Excel 手動更新狀態和實際完成日期；不要用腳本重建覆蓋）")
     a(f"- 給玩具廠的時間表：`docs/{xlsx_name}`（內地打不開 claude.ai，工廠只能用檔案）")
     a(f"- 網頁版：`docs/roadmap/roadmap.html`，發佈在 {ARTIFACT}")
     a("- 任務與測試記錄：`docs/production-readiness.xlsx`")

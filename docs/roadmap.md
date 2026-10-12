@@ -2,7 +2,7 @@
 
 > 草案 v0.4 · 2026-10-12。**本檔由 `docs/roadmap/plan.py` 生成，請不要直接改。** 要改內容就改 plan.py，再執行 `python3 docs/roadmap/build.py`，會同時更新本檔、網頁版 `docs/roadmap/roadmap.html` 和給玩具廠的 Excel。
 > 網頁版已發佈為 https://claude.ai/artifact/YAnTFphfm5YGNokm2JZZM9（私人）。更新後用 Artifact 工具把 roadmap.html 以這個 url 重新發佈。
-> 任務進度以 `docs/production-readiness.xlsx` 為準（prod-readiness skill）；本檔的任務編號（P0-12、R-07…）對應那張表。
+> 三份文件的分工：本檔是計劃；`docs/project-schedule.xlsx` 每週一個里程碑，用來跟進時間；任務細項和測試記錄在 `docs/production-readiness.xlsx`（prod-readiness skill），本檔的任務編號（P0-12、R-07…）對應那張表。
 
 ## 概要
 
@@ -475,6 +475,7 @@
 
 ## 相關檔案
 
+- 每週里程碑跟進：`docs/project-schedule.xlsx`（每週一個里程碑，用戶在 Excel 手動更新狀態和實際完成日期；不要用腳本重建覆蓋）
 - 給玩具廠的時間表：`docs/毛公仔打版與量產時間表_草案v0.4.xlsx`（內地打不開 claude.ai，工廠只能用檔案）
 - 網頁版：`docs/roadmap/roadmap.html`，發佈在 https://claude.ai/artifact/YAnTFphfm5YGNokm2JZZM9
 - 任務與測試記錄：`docs/production-readiness.xlsx`
