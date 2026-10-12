@@ -63,7 +63,7 @@ export default function MyInfoForm({
         selectedUser.supervisee_persona ?? ""
     );
     const [language, setLanguage] = useState(
-        selectedUser.language_code ?? "en-US"
+        selectedUser.language_code ?? "zh-HK"
     );
     // Empty until chosen. The voice server then uses its own default place,
     // and saving leaves the column NULL rather than writing a guess.

@@ -6,6 +6,7 @@
 #   "Let one account own any number of devices."
 #   "Split sign-up from login, and send a new account to onboarding."
 #   "Let a super admin create login accounts from the console."
+#   "Give new accounts Cantonese speech recognition by default."
 # The voice server is unchanged and is NOT redeployed. CI will still build a
 # fastapi image for this sha (the migrations folder changed); leave it unused.
 #
@@ -23,7 +24,7 @@
 #   STEP=3 RELEASE=... bash ...            # resume from a step
 #   STEP=5 LAST=5 RELEASE=... bash ...     # only the checks
 #
-# Order matters: new web app first, then the migration. The old web app reads
+# Order matters: new web app first, then the migrations. The old web app reads
 # the user through users_device_id_fkey, so its /home fails for every parent
 # once 20261009130000 drops users.device_id. The new one works on either schema.
 #
@@ -50,6 +51,8 @@ STEP="${STEP:-0}"
 LAST="${LAST:-5}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 MIGRATION=20261009130000_one_account_many_devices.sql
+# Only a column default; safe in any order, and re-runnable.
+LANGUAGE_DEFAULT=20261012120000_users_language_default_zh_hk.sql
 
 step() { [ "$1" -ge "$STEP" ] && [ "$1" -le "$LAST" ]; }
 say()  { printf '\n=== %s\n' "$*"; }
@@ -85,6 +88,7 @@ if step 0; then
     else
         echo "  no container $AUTH -- set AUTH=... to see the email-confirmation setting"
     fi
+    echo "  accounts on en-US (new ones get zh-HK after step 4; these keep en-US): $(q "select count(*) from public.users where language_code = 'en-US'")"
     echo "  users still pointing at a device (copied to CSV in step 2): $(has_column users device_id && q "select count(*) from public.users where device_id is not null" || echo "column already gone")"
     echo "  running frontend image (for rollback):"
     (cd "$FRONTEND_DIR" && docker compose -f docker-compose.ghcr.yml images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null \
@@ -97,7 +101,9 @@ if step 1; then
     git -C "$REPO" pull --ff-only origin main
     git -C "$REPO" merge-base --is-ancestor "$RELEASE" HEAD \
         || { echo "checkout does not contain $RELEASE"; exit 1; }
-    [ -f "$REPO/supabase/migrations/$MIGRATION" ] || { echo "  missing $MIGRATION -- wrong release?"; exit 1; }
+    for m in "$MIGRATION" "$LANGUAGE_DEFAULT"; do
+        [ -f "$REPO/supabase/migrations/$m" ] || { echo "  missing $m -- wrong release?"; exit 1; }
+    done
     git -C "$REPO" log --oneline -1
 fi
 
@@ -136,9 +142,10 @@ if step 3; then
 fi
 
 if step 4; then
-    say "4. Drop users.device_id"
+    say "4. Drop users.device_id; new accounts default to zh-HK"
     web_is_new || { echo "  the old web app is still serving -- not dropping the column"; exit 1; }
     apply "$MIGRATION"
+    apply "$LANGUAGE_DEFAULT"
 fi
 
 if step 5; then
@@ -150,6 +157,8 @@ if step 5; then
     has_column users device_id && bad "users.device_id still there" || ok "users.device_id dropped"
     [ "$(q "select to_regclass('public.devices_user_id_idx') is not null")" = "t" ] \
         && ok "devices_user_id_idx exists" || bad "devices_user_id_idx missing"
+    [ "$(q "select column_default from information_schema.columns where table_schema='public' and table_name='users' and column_name='language_code'")" = "'zh-HK'::text" ] \
+        && ok "users.language_code defaults to zh-HK" || bad "users.language_code default is not zh-HK"
     echo "  accounts with more than one device: $(q "select count(*) from (select user_id from public.devices where user_id is not null group by 1 having count(*) > 1) s")"
 
     for p in /signup /login; do
@@ -177,6 +186,10 @@ if step 5; then
       confirmation on  -> "Check your email"; the link, opened in the same
                           browser, lands on /onboard
       confirmation off -> straight to /onboard
+  - the new account's Settings -> My Info shows Cantonese; talking to a board
+    or the playground in Cantonese is understood (it was transcribed as English)
+  - accounts made before this release keep en-US. To move them all:
+      docker exec -i $DB psql -U postgres -d postgres -c "update public.users set language_code = 'zh-HK' where language_code = 'en-US'"
   - /signup with an existing address -> "already exists", no second account
   - super admin -> /admin -> Accounts lists logins; create one, sign in as it
     in a private window -> /onboard

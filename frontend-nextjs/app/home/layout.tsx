@@ -65,7 +65,6 @@ export default async function RootLayout({
         await createUser(supabase, user, {
             personality_id:
                 user.user_metadata?.personality_id ?? defaultPersonalityId,
-            language_code: "en-US",
         });
         redirect("/onboard");
     }

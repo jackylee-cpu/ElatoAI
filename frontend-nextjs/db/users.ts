@@ -5,9 +5,9 @@ export const createUser = async (
     user: User,
     userProps: Partial<IUser>,
 ) => {
-    // console.log("creating user", user, userProps);
-
-    //   return ;
+    // No language_code here: the signed-in client may not insert it, so a new
+    // account gets the column default, 'zh-HK' (migration 20261012120000).
+    // Settings changes it afterwards with an UPDATE, which is allowed.
     const { error } = await supabase.from("users").insert([
         {
             user_id: user.id,
