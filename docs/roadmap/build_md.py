@@ -101,6 +101,13 @@ def build(xlsx_name):
     for t, d in DECISIONS:
         a(f"- **{t}**：{d}")
     a("")
+    a("App 里程碑和驗收標準（也在工廠 Excel 的「App 開發與上架」工作表）：")
+    a("")
+    a("| 週 | 日期 | 里程碑 | 驗收標準 | 任務 |")
+    a("|---|---|---|---|---|")
+    for wk, date, name, accept, ids in APP_MILESTONES:
+        a(f"| {wk} | {date} | {cell(name)} | {cell(accept.replace(chr(10), '<br>'))} | {ids} |")
+    a("")
     a("上架規則：")
     a("")
     a("| 規則 | 內容 | 影響 |")

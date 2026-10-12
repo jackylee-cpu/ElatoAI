@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Factory timeline workbook: one simple weekly table plus the sample test sheet."""
-import sys, os
+import math, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from plan import FACTORY, FACTORY_TESTS, FACTORY_VERSION
+from plan import FACTORY, FACTORY_TESTS, FACTORY_VERSION, APP_MILESTONES
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -18,7 +18,7 @@ CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 def lines(text, width):
     """Wrapped line count: a CJK character takes about 2.2 width units at 10.5pt, ASCII about 1.1."""
     units = sum(2.2 if ord(ch) > 0x2E80 else 1.1 for ch in text)
-    return max(1, -(-int(units) // max(1, int(width - 2))))
+    return max(1, math.ceil(units / max(1, width - 2)))
 
 
 def font(size=10.5, bold=False, color="17202B"):
@@ -71,6 +71,37 @@ ws.sheet_properties.pageSetUpPr.fitToPage = True
 ws.page_setup.fitToWidth = 1
 ws.page_setup.fitToHeight = 0
 ws.print_title_rows = "4:4"
+
+a = wb.create_sheet("App 開發與上架")
+a.sheet_view.showGridLines = False
+a["A1"] = "App 開發與上架：里程碑和驗收標準"
+a["A1"].font = font(14, True)
+a["A2"] = "網頁 App 包在原生殼裡，三個品牌各一個 App。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
+a["A2"].font = font(10, color="5B6474")
+a.merge_cells("A1:D1"); a.merge_cells("A2:D2")
+ah = ["週次", "日期", "里程碑", "驗收標準（全部做到才算完成）"]
+aw = [8, 10, 24, 70]
+for i, (h, w) in enumerate(zip(ah, aw), start=1):
+    c = a.cell(row=4, column=i, value=h)
+    c.font = font(10.5, True, "FFFFFF"); c.fill = HEAD; c.alignment = CENTER; c.border = B
+    a.column_dimensions[c.column_letter].width = w
+ar = 5
+for wk, date, name, accept, _ids in APP_MILESTONES:
+    vals = [wk, date, name, accept]
+    for i, v in enumerate(vals, start=1):
+        c = a.cell(row=ar, column=i, value=v)
+        c.font = font(10.5, bold=(i == 3))
+        c.alignment = CENTER if i <= 2 else WRAP
+        c.border = B
+    n = sum(lines(x, aw[3]) for x in accept.split("\n"))
+    a.row_dimensions[ar].height = max(24, 16 * n + 8)
+    ar += 1
+a.freeze_panes = "A5"
+a.page_setup.orientation = "landscape"
+a.page_setup.paperSize = a.PAPERSIZE_A4
+a.sheet_properties.pageSetUpPr.fitToPage = True
+a.page_setup.fitToWidth = 1
+a.page_setup.fitToHeight = 0
 
 t = wb.create_sheet("樣品測試項目")
 t.sheet_view.showGridLines = False
