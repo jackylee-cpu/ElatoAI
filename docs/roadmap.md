@@ -482,7 +482,7 @@
 ## 相關檔案
 
 - 每週里程碑跟進：`docs/project-schedule.xlsx`（每週一個里程碑，用戶在 Excel 手動更新狀態和實際完成日期；不要用腳本重建覆蓋）
-- 給玩具廠的時間表：`docs/毛公仔打版與量產時間表_草案v0.4.xlsx`（內地打不開 claude.ai，工廠只能用檔案）
+- 給玩具廠的時間表：`docs/毛公仔打版與量產時間表_草案v0.5.xlsx`（內地打不開 claude.ai，工廠只能用檔案）
 - 網頁版：`docs/roadmap/roadmap.html`，發佈在 https://claude.ai/artifact/YAnTFphfm5YGNokm2JZZM9
 - 任務與測試記錄：`docs/production-readiness.xlsx`
 - 馬會提案：`~/Desktop/快活_香港賽馬會AI會員伴侶提案.pptx`（對馬會的文字不要寫「趕及新春」）
