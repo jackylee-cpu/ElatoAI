@@ -103,7 +103,10 @@ def build(xlsx_name):
     a("")
     a("軟件開發與測試（網頁、App、Tool call、RAG、後台、測試、UAT；也在工廠 Excel 的「軟件開發與測試」工作表）：")
     a("")
-    a("負責：「我方軟件」是用戶加 Claude；原生 App 殼由同事 Neo 負責。")
+    a("參與人：")
+    a("")
+    for name, role, duty in PEOPLE:
+        a(f"- **{name}**（{role}）：{duty}")
     a("")
     a("| 工作線 | 週次 | 完成 | 負責 | 內容 | 驗收標準 | 任務 |")
     a("|---|---|---|---|---|---|---|")

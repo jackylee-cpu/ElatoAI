@@ -2,7 +2,7 @@
 """Factory timeline workbook: one simple weekly table plus the sample test sheet."""
 import math, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from plan import FACTORY, FACTORY_TESTS, FACTORY_VERSION, SOFTWARE_PLAN
+from plan import FACTORY, FACTORY_TESTS, FACTORY_VERSION, SOFTWARE_PLAN, PEOPLE
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -64,6 +64,27 @@ for n in ["黃色格是關鍵節點和驗收標準。關鍵節點延誤的話，
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=7)
     r += 1
 
+r += 1
+ws.cell(row=r, column=1, value="參與人").font = font(12, True)
+r += 1
+for col, (c1, c2, h) in enumerate([(1, 2, "姓名"), (3, 3, "角色"), (4, 7, "負責")]):
+    c = ws.cell(row=r, column=c1, value=h)
+    c.font = font(10.5, True, "FFFFFF"); c.fill = HEAD; c.alignment = CENTER
+    for cc in range(c1, c2 + 1):
+        ws.cell(row=r, column=cc).fill = HEAD; ws.cell(row=r, column=cc).border = B
+    if c2 > c1:
+        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+for name, role, duty in PEOPLE:
+    r += 1
+    for c1, c2, v, bold, al in [(1, 2, name, True, CENTER), (3, 3, role, False, CENTER), (4, 7, duty, False, WRAP)]:
+        c = ws.cell(row=r, column=c1, value=v)
+        c.font = font(10.5, bold); c.alignment = al
+        for cc in range(c1, c2 + 1):
+            ws.cell(row=r, column=cc).border = B
+        if c2 > c1:
+            ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+    ws.row_dimensions[r].height = max(24, 16 * lines(duty, sum(widths[3:7])) + 8)
+
 ws.freeze_panes = "A5"
 ws.page_setup.orientation = "landscape"
 ws.page_setup.paperSize = ws.PAPERSIZE_A4
@@ -76,7 +97,7 @@ a = wb.create_sheet("軟件開發與測試")
 a.sheet_view.showGridLines = False
 a["A1"] = "軟件開發與測試：網頁、App、Tool call、RAG、後台、測試、UAT"
 a["A1"].font = font(14, True)
-a["A2"] = "網頁 App 包在原生殼裡，1/15 上架快活和政協青年聯會兩個 App（AI Buddy 隨玩具延後）。殼由 Neo 負責；設計、角色和 App 圖由 Navy 負責；「我方軟件」是網頁、後台、語音系統和韌體。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
+a["A2"] = "網頁 App 包在原生殼裡，1/15 上架快活和政協青年聯會兩個 App（AI Buddy 隨玩具延後）。殼由 Neo 負責；設計、角色和 App 圖由 Navy 負責；網頁、後台、語音系統和韌體由 Jacky 負責。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
 a["A2"].font = font(10, color="5B6474")
 a.merge_cells("A1:F1"); a.merge_cells("A2:F2")
 a["A2"].alignment = Alignment(wrap_text=True, vertical="top")
