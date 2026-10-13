@@ -103,10 +103,12 @@ def build(xlsx_name):
     a("")
     a("軟件開發與測試（網頁、App、Tool call、RAG、後台、測試、UAT；也在工廠 Excel 的「軟件開發與測試」工作表）：")
     a("")
-    a("| 工作線 | 週次 | 完成 | 內容 | 驗收標準 | 任務 |")
-    a("|---|---|---|---|---|---|")
-    for stream, weeks, finish, content, accept, ids in SOFTWARE_PLAN:
-        a(f"| {cell(stream)} | {weeks} | {finish} | {cell(content)} | {cell(accept)} | {ids} |")
+    a("負責：「我方軟件」是用戶加 Claude；原生 App 殼由同事 Neo 負責。")
+    a("")
+    a("| 工作線 | 週次 | 完成 | 負責 | 內容 | 驗收標準 | 任務 |")
+    a("|---|---|---|---|---|---|---|")
+    for stream, weeks, finish, content, accept, ids, owner in SOFTWARE_PLAN:
+        a(f"| {cell(stream)} | {weeks} | {finish} | {cell(owner)} | {cell(content)} | {cell(accept)} | {ids} |")
     a("")
     a("上架規則：")
     a("")

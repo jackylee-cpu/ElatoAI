@@ -76,11 +76,11 @@ a = wb.create_sheet("軟件開發與測試")
 a.sheet_view.showGridLines = False
 a["A1"] = "軟件開發與測試：網頁、App、Tool call、RAG、後台、測試、UAT"
 a["A1"].font = font(14, True)
-a["A2"] = "網頁 App 包在原生殼裡，三個品牌各一個 App、各一套系統。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
+a["A2"] = "網頁 App 包在原生殼裡，三個品牌各一個 App、各一套系統。殼由 Neo 負責；「我方軟件」是網頁、後台、語音系統和韌體。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
 a["A2"].font = font(10, color="5B6474")
-a.merge_cells("A1:E1"); a.merge_cells("A2:E2")
-ah = ["工作線", "週次", "完成日期", "內容", "驗收標準（全部做到才算完成）"]
-aw = [16, 10, 10, 30, 64]
+a.merge_cells("A1:F1"); a.merge_cells("A2:F2")
+ah = ["工作線", "週次", "完成日期", "負責", "內容", "驗收標準（全部做到才算完成）"]
+aw = [16, 10, 10, 16, 28, 60]
 for i, (h, w) in enumerate(zip(ah, aw), start=1):
     c = a.cell(row=4, column=i, value=h)
     c.font = font(10.5, True, "FFFFFF"); c.fill = HEAD; c.alignment = CENTER; c.border = B
@@ -90,19 +90,19 @@ group_start, group_name = 5, None
 def close_group(end):
     if group_name and end > group_start:
         a.merge_cells(start_row=group_start, start_column=1, end_row=end, end_column=1)
-for stream, weeks, finish, content, accept, _ids in SOFTWARE_PLAN:
+for stream, weeks, finish, content, accept, _ids, owner in SOFTWARE_PLAN:
     if stream != group_name:
         close_group(ar - 1)
         group_start, group_name = ar, stream
-    vals = [stream, weeks, finish, content, accept]
+    vals = [stream, weeks, finish, owner, content, accept]
     for i, v in enumerate(vals, start=1):
         c = a.cell(row=ar, column=i, value=v)
         c.font = font(10.5, bold=(i in (1, 3)))
-        c.alignment = CENTER if i <= 3 else WRAP
+        c.alignment = CENTER if i <= 4 else WRAP
         c.border = B
-        if i == 5:
+        if i == 6:
             c.fill = GATE
-    a.row_dimensions[ar].height = max(24, 16 * max(lines(content, aw[3]), lines(accept, aw[4])) + 8)
+    a.row_dimensions[ar].height = max(24, 16 * max(lines(owner, aw[3]), lines(content, aw[4]), lines(accept, aw[5])) + 8)
     ar += 1
 close_group(ar - 1)
 a.freeze_panes = "A5"
