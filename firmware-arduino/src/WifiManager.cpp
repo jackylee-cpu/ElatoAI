@@ -1032,7 +1032,7 @@ void WIFIMANAGER::attachUI() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOUR ELATO 😊</title>
+    <title>AI Buddy</title>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -1214,7 +1214,7 @@ void WIFIMANAGER::attachUI() {
 <body>
     <div class="container">
         <div class="card">
-            <h1>YOUR ELATO DEVICE 😊</h1>
+            <h1>AI Buddy</h1>
             <div id="status"></div>
             <button onclick="scanNetworks()">Scan for Networks</button>
             <button onclick="showConnectModal()">Manual Connect</button>
