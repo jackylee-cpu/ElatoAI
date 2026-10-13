@@ -3,10 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Eye, EyeOff, Lock, Mail } from "lucide-react";
-import { FaApple, FaFacebook, FaGoogle } from "react-icons/fa";
 import { SubmitButton } from "./submit-button";
-import { loginWithGoogle } from "../../components/GoogleLoginButton";
-import { defaultPersonalityId, defaultToyId } from "@/lib/data";
 import { authLink } from "../authLink";
 
 interface LoginFormProps {
@@ -14,21 +11,16 @@ interface LoginFormProps {
   message?: string;
   toy_id?: string;
   personality_id?: string;
-  isGoogleOAuthEnabled: boolean;
 }
 
 const fieldClass =
   "h-12 w-full rounded-2xl border border-[#E8EAF0] bg-white pl-11 pr-4 text-[15px] text-[#1A1C2B] outline-none placeholder:text-[#B0B5C3] transition focus:border-[#6B67FF]/45 focus:shadow-[0_0_0_4px_rgba(107,103,255,0.10)]";
-
-const socialClass =
-  "flex h-11 items-center justify-center gap-1.5 rounded-2xl border border-[#E8EAF0] bg-white text-[11px] font-medium text-[#1A1C2B] sm:text-xs";
 
 export default function LoginForm({
   formAction,
   message,
   toy_id,
   personality_id,
-  isGoogleOAuthEnabled,
 }: LoginFormProps) {
   const [showPassword, setShowPassword] = useState(false);
 
@@ -143,37 +135,6 @@ export default function LoginForm({
             <span className="font-medium text-[#1A1C2B]">content</span>
           </p>
         )}
-
-        <div className="my-5 flex items-center gap-3">
-          <div className="h-px flex-1 bg-[#E8EAF0]" />
-          <span className="shrink-0 text-xs text-[#9CA3AF]">Or continue with</span>
-          <div className="h-px flex-1 bg-[#E8EAF0]" />
-        </div>
-
-        <div className="grid grid-cols-3 gap-2">
-          <button type="button" disabled className={`${socialClass} opacity-40`} title="Coming soon">
-            <FaApple className="h-3.5 w-3.5" />
-            Apple
-          </button>
-          <button
-            type="button"
-            disabled={!isGoogleOAuthEnabled}
-            onClick={() =>
-              loginWithGoogle(
-                toy_id ?? defaultToyId,
-                personality_id ?? defaultPersonalityId
-              )
-            }
-            className={`${socialClass} hover:bg-[#F8F9FB] disabled:opacity-40`}
-          >
-            <FaGoogle className="h-3.5 w-3.5 text-[#EA4335]" />
-            Google
-          </button>
-          <button type="button" disabled className={`${socialClass} opacity-40`} title="Coming soon">
-            <FaFacebook className="h-3.5 w-3.5 text-[#1877F2]" />
-            Facebook
-          </button>
-        </div>
 
         <p className="mt-6 text-center text-sm text-[#8B90A0] md:mt-8">
           Don&apos;t have an account?{" "}

@@ -15,7 +15,6 @@ interface LoginProps {
 export default async function Login({ searchParams }: LoginProps) {
   const toy_id = searchParams?.toy_id as string | undefined;
   const personality_id = searchParams?.personality_id as string | undefined;
-  const isGoogleOAuthEnabled = process.env.GOOGLE_OAUTH === "True";
   const message =
     typeof searchParams?.message === "string"
       ? searchParams.message
@@ -49,7 +48,6 @@ export default async function Login({ searchParams }: LoginProps) {
         message={message}
         toy_id={toy_id}
         personality_id={personality_id}
-        isGoogleOAuthEnabled={isGoogleOAuthEnabled}
       />
     </article>
   );
