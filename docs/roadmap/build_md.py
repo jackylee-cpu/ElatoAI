@@ -101,12 +101,12 @@ def build(xlsx_name):
     for t, d in DECISIONS:
         a(f"- **{t}**：{d}")
     a("")
-    a("App 里程碑和驗收標準（也在工廠 Excel 的「App 開發與上架」工作表）：")
+    a("軟件開發與測試（網頁、App、Tool call、RAG、後台、測試、UAT；也在工廠 Excel 的「軟件開發與測試」工作表）：")
     a("")
-    a("| 週 | 日期 | 里程碑 | 驗收標準 | 任務 |")
-    a("|---|---|---|---|---|")
-    for wk, date, name, accept, ids in APP_MILESTONES:
-        a(f"| {wk} | {date} | {cell(name)} | {cell(accept.replace(chr(10), '<br>'))} | {ids} |")
+    a("| 工作線 | 週次 | 完成 | 內容 | 驗收標準 | 任務 |")
+    a("|---|---|---|---|---|---|")
+    for stream, weeks, finish, content, accept, ids in SOFTWARE_PLAN:
+        a(f"| {cell(stream)} | {weeks} | {finish} | {cell(content)} | {cell(accept)} | {ids} |")
     a("")
     a("上架規則：")
     a("")

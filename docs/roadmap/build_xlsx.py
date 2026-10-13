@@ -2,7 +2,7 @@
 """Factory timeline workbook: one simple weekly table plus the sample test sheet."""
 import math, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from plan import FACTORY, FACTORY_TESTS, FACTORY_VERSION, APP_MILESTONES
+from plan import FACTORY, FACTORY_TESTS, FACTORY_VERSION, SOFTWARE_PLAN
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -72,36 +72,46 @@ ws.page_setup.fitToWidth = 1
 ws.page_setup.fitToHeight = 0
 ws.print_title_rows = "4:4"
 
-a = wb.create_sheet("App 開發與上架")
+a = wb.create_sheet("軟件開發與測試")
 a.sheet_view.showGridLines = False
-a["A1"] = "App 開發與上架：里程碑和驗收標準"
+a["A1"] = "軟件開發與測試：網頁、App、Tool call、RAG、後台、測試、UAT"
 a["A1"].font = font(14, True)
-a["A2"] = "網頁 App 包在原生殼裡，三個品牌各一個 App。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
+a["A2"] = "網頁 App 包在原生殼裡，三個品牌各一個 App、各一套系統。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
 a["A2"].font = font(10, color="5B6474")
-a.merge_cells("A1:D1"); a.merge_cells("A2:D2")
-ah = ["週次", "日期", "里程碑", "驗收標準（全部做到才算完成）"]
-aw = [8, 10, 24, 70]
+a.merge_cells("A1:E1"); a.merge_cells("A2:E2")
+ah = ["工作線", "週次", "完成日期", "內容", "驗收標準（全部做到才算完成）"]
+aw = [16, 10, 10, 30, 64]
 for i, (h, w) in enumerate(zip(ah, aw), start=1):
     c = a.cell(row=4, column=i, value=h)
     c.font = font(10.5, True, "FFFFFF"); c.fill = HEAD; c.alignment = CENTER; c.border = B
     a.column_dimensions[c.column_letter].width = w
 ar = 5
-for wk, date, name, accept, _ids in APP_MILESTONES:
-    vals = [wk, date, name, accept]
+group_start, group_name = 5, None
+def close_group(end):
+    if group_name and end > group_start:
+        a.merge_cells(start_row=group_start, start_column=1, end_row=end, end_column=1)
+for stream, weeks, finish, content, accept, _ids in SOFTWARE_PLAN:
+    if stream != group_name:
+        close_group(ar - 1)
+        group_start, group_name = ar, stream
+    vals = [stream, weeks, finish, content, accept]
     for i, v in enumerate(vals, start=1):
         c = a.cell(row=ar, column=i, value=v)
-        c.font = font(10.5, bold=(i == 3))
-        c.alignment = CENTER if i <= 2 else WRAP
+        c.font = font(10.5, bold=(i in (1, 3)))
+        c.alignment = CENTER if i <= 3 else WRAP
         c.border = B
-    n = sum(lines(x, aw[3]) for x in accept.split("\n"))
-    a.row_dimensions[ar].height = max(24, 16 * n + 8)
+        if i == 5:
+            c.fill = GATE
+    a.row_dimensions[ar].height = max(24, 16 * max(lines(content, aw[3]), lines(accept, aw[4])) + 8)
     ar += 1
+close_group(ar - 1)
 a.freeze_panes = "A5"
 a.page_setup.orientation = "landscape"
 a.page_setup.paperSize = a.PAPERSIZE_A4
 a.sheet_properties.pageSetUpPr.fitToPage = True
 a.page_setup.fitToWidth = 1
 a.page_setup.fitToHeight = 0
+a.print_title_rows = "4:4"
 
 t = wb.create_sheet("樣品測試項目")
 t.sheet_view.showGridLines = False
