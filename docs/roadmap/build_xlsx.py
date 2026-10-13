@@ -83,7 +83,7 @@ for name, role, duty in PEOPLE:
             ws.cell(row=r, column=cc).border = B
         if c2 > c1:
             ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
-    ws.row_dimensions[r].height = max(24, 16 * lines(duty, sum(widths[3:7])) + 8)
+    ws.row_dimensions[r].height = max(24, 16 * max(lines(duty, sum(widths[3:7])), lines(role, widths[2])) + 8)
 
 ws.freeze_panes = "A5"
 ws.page_setup.orientation = "landscape"
