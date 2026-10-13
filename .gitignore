@@ -4,3 +4,9 @@ local.md
 
 # Backups the prod-readiness tracker writes before each change.
 docs/.*.bak.xlsx
+
+# Local experiments, not part of the product
+experiments/
+
+# Personal copy of the factory timeline
+docs/AI Buddy毛公仔打版與量產時間表_草案*.xlsx
