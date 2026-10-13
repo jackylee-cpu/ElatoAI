@@ -18,7 +18,7 @@ CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 def lines(text, width):
     """Wrapped line count: a CJK character takes about 2.2 width units at 10.5pt, ASCII about 1.1."""
     units = sum(2.2 if ord(ch) > 0x2E80 else 1.1 for ch in text)
-    return max(1, math.ceil(units / max(1, width - 2)))
+    return max(1, math.ceil(units / max(1, width - 4)))
 
 
 def font(size=10.5, bold=False, color="17202B"):
@@ -30,8 +30,8 @@ ws.title = "時間表"
 ws.sheet_view.showGridLines = False
 ws["A1"] = "毛公仔打版與量產時間表（草案）"
 ws["A1"].font = font(16, True)
-ws["A2"] = (f"目標：2027 年 1 月 15 日量產完成出貨 · 草案 {FACTORY_VERSION} · 2026-10-12 · "
-            "款式 A 共 2,500 隻（兩個造型）／B 500 隻／C 數量另行通知")
+ws["A2"] = (f"目標：2027 年 1 月 15 日量產完成出貨 · 草案 {FACTORY_VERSION} · 2026-10-13 · "
+            "款式 A 共 2,500 隻（兩個造型）／B 500 隻；AI Buddy 款 1/15 後另行安排")
 ws["A2"].font = font(10, color="5B6474")
 ws.merge_cells("A1:G1"); ws.merge_cells("A2:G2")
 
@@ -76,9 +76,11 @@ a = wb.create_sheet("軟件開發與測試")
 a.sheet_view.showGridLines = False
 a["A1"] = "軟件開發與測試：網頁、App、Tool call、RAG、後台、測試、UAT"
 a["A1"].font = font(14, True)
-a["A2"] = "網頁 App 包在原生殼裡，三個品牌各一個 App、各一套系統。殼由 Neo 負責；「我方軟件」是網頁、後台、語音系統和韌體。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
+a["A2"] = "網頁 App 包在原生殼裡，1/15 上架快活和政協青年聯會兩個 App（AI Buddy 隨玩具延後）。殼由 Neo 負責；設計、角色和 App 圖由 Navy 負責；「我方軟件」是網頁、後台、語音系統和韌體。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
 a["A2"].font = font(10, color="5B6474")
 a.merge_cells("A1:F1"); a.merge_cells("A2:F2")
+a["A2"].alignment = Alignment(wrap_text=True, vertical="top")
+a.row_dimensions[2].height = 30
 ah = ["工作線", "週次", "完成日期", "負責", "內容", "驗收標準（全部做到才算完成）"]
 aw = [16, 10, 10, 16, 28, 60]
 for i, (h, w) in enumerate(zip(ah, aw), start=1):
