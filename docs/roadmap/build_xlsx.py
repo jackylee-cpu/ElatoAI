@@ -33,10 +33,11 @@ ws["A1"].font = font(16, True)
 ws["A2"] = (f"目標：2027 年 1 月 15 日量產完成出貨 · 草案 {FACTORY_VERSION} · 2026-10-12 · "
             "款式 A 共 2,500 隻（兩個造型）／B 500 隻／C 數量另行通知")
 ws["A2"].font = font(10, color="5B6474")
-ws.merge_cells("A1:F1"); ws.merge_cells("A2:F2")
+ws.merge_cells("A1:G1"); ws.merge_cells("A2:G2")
 
-heads = ["週次", "日期", "玩具廠", "我方（電路板、韌體、App）", "關鍵節點", "驗收標準"]
-widths = [8, 14, 30, 36, 20, 40]
+heads = ["週次", "日期", "關鍵節點", "玩具廠", "驗收標準（玩具廠）", "我方（電路板、韌體、App）", "驗收標準（我方）"]
+widths = [8, 14, 18, 24, 30, 30, 36]
+HIGHLIGHT = (3, 5, 7)  # milestone and the two acceptance columns
 for i, (h, w) in enumerate(zip(heads, widths), start=1):
     c = ws.cell(row=4, column=i, value=h)
     c.font = font(10.5, True, "FFFFFF"); c.fill = HEAD; c.alignment = CENTER; c.border = B
@@ -44,24 +45,23 @@ for i, (h, w) in enumerate(zip(heads, widths), start=1):
 ws.row_dimensions[4].height = 22
 
 r = 5
-for wk, dates, fac, we, key, accept in FACTORY:
-    vals = [wk, dates, fac, we, key, accept]
+for vals in FACTORY:
     for i, v in enumerate(vals, start=1):
         c = ws.cell(row=r, column=i, value=v)
-        c.font = font(10.5, bold=(i == 5))
+        c.font = font(10.5, bold=(i == 3))
         c.alignment = CENTER if i <= 2 else WRAP
         c.border = B
-        if key and i >= 5:  # only the milestone and its acceptance criteria are highlighted
+        if v and i in HIGHLIGHT:
             c.fill = GATE
     ws.row_dimensions[r].height = max(24, 16 * max(lines(v, w) for v, w in zip(vals, widths)) + 8)
     r += 1
 
 r += 1
-for n in ["黃色格是關鍵節點和驗收標準：延誤的話，後面的日期會跟著推遲，請提早通知。",
+for n in ["黃色格是關鍵節點和驗收標準。關鍵節點延誤的話，後面的日期會跟著推遲，請提早通知。",
           "樣品寄出前請按「樣品測試項目」自檢；我方收到後 2 個工作天內回覆意見。"]:
     c = ws.cell(row=r, column=1, value=n)
     c.font = font(10, color="5B6474")
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=7)
     r += 1
 
 ws.freeze_panes = "A5"
