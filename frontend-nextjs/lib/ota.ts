@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { inRollout } from "./otaRollout";
 
 /** The token in an `Authorization: Bearer <token>` header, or null. */
 export const bearerToken = (req: Request): string | null => {
@@ -39,12 +40,18 @@ export const parseFirmwareReport = (value: unknown): FirmwareReport | null => {
 };
 
 /**
- * Record what the board reported on its devices row, and say whether it should
- * install the current release for its board.
+ * Record what the board reported, and say whether it should install the
+ * current release for its board.
  *
- * It should not when there is no current release, it already runs it, or it
- * rolled back from that very version once -- otherwise it would download,
- * roll back and download again on every boot.
+ * It should not when there is no current release, it already runs it, it
+ * rolled back from that very version once (otherwise it would download, roll
+ * back and download again on every boot), the release is paused, or the
+ * release has not reached this board yet (lib/otaRollout.ts).
+ *
+ * The report goes on the devices row and against the releases this board was
+ * offered (firmware_rollout_devices); every offer is counted there too. An
+ * offer that cannot be counted is not made: the counts are what a staged
+ * rollout is judged on.
  */
 export const recordReportAndDecide = async (
     supabase: SupabaseClient,
@@ -68,23 +75,45 @@ export const recordReportAndDecide = async (
         .from("devices")
         .update(update)
         .eq("device_id", deviceId)
-        .select("ota_failed_version")
+        .select("mac_address, ota_failed_version")
         .maybeSingle();
     if (reportError) {
         throw new Error(reportError.message);
     }
 
+    const { error: noteError } = await supabase.rpc("ota_note_report", {
+        p_device_id: deviceId,
+        p_board: report.board,
+        p_version: report.version,
+        p_failed_version: report.failedVersion,
+    });
+    if (noteError) {
+        throw new Error(noteError.message);
+    }
+
     const { data: release, error } = await supabase
         .from("firmware_releases")
-        .select("release_id, version, sha256, size_bytes")
+        .select("release_id, version, sha256, size_bytes, rollout_percent, rollout_macs, paused_at")
         .eq("board", report.board)
         .eq("is_current", true)
         .maybeSingle();
     if (error) {
         throw new Error(error.message);
     }
-    if (!release || release.version === report.version || release.version === row?.ota_failed_version) {
+    if (!release || !row
+        || release.version === report.version
+        || release.version === row.ota_failed_version
+        || release.paused_at
+        || !inRollout(release, row.mac_address)) {
         return { update: false };
+    }
+
+    const { error: offerError } = await supabase.rpc("ota_note_offer", {
+        p_release_id: release.release_id,
+        p_device_id: deviceId,
+    });
+    if (offerError) {
+        throw new Error(offerError.message);
     }
     return {
         update: true,

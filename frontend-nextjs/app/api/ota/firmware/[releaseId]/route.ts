@@ -11,7 +11,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * Served from here rather than as a storage URL: the bucket stays private,
  * the board talks to one host with one CA bundle, and its token travels in a
  * header instead of a query string. Only the current release of a board is
- * served -- an old image is not something a board should be talked into.
+ * served -- an old image is not something a board should be talked into --
+ * and not while it is paused, so a board offered it just before the pause
+ * stays where it is.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ releaseId: string }> }) {
     if (!verifyDeviceToken(bearerToken(req))) {
@@ -29,6 +31,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ releaseI
         .select("storage_path, size_bytes")
         .eq("release_id", releaseId)
         .eq("is_current", true)
+        .is("paused_at", null)
         .maybeSingle();
     if (!release) {
         return NextResponse.json({ error: "Not found" }, { status: 404 });
