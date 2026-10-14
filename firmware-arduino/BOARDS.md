@@ -380,6 +380,10 @@ How it warns:
 - **Timing.** The reminder waits for the device to be idle, so it never talks
   over the toy.
 - **After a brownout.** A brownout reset gives one reminder on the next boot.
+- **In the app (R-41).** The same low state goes to the voice server as
+  `{"type":"power","low":...}` once per session after "auth" and on every
+  change (`reportPower()` in `src/Audio.cpp`); the server writes it to
+  `devices.battery_low`, and the app shows the last report with its time.
 
 Verified 2026-10-06 with `SUPPLY_LOW_RATIO_OVERRIDE=1.05f`, which forces the
 low state: the reminder played after the greeting turn ended, and the LED was

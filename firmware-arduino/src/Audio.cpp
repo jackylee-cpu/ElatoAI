@@ -8,6 +8,7 @@
 #include "IoExpander.h"
 #include "LEDHandler.h"
 #include "SupplyMonitor.h"
+#include "Battery.h"
 #if BOARD_MIC_DOWNSAMPLE_3_2
 #include "Downsample.h"
 #endif
@@ -1364,6 +1365,12 @@ void micTask(void *parameter) {
 // library does not hand the close code up, so this is how it shows.
 static bool wsOpen = false;
 static bool wsAuthed = false;
+// What reportPower() last told the server this session.
+static bool powerSent = false;
+static bool powerSentLow = false;
+static int powerSentPercent = -1;
+static bool powerSentCharging = false;
+static unsigned long powerSentAt = 0;
 
 // WEBSOCKET EVENTS
 // networkTask -> webSocket.loop() -> webSocketEvent()
@@ -1442,6 +1449,8 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         // auth messages
         if (strcmp((char*)type.c_str(), "auth") == 0) {
             wsAuthed = true;
+            // A new session on the server: reportPower() says it again.
+            powerSent = false;
             // as<float>() on a missing key yields 0, and a factor of 0 makes
             // PitchShiftFixedOutput emit one sample of the grain buffer over
             // and over -- a constant tone at full volume, which is exactly the
@@ -1867,6 +1876,62 @@ static void processPushToTalk() {
     }
 }
 
+// The battery state the app shows (R-41): sent once per session after "auth",
+// then again whenever it changes, so the server's copy is never older than the
+// last time the board was awake. Boards that can measure the cell send a
+// percentage; the Spotpear board can only say "nearly empty" (SupplyMonitor).
+// Boards with neither send nothing, and the app shows no battery.
+// Runs on networkTask with wsMutex held.
+
+// A percentage that drifts by a point or two is not news; a sample every few
+// seconds would otherwise be a write to the database each time.
+constexpr int kPowerPercentStep = 5;
+constexpr unsigned long kPowerMinGapMs = 60UL * 1000;
+constexpr int kPowerLowPercent = 15;
+
+static void reportPower() {
+    if (!wsAuthed || !webSocket.isConnected()) return;
+#if BOARD_HAS_BATTERY
+    if (!batteryPresent()) return;
+    const int percent = batteryPercent();
+    const bool charging = batteryCharging();
+    const bool low = !charging && percent <= kPowerLowPercent;
+#elif BOARD_LOW_BATTERY_VIA_VDD
+    const int percent = -1;
+    const bool charging = false;
+    const bool low = supplyLow();
+#else
+    // No battery sense of any kind: nothing to report.
+    const int percent = -1;
+    const bool charging = false;
+    const bool low = false;
+    return;
+#endif
+    if (powerSent) {
+        const bool flipped = low != powerSentLow || charging != powerSentCharging;
+        const bool moved = percent >= 0 && abs(percent - powerSentPercent) >= kPowerPercentStep;
+        if (!flipped && !(moved && millis() - powerSentAt >= kPowerMinGapMs)) return;
+    }
+
+    JsonDocument doc;
+    doc["type"] = "power";
+    doc["low"] = low;
+    if (percent >= 0) {
+        doc["percent"] = percent;
+        doc["charging"] = charging;
+    }
+    String out;
+    serializeJson(doc, out);
+    webSocket.sendTXT(out);
+    Serial.printf("[WSc] power: %s\n", out.c_str());
+
+    powerSent = true;
+    powerSentLow = low;
+    powerSentPercent = percent;
+    powerSentCharging = charging;
+    powerSentAt = millis();
+}
+
 // networkTask -> webSocket.loop()
 void networkTask(void *parameter) {
     int64_t lastServicedAt = esp_timer_get_time();
@@ -1888,6 +1953,7 @@ void networkTask(void *parameter) {
         }
 
         webSocket.loop();
+        reportPower();
         xSemaphoreGive(wsMutex);
 
         vTaskDelay(1);

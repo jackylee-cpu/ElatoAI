@@ -25,6 +25,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams  # noqa:
 
 import app_settings  # noqa: E402
 import device_auth
+import device_power
 import device_wifi
 import session_content
 from bot import create_esp32_auth_message, run_bot_session
@@ -265,7 +266,10 @@ def create_esp32_transport(websocket: WebSocket, mac: str | None) -> Esp32Websoc
             audio_out_sample_rate=AUDIO_OUTPUT_SAMPLE_RATE,
             serializer=RawPCMFrameSerializer(
                 input_sample_rate=ESP32_INPUT_SAMPLE_RATE,
-                on_control=lambda message: device_wifi.handle_device_message(mac, message),
+                on_control=lambda message: (
+                    device_wifi.handle_device_message(mac, message)
+                    or device_power.handle_device_message(mac, message)
+                ),
             ),
         ),
     )

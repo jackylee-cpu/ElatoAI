@@ -8,8 +8,10 @@ import AddDevice from "./AddDevice";
 import { AccountAvatar } from "./AccountAvatar";
 import { EmojiComponent } from "../Playground/EmojiImage";
 import { cn, getPersonalityAvatarSrc } from "@/lib/utils";
+import type { DeviceBattery } from "@/lib/deviceBattery";
+import { LowBatteryBadge } from "./BatteryStatus";
 
-type AccountDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code">;
+type AccountDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code"> & DeviceBattery;
 
 interface AccountDashboardProps {
     currentUser: IUser;
@@ -94,7 +96,10 @@ export default function AccountDashboard({
                                         <span className="text-2xl" aria-hidden="true">🧸</span>
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                        <p className="font-medium text-gray-900">AI Buddy</p>
+                                        <p className="flex items-center gap-2 font-medium text-gray-900">
+                                            AI Buddy
+                                            <LowBatteryBadge device={device} />
+                                        </p>
                                         <p className="truncate text-xs text-gray-500">
                                             SN: {device.user_code}
                                         </p>

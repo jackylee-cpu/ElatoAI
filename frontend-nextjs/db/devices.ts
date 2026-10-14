@@ -1,4 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { BATTERY_COLUMNS, type DeviceBattery } from "@/lib/deviceBattery";
 
 export const dbCheckUserCode = async (
     supabase: SupabaseClient,
@@ -120,14 +121,14 @@ export const getUserDevices = async (
 ) => {
     const { data, error } = await supabase
         .from("devices")
-        .select("device_id, mac_address, user_code, volume")
+        .select(`device_id, mac_address, user_code, volume, ${BATTERY_COLUMNS}`)
         .eq("user_id", userId)
         .order("claimed_at", { ascending: true, nullsFirst: true });
 
     if (error) {
         throw error;
     }
-    return (data ?? []) as Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume">[];
+    return (data ?? []) as (Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & DeviceBattery)[];
 };
 
 /**
@@ -144,7 +145,7 @@ export const getUserDevice = async (
     const { data, error } = await supabase
         .from("devices")
         .select(
-            "device_id, mac_address, user_code, volume, claimed_at, last_seen_at, firmware_version, firmware_reported_at",
+            `device_id, mac_address, user_code, volume, claimed_at, last_seen_at, firmware_version, firmware_reported_at, ${BATTERY_COLUMNS}`,
         )
         .eq("user_id", userId)
         .eq("device_id", deviceId)
@@ -159,6 +160,6 @@ export const getUserDevice = async (
             last_seen_at: string | null;
             firmware_version: string | null;
             firmware_reported_at: string | null;
-        })
+        } & DeviceBattery)
         | null;
 };

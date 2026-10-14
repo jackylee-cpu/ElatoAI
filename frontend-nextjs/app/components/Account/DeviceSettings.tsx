@@ -23,13 +23,15 @@ import { Button } from "@/components/ui/button";
 import { BackIcon } from "../Playground/icons";
 import MemorySection from "../Settings/MemorySection";
 import { cn } from "@/lib/utils";
+import type { DeviceBattery } from "@/lib/deviceBattery";
+import { BatteryRow } from "./BatteryStatus";
 
 type SettingsDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & {
     claimed_at: string | null;
     last_seen_at: string | null;
     firmware_version: string | null;
     firmware_reported_at: string | null;
-};
+} & DeviceBattery;
 
 const cardClass =
     "rounded-[24px] bg-white/90 shadow-[0_8px_24px_rgba(80,120,180,0.08)] backdrop-blur-sm";
@@ -146,6 +148,14 @@ export default function DeviceSettings({
                     <p className="mt-1 text-xl font-semibold text-gray-900">AI Buddy</p>
                     <p className="text-sm text-gray-500">SN: {device.user_code}</p>
                 </div>
+
+                {/* Nothing at all for a board that has never reported: no
+                    battery sense, or firmware from before the report. */}
+                <BatteryRow
+                    device={device}
+                    updated={mounted ? formatAgo(device.battery_at) : null}
+                    className={cn(cardClass, rowClass)}
+                />
 
                 <section>
                     <h2 className={sectionTitleClass}>Volume</h2>
