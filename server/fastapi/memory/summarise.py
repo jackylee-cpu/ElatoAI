@@ -247,6 +247,23 @@ def parse(raw: str, known_count: int) -> Consolidation | None:
     return Consolidation(summary=_cut(summary, SEGMENT_MAX_CHARS), facts=facts)
 
 
+def _error_summary(body: str) -> str:
+    """OpenRouter's error code and message, never its metadata.
+
+    A moderation refusal carries the flagged text in `metadata.flagged_input`
+    -- the child's words, which must not reach the log (P1-02). The full body
+    is still there at DEBUG.
+    """
+    logger.debug("OpenRouter error body: {}", body[:500])
+    try:
+        error = json.loads(body).get("error")
+    except (ValueError, AttributeError):
+        return f"(non-JSON body, {len(body)} chars)"
+    if not isinstance(error, dict):
+        return f"(unexpected body, {len(body)} chars)"
+    return f"{error.get('code') or '?'} {str(error.get('message') or '')[:120]}".strip()
+
+
 async def consolidate(
     turns,
     known: list[str],
@@ -315,7 +332,7 @@ async def consolidate(
                 },
             ) as response:
                 if response.status != 200:
-                    detail = (await response.text())[:200]
+                    detail = _error_summary(await response.text())
                     logger.warning(
                         "Memory consolidation failed: HTTP {} {}", response.status, detail
                     )
@@ -340,5 +357,6 @@ async def consolidate(
 
     result = parse(raw, len(known))
     if result is None:
-        logger.warning("Memory consolidation was not valid JSON: {!r}", raw[:200])
+        logger.warning("Memory consolidation was not valid JSON ({} chars)", len(raw))
+        logger.debug("Unparseable consolidation reply: {!r}", raw[:200])
     return result

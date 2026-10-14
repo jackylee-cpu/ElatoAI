@@ -300,11 +300,12 @@ async def fetch_user_personality(user_id: str | None) -> DevicePersonality:
     # how they arrive on the device query. Shape the flat row to match rather
     # than duplicating the parsing.
     personality = _parse({"user_id": user_id, "user": rows[0]})
+    # Whether the child has a name on file, never the name (P1-02).
     logger.info(
-        "User {} resolved to character={} ip={} child={}",
+        "User {} resolved to character={} ip={} child_named={}",
         user_id,
         personality.title or "default",
         personality.ip.ip_key if personality.ip else "unknown",
-        personality.child_name or "unknown",
+        bool(personality.child_name),
     )
     return personality

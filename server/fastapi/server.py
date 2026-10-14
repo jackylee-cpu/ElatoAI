@@ -14,9 +14,16 @@ from fastapi import Body, FastAPI, Header, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
-import app_settings
+# Before any module below logs: bot.py and pipecat write at import time, and
+# the level decides whether a child's words can reach the log (P1-02).
+import log_setup
+
+log_setup.configure()
+
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams  # noqa: E402
+
+import app_settings  # noqa: E402
 import device_auth
 import device_wifi
 import session_content

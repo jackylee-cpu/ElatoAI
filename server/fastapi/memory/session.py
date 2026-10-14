@@ -475,14 +475,16 @@ class MemorySession:
                 result.summary,
                 revision=self.revision,
             )
+            # The summary is the child's words retold: DEBUG only (P1-02).
             logger.info(
-                "Wrote a session summary for {} at {} covering turns {}-{}: {}",
+                "Wrote a session summary for {} at {} covering turns {}-{} ({} chars)",
                 self.user_id,
                 stretch.reason,
                 stretch.from_turn,
                 stretch.to_turn,
-                result.summary,
+                len(result.summary),
             )
+            logger.debug("Session summary for {}: {}", self.user_id, result.summary)
         else:
             logger.info(
                 "Nothing worth a summary for {} at {} (turns {}-{})",
@@ -544,13 +546,19 @@ class MemorySession:
                 await store.supersede_fact(self.user_id, replaced.fact_id, fact_id)
                 self.facts = [f for f in self.facts if f.fact_id != replaced.fact_id]
                 logger.info(
+                    "Learned a fact about {} ({} chars), replacing an older one",
+                    self.user_id,
+                    len(text),
+                )
+                logger.debug(
                     "Learned about {}: {!r} (replaces {!r})",
                     self.user_id,
                     text,
                     replaced.content,
                 )
             else:
-                logger.info("Learned about {}: {!r}", self.user_id, text)
+                logger.info("Learned a fact about {} ({} chars)", self.user_id, len(text))
+                logger.debug("Learned about {}: {!r}", self.user_id, text)
 
     def _join_session_summary(self) -> str:
         """This session's segments, oldest first, inside the character budget.

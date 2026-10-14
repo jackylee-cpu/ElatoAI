@@ -29,8 +29,28 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
+import json
+
 import aiohttp
 from loguru import logger
+
+
+def _error_summary(body: str) -> str:
+    """PostgREST's error code and message, never its details or hint.
+
+    `details` is where Postgres puts "Failing row contains (...)" and the
+    key that collided: the transcript, fact or summary being written, in the
+    clear (P1-02). The code and message name the constraint, which is all a
+    log needs. The whole body is still there at DEBUG.
+    """
+    logger.debug("Supabase error body: {}", body[:500])
+    try:
+        error = json.loads(body)
+    except ValueError:
+        return f"(non-JSON body, {len(body)} chars)"
+    if not isinstance(error, dict):
+        return f"(unexpected body, {len(body)} chars)"
+    return f"{error.get('code') or '?'} {str(error.get('message') or '')[:160]}".strip()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 # Service role: this runs on behalf of the device, not a logged-in user, so it
@@ -306,7 +326,7 @@ async def supersede_fact(user_id: str, fact_id: str, replaced_by: str) -> bool:
                 ),
             ) as response:
                 if response.status not in (200, 204):
-                    body = (await response.text())[:200]
+                    body = _error_summary(await response.text())
                     logger.warning(
                         "Retiring fact {} for {} failed: HTTP {} {}",
                         fact_id,
@@ -381,7 +401,7 @@ async def _get_json(url: str, *, what: str) -> list[dict] | None:
                 url, headers=_headers({"Accept": "application/json"})
             ) as response:
                 if response.status != 200:
-                    body = (await response.text())[:200]
+                    body = _error_summary(await response.text())
                     logger.warning(
                         "Read of {} failed: HTTP {} {}", what, response.status, body
                     )
@@ -411,7 +431,7 @@ async def _post_json_returning(
                 ),
             ) as response:
                 if response.status not in (200, 201):
-                    body = (await response.text())[:200]
+                    body = _error_summary(await response.text())
                     logger.warning(
                         "Write of {} failed: HTTP {} {}", what, response.status, body
                     )
@@ -439,7 +459,7 @@ async def _post_json(
                 headers=_headers({"Content-Type": "application/json", **headers}),
             ) as response:
                 if response.status not in (200, 201, 204):
-                    body = (await response.text())[:200]
+                    body = _error_summary(await response.text())
                     logger.warning(
                         "Write of {} failed: HTTP {} {}", what, response.status, body
                     )

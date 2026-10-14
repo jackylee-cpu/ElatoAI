@@ -17,6 +17,10 @@
 #     edits; append-only for everyone. New "Audit log" admin page.
 #   - P2-09: turn_metrics gains device_id, stt_audio_ms, tts_chars, row_kind;
 #     memory summaries are billed to the board. New "Usage & cost" page.
+#   - P1-02: the voice server logs at INFO by default (it was DEBUG); what a
+#     child said, the replies and memory are logged at DEBUG only, and
+#     tracebacks no longer print variable values. Production must not set
+#     LOG_LEVEL=DEBUG or LOG_DIAGNOSE (step 0 refuses).
 #
 # Before running, on the dev Mac:
 #   1. the release commit is pushed:   git push mygithub dev:main
@@ -113,6 +117,13 @@ if step 0; then
         || { echo "VOICE_SERVER_INTERNAL_URL missing from .env.production"; exit 1; }
     if grep -qiE '^ALLOW_UNCLAIMED_DEVICES=(1|true|yes)' "$FASTAPI_DIR/.env"; then
         echo "  ALLOW_UNCLAIMED_DEVICES is on in $FASTAPI_DIR/.env -- local development only, remove it"; exit 1
+    fi
+    # P1-02: at DEBUG the voice server logs what children said.
+    if grep -qiE '^LOG_LEVEL=(DEBUG|TRACE)' "$FASTAPI_DIR/.env"; then
+        echo "  LOG_LEVEL is DEBUG in $FASTAPI_DIR/.env -- it would log children's words; remove it"; exit 1
+    fi
+    if grep -qiE '^LOG_DIAGNOSE=(1|true|yes|on)' "$FASTAPI_DIR/.env"; then
+        echo "  LOG_DIAGNOSE is on in $FASTAPI_DIR/.env -- tracebacks would print variable values; remove it"; exit 1
     fi
     echo "  turn_metrics rows so far: $(q "select count(*) from public.turn_metrics") (they keep tokens only; STT/TTS are counted from this release)"
     echo "  running images (for rollback):"
@@ -286,6 +297,10 @@ SQL
   - Audit log: change a character's subtitle and change it back -> two
     records naming you, each with the old and new value. Saving an IP without
     changing anything adds no record
+  - after that conversation, the voice server log holds no transcript, reply,
+    child's name or memory fact (P1-02):
+      (cd $FASTAPI_DIR && docker compose -f docker-compose.ghcr.yml logs --since 15m) | grep -E "USER.TRANSCRIPT|Learned"
+    shows only chars=/lengths, never the words
   - Usage & cost: this month lists the board you talked to by its AIBuddy-XXXX
     name with STT, LLM and TTS amounts; no "could not reach OpenRouter" banner
   - /admin as a content admin: only Characters and IPs

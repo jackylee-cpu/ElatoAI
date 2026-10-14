@@ -256,12 +256,14 @@ async def forward_transcript_frame(
             if state.user_speech_started_at is None:
                 state.mark_user_speech_start()
             payload = _user_transcript_payload(state, frame, final=True)
+            # What the child said is DEBUG only (P1-02, log_setup.py).
             logger.info(
-                "Forwarding USER.TRANSCRIPT final text={} latency_ms={} elapsed_ms={}",
-                text.strip(),
+                "Forwarding USER.TRANSCRIPT final chars={} latency_ms={} elapsed_ms={}",
+                len(text.strip()),
                 payload.get("latency_ms"),
                 payload.get("elapsed_ms"),
             )
+            logger.debug("USER.TRANSCRIPT text={}", text.strip())
             await _emit_browser_message(processor, direction, payload)
             state.user_turn_open = False
         else:
