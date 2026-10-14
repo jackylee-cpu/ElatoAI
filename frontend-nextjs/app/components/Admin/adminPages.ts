@@ -168,7 +168,8 @@ export const ADMIN_PAGE_GROUPS: AdminPageGroup[] = [
                 id: "accounts",
                 label: "Accounts",
                 title: "Accounts",
-                description: "Create login accounts and see who has one.",
+                description:
+                    "Create, edit and remove login accounts. Search, status and role narrow the list.",
                 kind: "live",
                 superOnly: true,
             },

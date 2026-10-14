@@ -85,7 +85,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             case "latency":
                 return <LatencyTab rows={turnMetrics} />;
             case "accounts":
-                return <AccountsTab accounts={accounts} />;
+                return (
+                    <AccountsTab
+                        accounts={accounts}
+                        admins={admins}
+                        currentUserId={currentUserId}
+                    />
+                );
             case "admins":
                 return <AdminsTab admins={admins} currentUserId={currentUserId} />;
             case "audit":

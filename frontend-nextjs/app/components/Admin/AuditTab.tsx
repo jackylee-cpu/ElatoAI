@@ -39,6 +39,8 @@ const VERBS: Record<string, string> = {
     update: "Changed",
     delete: "Removed",
     "account.create": "Created",
+    "account.update": "Updated",
+    "account.delete": "Deleted",
 };
 
 function describe(entry: IAdminAuditEntry): string {

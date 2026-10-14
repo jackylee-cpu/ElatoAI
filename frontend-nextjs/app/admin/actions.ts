@@ -4,7 +4,13 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin";
 import { saveUsageRates, saveVoiceStackSettings } from "@/db/appSettings";
 import { grantAdminRole, revokeAdminRole } from "@/db/adminRoles";
-import { createAccount } from "@/db/accounts";
+import {
+    bannedUntil,
+    createAccount,
+    getAuthUser,
+    syncProfileEmail,
+    updateAccountLogin,
+} from "@/db/accounts";
 import { createServiceClient } from "@/utils/supabase/service";
 import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
 import {
@@ -34,8 +40,9 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 // RLS and has_role() decide in the database, and requireAdmin() here only
 // fails early with a readable message. Settings and admin roles are
 // super_admin; characters and IPs are content_admin, which super_admin also
-// holds. The one exception is createAccountAction: GoTrue only lets the
-// service role create a login, so there requireAdmin() is the whole gate.
+// holds. Creating or editing a login is the exception: GoTrue only lets the
+// service role write auth.users, so there requireAdmin() is the whole gate.
+// Deleting one is not -- admin_delete_account() checks super_admin itself.
 
 /**
  * Point every new session at a different model.
@@ -582,18 +589,7 @@ export async function createAccountAction(
         userId = await createAccount(createServiceClient(), address, password);
     } catch (error) {
         console.error("createAccountAction failed", error);
-        const { code, message } = error as { code?: string; message?: string };
-        if (
-            code === "email_exists" ||
-            code === "user_already_exists" ||
-            /already (been )?registered/i.test(message ?? "")
-        ) {
-            return { ok: false, error: "An account with that email already exists" };
-        }
-        if (code === "weak_password") {
-            return { ok: false, error: message ?? "That password is too weak" };
-        }
-        return { ok: false, error: "Could not create the account" };
+        return { ok: false, error: accountAuthError(error, "Could not create the account") };
     }
 
     // GoTrue writes auth.users with the service role, so no trigger of ours
@@ -622,6 +618,287 @@ export async function createAccountAction(
 
     revalidatePath("/admin");
     return { ok: true, userId, roleError };
+}
+
+const ACCOUNT_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ACCOUNT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Far enough out that "Disabled" means they cannot sign in. 'none' lifts it.
+const BAN_DURATION = "876000h";
+
+export type AccountStatusChoice = "active" | "unconfirmed" | "disabled";
+
+export type UpdateAccountResult =
+    | { ok: true; roleError?: string }
+    | { ok: false; error: string };
+
+function accountAuthError(error: unknown, fallback: string): string {
+    const { code, message } = error as { code?: string; message?: string };
+    if (
+        code === "email_exists" ||
+        code === "user_already_exists" ||
+        /already (been )?registered/i.test(message ?? "")
+    ) {
+        return "An account with that email already exists";
+    }
+    if (code === "weak_password") {
+        return message ?? "That password is too weak";
+    }
+    if (code === "email_address_invalid" || code === "validation_failed") {
+        return "Enter a valid email address";
+    }
+    return fallback;
+}
+
+function isDisabled(until: string | null | undefined, now = Date.now()): boolean {
+    if (!until) return false;
+    const time = new Date(until).getTime();
+    return Number.isFinite(time) && time > now;
+}
+
+function statusOf(confirmed: boolean, until: string | null | undefined): AccountStatusChoice {
+    if (isDisabled(until)) return "disabled";
+    if (!confirmed) return "unconfirmed";
+    return "active";
+}
+
+/**
+ * Change a login's email, password, whether it can sign in, and its admin role.
+ *
+ * The password is never written to the audit log. A role change is recorded
+ * by the admin_roles trigger; email, password and status are recorded here,
+ * because GoTrue writes auth.users with the service role and that trigger
+ * never sees it.
+ */
+export async function updateAccountAction(
+    userId: string,
+    email: string,
+    password: string,
+    role: AdminRole | null,
+    status: AccountStatusChoice,
+): Promise<UpdateAccountResult> {
+    const { supabase, user } = await requireAdmin("super_admin");
+
+    if (!ACCOUNT_ID.test(userId)) {
+        return { ok: false, error: "No such account" };
+    }
+    const address = email.trim().toLowerCase();
+    if (!ACCOUNT_EMAIL.test(address)) {
+        return { ok: false, error: "Enter a valid email address" };
+    }
+    if (password !== "" && password.length < MIN_PASSWORD_LENGTH) {
+        return {
+            ok: false,
+            error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+        };
+    }
+    if (role !== null && !ADMIN_ROLES.includes(role)) {
+        return { ok: false, error: `Unknown role "${role}"` };
+    }
+    if (status !== "active" && status !== "unconfirmed" && status !== "disabled") {
+        return { ok: false, error: "Unknown status" };
+    }
+    if (userId === user.id && status === "disabled") {
+        return { ok: false, error: "You cannot disable your own account" };
+    }
+    if (userId === user.id && role !== "super_admin") {
+        return { ok: false, error: "You cannot change your own super admin role" };
+    }
+
+    const service = createServiceClient();
+    let existing;
+    try {
+        existing = await getAuthUser(service, userId);
+    } catch (error) {
+        console.error("updateAccountAction: read failed", error);
+        return { ok: false, error: "Could not load the account" };
+    }
+    if (!existing) {
+        return { ok: false, error: "No such account" };
+    }
+
+    const currentEmail = (existing.email ?? "").toLowerCase();
+    const currentStatus = statusOf(Boolean(existing.email_confirmed_at), bannedUntil(existing));
+    if (status === "unconfirmed" && existing.email_confirmed_at) {
+        return { ok: false, error: "A confirmed account cannot be set back to unconfirmed" };
+    }
+
+    const { data: roleRows, error: roleReadError } = await supabase
+        .from("admin_roles")
+        .select("role")
+        .eq("user_id", userId);
+    if (roleReadError) {
+        console.error("updateAccountAction: roles failed", roleReadError);
+        return { ok: false, error: "Could not load the account" };
+    }
+    const have = new Set((roleRows ?? []).map((row) => row.role as AdminRole));
+    // The select is the whole of the account's roles, so an account that
+    // somehow holds both is saved as just the one on screen.
+    const want = new Set(role === null ? [] : [role]);
+    const roleChanged = have.size !== want.size || Array.from(want).some((item) => !have.has(item));
+
+    const emailChanged = address !== currentEmail;
+    const statusChanged = status !== currentStatus;
+    const passwordChanged = password !== "";
+    if (!emailChanged && !statusChanged && !passwordChanged && !roleChanged) {
+        return { ok: false, error: "Nothing to save" };
+    }
+
+    if (emailChanged || statusChanged || passwordChanged) {
+        const attributes: {
+            email?: string;
+            password?: string;
+            email_confirm?: boolean;
+            ban_duration?: string;
+        } = {};
+        if (emailChanged) attributes.email = address;
+        if (passwordChanged) attributes.password = password;
+        // A new address, or "Active" on an account that never confirmed, has
+        // to be confirmed here or the next sign-in waits for a mail we do
+        // not send.
+        if ((emailChanged && status !== "unconfirmed") || (status === "active" && !existing.email_confirmed_at)) {
+            attributes.email_confirm = true;
+        }
+        if (status === "disabled" && currentStatus !== "disabled") {
+            attributes.ban_duration = BAN_DURATION;
+        }
+        if (status !== "disabled" && currentStatus === "disabled") {
+            attributes.ban_duration = "none";
+        }
+        try {
+            await updateAccountLogin(service, userId, attributes);
+        } catch (error) {
+            console.error("updateAccountAction failed", error);
+            return { ok: false, error: accountAuthError(error, "Could not save the account") };
+        }
+
+        if (emailChanged) {
+            try {
+                await syncProfileEmail(service, userId, address);
+            } catch (error) {
+                console.error("updateAccountAction: profile email failed", error);
+            }
+        }
+
+        const before: Record<string, unknown> = {};
+        const after: Record<string, unknown> = {};
+        if (emailChanged) {
+            before.email = currentEmail;
+            after.email = address;
+        }
+        if (statusChanged) {
+            before.status = currentStatus;
+            after.status = status;
+        }
+        if (passwordChanged) after.password_reset = true;
+        const { error: auditError } = await supabase.rpc("admin_audit_record", {
+            p_action: "account.update",
+            p_target_table: "auth.users",
+            p_target_id: userId,
+            p_target_label: address,
+            p_before: before,
+            p_after: after,
+        });
+        if (auditError) {
+            console.error("updateAccountAction: audit record failed", auditError);
+        }
+    }
+
+    let roleError: string | undefined;
+    if (roleChanged) {
+        const profileSaved = emailChanged || statusChanged || passwordChanged;
+        try {
+            await syncAccountRole(supabase, userId, address, role, have);
+        } catch (error) {
+            console.error("updateAccountAction: role failed", error);
+            if (!profileSaved) {
+                const code = (error as { code?: string }).code;
+                if (code === "42501") {
+                    return { ok: false, error: "You cannot change your own super admin role" };
+                }
+                return { ok: false, error: "Could not change the role" };
+            }
+            roleError = "Saved, but the role could not be changed";
+        }
+    }
+
+    revalidatePath("/admin");
+    return { ok: true, roleError };
+}
+
+/** Make the account hold exactly the role the form asked for. */
+async function syncAccountRole(
+    supabase: Awaited<ReturnType<typeof requireAdmin>>["supabase"],
+    userId: string,
+    email: string,
+    role: AdminRole | null,
+    have: Set<AdminRole>,
+): Promise<void> {
+    if (role === "super_admin") {
+        if (!have.has("super_admin")) await grantAdminRole(supabase, email, "super_admin");
+        if (have.has("content_admin")) await revokeAdminRole(supabase, userId, "content_admin");
+        return;
+    }
+    if (have.has("super_admin")) await revokeAdminRole(supabase, userId, "super_admin");
+    if (role === "content_admin") {
+        if (!have.has("content_admin")) await grantAdminRole(supabase, email, "content_admin");
+        return;
+    }
+    if (have.has("content_admin")) await revokeAdminRole(supabase, userId, "content_admin");
+}
+
+/**
+ * Remove a login and everything that belongs to it.
+ *
+ * The database does the delete and writes the audit record in one
+ * transaction. Toys that were bound are then dropped from the voice server
+ * so an online one goes back to pairing within seconds.
+ */
+export async function deleteAccountAction(
+    userId: string,
+    reason: string,
+): Promise<ActionResult> {
+    const { supabase, user } = await requireAdmin("super_admin");
+
+    if (!ACCOUNT_ID.test(userId)) {
+        return { ok: false, error: "No such account" };
+    }
+    if (userId === user.id) {
+        return { ok: false, error: "You cannot delete your own account" };
+    }
+    const why = cleanReason(reason);
+    if (!why) {
+        return { ok: false, error: `Give a reason, up to ${MAX_REASON_LENGTH} characters` };
+    }
+
+    const { data, error } = await supabase.rpc("admin_delete_account", {
+        p_user_id: userId,
+        p_reason: why,
+    });
+    if (error) {
+        console.error("deleteAccountAction failed", error);
+        return { ok: false, error: accountDeleteError(error) };
+    }
+
+    const macs = ((data ?? []) as { mac_address: string | null }[])
+        .map((row) => row.mac_address)
+        .filter((mac): mac is string => Boolean(mac));
+    await Promise.all(macs.map((mac) => dropBoardSession(mac)));
+
+    revalidatePath("/admin");
+    return { ok: true };
+}
+
+function accountDeleteError(error: unknown): string {
+    const { code, message } = error as { code?: string; message?: string };
+    if (code === "42501") {
+        if (message?.includes("own account")) return "You cannot delete your own account";
+        if (message?.includes("last super")) return "You cannot delete the last super admin";
+        return "Only a super admin can do that";
+    }
+    if (code === "22023") return `Give a reason, up to ${MAX_REASON_LENGTH} characters`;
+    if (code === "P0002") return "No such account";
+    return "Could not delete the account";
 }
 
 /**
@@ -655,4 +932,36 @@ export async function saveUsageRatesAction(rates: IUsageRates): Promise<ActionRe
 
     revalidatePath("/admin");
     return { ok: true };
+}
+
+const MAX_REASON_LENGTH = 500;
+
+function cleanReason(reason: string): string | null {
+    const clean = reason.trim();
+    return clean && clean.length <= MAX_REASON_LENGTH ? clean : null;
+}
+
+/** Close one board's voice session; it reconnects about a second later. */
+async function dropBoardSession(mac: string): Promise<boolean> {
+    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    if (!internalUrl || !internalToken) {
+        return false;
+    }
+    try {
+        const response = await fetch(`${internalUrl}/internal/device_refresh`, {
+            method: "POST",
+            cache: "no-store",
+            signal: AbortSignal.timeout(3000),
+            headers: {
+                "Content-Type": "application/json",
+                "X-Internal-Token": internalToken,
+            },
+            body: JSON.stringify({ mac }),
+        });
+        return response.ok;
+    } catch (error) {
+        console.warn("Could not drop the board's session:", error);
+        return false;
+    }
 }

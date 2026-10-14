@@ -485,6 +485,8 @@ declare global {
         created_at: string;
         last_sign_in_at: string | null;
         confirmed: boolean;
+        // Set while GoTrue is refusing sign-in. Null when the account is not banned.
+        banned_until: string | null;
     }
 
     /** One row of admin_audit_log (P1-10). */
