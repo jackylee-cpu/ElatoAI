@@ -20,7 +20,7 @@ void playBootChime();
 // low -- it drives I2S_SD_OUT high and does not put it back.
 void playSleepChime();
 
-// The spoken low-battery reminder, about 4s. Like the boot sound it goes
+// The spoken low-battery reminder, about 2s. Like the boot sound it goes
 // through the port audioStreamTask owns, so only that task may call it, and
 // only while nothing else is playing. It switches the amplifier on for the
 // length of the sound and off again.

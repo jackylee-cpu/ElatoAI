@@ -373,8 +373,9 @@ How it warns:
 - **Thresholds.** Below 95.5% of the reference (VDD about 3.15V) for a 30s
   window, the LED's idle green turns red. It clears above 97.5%.
 - **Reminder.** A spoken Cantonese reminder plays then, and again every 10
-  minutes while still low. The text is "我就快冇電喇，請爸爸媽媽幫我叉電呀！",
-  in the macOS Sinji voice, from `assets/low-battery.wav`.
+  minutes while still low. The text is "電量不足，請充電。", from
+  `assets/low-battery.wav` (2026-10-14; it used to ask 爸爸媽媽 to charge the
+  toy, which does not suit the adult brands).
 - **Timing.** The reminder waits for the device to be idle, so it never talks
   over the toy.
 - **After a brownout.** A brownout reset gives one reminder on the next boot.
