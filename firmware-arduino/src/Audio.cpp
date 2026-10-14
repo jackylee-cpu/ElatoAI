@@ -1386,7 +1386,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             authTokenRejected = true;
         }
         wsOpen = false;
-        deviceState = IDLE;
+        // enterSleep()'s own disconnect lands here. Going back to IDLE would
+        // light the LED again for the whole sleep.
+        if (deviceState != SLEEP) deviceState = IDLE;
         // Nothing else takes this path to IDLE, so without this the tail of the
         // interrupted turn would still be in the ring when the next one starts.
         i2sOutputFlushScheduled = true;
@@ -1395,7 +1397,11 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         Serial.printf("[WSc] Connected to url: %s\n", payload);
         wsOpen = true;
         wsAuthed = false;
-        deviceState = PROCESSING;
+        // PROCESSING (red) only while a greeting is on its way. An automatic
+        // reconnect ignores the greeting, so the light would go red for the
+        // seconds it took the server to finish one nobody hears, on an idle
+        // board nobody touched.
+        deviceState = greetingWanted ? PROCESSING : IDLE;
         // Each websocket is a fresh session on the server, so nothing the user
         // said before this counts towards it.
         userSpokeThisSession = false;
@@ -1943,6 +1949,14 @@ void networkTask(void *parameter) {
         const int64_t now = esp_timer_get_time();
         decodeStatsNoteWsServiceGap((uint32_t)(now - lastServicedAt));
         lastServicedAt = now;
+
+        // enterSleep() has closed the socket; servicing it now would only
+        // reconnect, a second after the disconnect, while the sleep chime
+        // plays, and open a session on the server nobody will use.
+        if (deviceState == SLEEP) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
 
         xSemaphoreTake(wsMutex, portMAX_DELAY);
 

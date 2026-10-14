@@ -385,6 +385,14 @@ void ledTask(void *parameter)
         case OTA:
             setStaticColor(StaticColor::CYAN);
             break;
+#if BOARD_HAS_WS2812_RING
+        case SLEEP:
+            // A WS2812 holds the last colour it was sent for as long as it has
+            // power, so a sleeping board would stay lit green. enterSleep()'s
+            // digitalWrite()s only reach discrete LEDs.
+            setLEDColor(0, 0, 0);
+            break;
+#endif
         default:
             setStaticColor(StaticColor::GREEN); // LED on
             break;

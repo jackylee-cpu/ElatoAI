@@ -178,7 +178,7 @@ void enterSleep() {
 // 0 turns idle sleep off entirely: the device, and its display, stay on until
 // the power goes. The xmini-c3 build sets that.
 #ifndef IDLE_SLEEP_SECONDS
-#define IDLE_SLEEP_SECONDS (2 * 60)
+#define IDLE_SLEEP_SECONDS (5 * 60)
 #endif
 static const unsigned long IDLE_SLEEP_MS = IDLE_SLEEP_SECONDS * 1000UL;
 
