@@ -142,6 +142,53 @@ def test_a_device_reads_its_characters_ip_mode_and_style():
     print("  ok: a lost IP is None, not the default; the built-in pal is in-house")
 
 
+async def test_a_board_in_a_toy_only_runs_that_toys_characters():
+    def character(key, ip_key):
+        return {"key": key, "ip": {"ip_key": ip_key}}
+
+    rabbit, bunny, bear = (
+        character("rabbit", "rabbit"),
+        character("bunny", "rabbit"),
+        character("bear", "house"),
+    )
+
+    def board(picked, *, toy="rabbit", default=None):
+        toy_row = {"ip_key": toy, "default_character": default} if toy else None
+        return {"user_id": "child-1", "toy": toy_row, "user": {"personality": picked}}
+
+    looked_up: list[str] = []
+    first: dict[str, dict | None] = {"rabbit": bunny, "empty": None}
+
+    async def first_in(ip_key):
+        looked_up.append(ip_key)
+        return first.get(ip_key)
+
+    async def resolve(row):
+        parsed = device_registry._parse(await device_registry._board_character(row, "mac"))
+        return parsed.personality_key, parsed.ip.ip_key
+
+    original = device_registry._first_character_in
+    device_registry._first_character_in = first_in
+    try:
+        assert await resolve(board(bear, toy=None)) == ("bear", "house")
+        assert await resolve(board(bunny, default=rabbit)) == ("bunny", "rabbit")
+        assert await resolve(board(bear, default=rabbit)) == ("rabbit", "rabbit")
+        assert await resolve(board(None, default=rabbit)) == ("rabbit", "rabbit")
+        assert looked_up == []
+        # No default, or one that has since moved to another IP.
+        assert await resolve(board(bear)) == ("bunny", "rabbit")
+        assert await resolve(board(bear, default=bear)) == ("bunny", "rabbit")
+        assert looked_up == ["rabbit", "rabbit"]
+        # A toy with no character never borrows another toy's animal.
+        assert await resolve(board(bear, toy="empty")) == (None, session_content.DEFAULT_IP_KEY)
+        # Unclaimed: no account, still the toy.
+        unclaimed = {"user_id": None, "toy": {"ip_key": "rabbit", "default_character": rabbit}}
+        assert await resolve(unclaimed) == ("rabbit", "rabbit")
+    finally:
+        device_registry._first_character_in = original
+    print("  ok: a locked board keeps the account's pick only inside its toy's IP")
+
+
 async def test_memory_reads_are_scoped_to_the_ip():
     seen: list[str] = []
 
@@ -184,6 +231,7 @@ def main():
         test_guardrails_come_after_style_and_mode_and_rules_stay_last,
         test_ip_rules_parse_from_the_embedded_row,
         test_a_device_reads_its_characters_ip_mode_and_style,
+        test_a_board_in_a_toy_only_runs_that_toys_characters,
         test_memory_reads_are_scoped_to_the_ip,
         test_no_ip_means_no_memory,
     ]

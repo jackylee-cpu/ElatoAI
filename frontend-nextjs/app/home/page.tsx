@@ -5,6 +5,7 @@ import Playground from "../components/Playground/PlaygroundComponent";
 import { getAllPersonalities, getMyPersonalities } from "@/db/personalities";
 import { getAdminRoles } from "@/lib/admin";
 import { getAllIps } from "@/db/sessionOptions";
+import { getToyIpKeys } from "@/db/devices";
 
 
 export const revalidate = 0; // disable cache for this route
@@ -21,13 +22,14 @@ export default async function Home() {
         redirect("/login");
     }
 
-    const [dbUser, allPersonalities, myPersonalities, ips, adminRoles] =
+    const [dbUser, allPersonalities, myPersonalities, ips, adminRoles, toyIpKeys] =
         await Promise.all([
             getUserById(supabase, user!.id),
             getAllPersonalities(supabase),
             getMyPersonalities(supabase, user?.id ?? ""),
             getAllIps(supabase),
             getAdminRoles(supabase, user!.id),
+            getToyIpKeys(supabase, user!.id),
         ]);
 
     return (
@@ -37,6 +39,7 @@ export default async function Home() {
                     allPersonalities={allPersonalities}
                     myPersonalities={myPersonalities}
                     ips={ips}
+                    toyIpKeys={toyIpKeys}
                     currentUser={dbUser}
                     isAdmin={adminRoles.length > 0}
                 />

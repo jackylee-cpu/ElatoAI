@@ -307,6 +307,8 @@ export interface IpDraft {
     restrict_styles: boolean;
     is_hidden: boolean;
     sort_order: number;
+    // Who a board in this toy is when the account's character is elsewhere.
+    default_personality_id: string | null;
     modes: IpModeDraft[];
     // Under restrict_styles: the styles the IP may use.
     style_keys: string[];
@@ -351,6 +353,7 @@ export async function saveIpAction(
         restrict_styles: draft.restrict_styles,
         is_hidden: draft.is_hidden,
         sort_order: Number.isFinite(draft.sort_order) ? Math.trunc(draft.sort_order) : 0,
+        default_personality_id: draft.default_personality_id || null,
     };
     const modeRows = draft.modes
         .map((mode) => ({ ...mode, prompt: mode.prompt.trim() }))
@@ -365,6 +368,20 @@ export async function saveIpAction(
 
     if (draft.restrict_modes && modeRows.length === 0) {
         return { ok: false, error: "Allow at least one activity, or turn off the limit" };
+    }
+
+    // A toy's default has to be one of its own characters, or a board in the
+    // rabbit would fall back to some other animal.
+    if (ipRow.default_personality_id) {
+        const { data: own } = await supabase
+            .from("personalities")
+            .select("personality_id")
+            .eq("personality_id", ipRow.default_personality_id)
+            .eq("ip_key", ipKey)
+            .maybeSingle();
+        if (!own) {
+            return { ok: false, error: "The default character must be one of this IP's characters" };
+        }
     }
 
     try {

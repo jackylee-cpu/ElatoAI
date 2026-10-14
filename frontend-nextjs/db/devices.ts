@@ -163,3 +163,27 @@ export const getUserDevice = async (
         } & DeviceBattery)
         | null;
 };
+
+/**
+ * The toys an account's boards are sewn into, or null when the account can
+ * pick any character: it has no board yet, or one of them is not in a toy.
+ * A board in a toy only runs that IP's characters (see device_registry.py).
+ */
+export const getToyIpKeys = async (
+    supabase: SupabaseClient,
+    userId: string,
+): Promise<string[] | null> => {
+    const { data, error } = await supabase
+        .from("devices")
+        .select("ip_key")
+        .eq("user_id", userId);
+    if (error) {
+        console.error("Could not read the account's toys", error);
+        return null;
+    }
+    const keys = (data ?? []).map((device) => device.ip_key as string | null);
+    if (keys.length === 0 || keys.some((key) => !key)) {
+        return null;
+    }
+    return Array.from(new Set(keys as string[]));
+};

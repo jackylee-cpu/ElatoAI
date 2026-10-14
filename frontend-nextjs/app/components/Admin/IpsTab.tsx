@@ -24,6 +24,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/use-toast";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { Loader2, Pencil, Plus } from "lucide-react";
 import { Field, Toggle } from "./CharacterEditSheet";
 import { saveIpAction, type IpDraft } from "@/app/admin/actions";
@@ -143,6 +150,9 @@ const IpsTab: React.FC<IpsTabProps> = ({ ips, modes, styles, personalities }) =>
                     ip={editing}
                     modes={modes}
                     styles={styles}
+                    characters={personalities.filter(
+                        (p) => (p.ip_key ?? "house") === editing.ip_key,
+                    )}
                     onClose={() => setEditing(null)}
                 />
             )}
@@ -152,12 +162,15 @@ const IpsTab: React.FC<IpsTabProps> = ({ ips, modes, styles, personalities }) =>
                     ip={null}
                     modes={modes}
                     styles={styles}
+                    characters={[]}
                     onClose={() => setCreating(false)}
                 />
             )}
         </div>
     );
 };
+
+const NO_DEFAULT = "__none__";
 
 const toDraft = (ip: IIp | null, modes: IMode[]): IpDraft => {
     const rows = new Map((ip?.ip_modes ?? []).map((row) => [row.mode_key, row.prompt]));
@@ -170,6 +183,7 @@ const toDraft = (ip: IIp | null, modes: IMode[]): IpDraft => {
         restrict_styles: ip?.restrict_styles ?? false,
         is_hidden: ip?.is_hidden ?? false,
         sort_order: ip?.sort_order ?? 0,
+        default_personality_id: ip?.default_personality_id ?? null,
         modes: modes.map((mode) => ({
             mode_key: mode.mode_key,
             // Only a restricted IP's rows are an allow list.
@@ -186,8 +200,10 @@ const IpEditSheet: React.FC<{
     ip: IIp | null;
     modes: IMode[];
     styles: IStyle[];
+    // This IP's characters, for its default.
+    characters: IAdminPersonality[];
     onClose: () => void;
-}> = ({ ip, modes, styles, onClose }) => {
+}> = ({ ip, modes, styles, characters, onClose }) => {
     const creating = ip === null;
     const [draft, setDraft] = useState<IpDraft>(() => toDraft(ip, modes));
     const [saving, setSaving] = useState(false);
@@ -262,6 +278,40 @@ const IpEditSheet: React.FC<{
                                 value={draft.description}
                                 onChange={(event) => set("description", event.target.value)}
                             />
+                        </Field>
+
+                        <Field
+                            label="Default character"
+                            hint="An IP is one toy. A board set to this toy (Devices tab) runs the account's character if it is one of these, otherwise this one. None: the first visible character."
+                        >
+                            {characters.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">
+                                    No characters yet. Move one into this IP from the Characters tab.
+                                </p>
+                            ) : (
+                                <Select
+                                    value={draft.default_personality_id ?? NO_DEFAULT}
+                                    onValueChange={(value) =>
+                                        set("default_personality_id", value === NO_DEFAULT ? null : value)
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={NO_DEFAULT}>None</SelectItem>
+                                        {characters.map((character) => (
+                                            <SelectItem
+                                                key={character.personality_id}
+                                                value={character.personality_id}
+                                            >
+                                                {character.title}
+                                                {character.is_hidden ? " (hidden)" : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
                         </Field>
 
                         <Field

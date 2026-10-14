@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/utils/supabase/client";
 import { updateUser } from "@/db/users";
@@ -21,6 +21,9 @@ interface PlaygroundProps {
     allPersonalities: IPersonality[];
     myPersonalities: IPersonality[];
     ips: IIp[];
+    // The toys this account's boards are in, or null when it can pick any
+    // character (see getToyIpKeys).
+    toyIpKeys?: string[] | null;
     isAdmin?: boolean;
 }
 
@@ -40,6 +43,7 @@ const Playground: React.FC<PlaygroundProps> = ({
     allPersonalities,
     myPersonalities,
     ips,
+    toyIpKeys = null,
     isAdmin = false,
 }) => {
     const supabase = createClient();
@@ -63,7 +67,14 @@ const Playground: React.FC<PlaygroundProps> = ({
     // list, so they appear once there is more than one IP to choose from.
     // A hidden IP's characters leave the picker with it; a database without
     // IPs at all lists everything, as before.
-    const visibleIps = ips.filter((ip) => !ip.is_hidden);
+    //
+    // An IP is one toy, and a board in a toy only runs that toy's characters.
+    // When every board on the account is in a toy, only those toys are
+    // offered -- hidden or not, the rabbit plush is still a rabbit.
+    const toyIpKeySet = toyIpKeys ? new Set(toyIpKeys) : null;
+    const visibleIps = toyIpKeySet
+        ? ips.filter((ip) => toyIpKeySet.has(ip.ip_key))
+        : ips.filter((ip) => !ip.is_hidden);
     const visibleIpKeys = new Set(visibleIps.map((ip) => ip.ip_key));
     const showIpTabs = visibleIps.length > 1;
     const [ipKeyState, setIpKeyState] = useState<string>(() => {
@@ -75,6 +86,30 @@ const Playground: React.FC<PlaygroundProps> = ({
         if (ips.length > 0 && !visibleIpKeys.has(ipKey)) return false;
         return !showIpTabs || ipKey === ipKeyState;
     };
+
+    // The account's pick belongs to another toy. Its boards already run their
+    // own toy's default (device_registry.py), so save that as the pick: the
+    // picker then shows what the toy is, and the browser talks to the same
+    // character. The boards need no refresh -- nothing changes for them.
+    useEffect(() => {
+        if (!toyIpKeySet || visibleIpKeys.has(ipKeyOf(findPersonality(personalityIdState)))) {
+            return;
+        }
+        const toy = visibleIps[0];
+        if (!toy) return;
+        const ofToy = allPersonalities.filter((p) => ipKeyOf(p) === toy.ip_key);
+        const fallback =
+            ofToy.find((p) => p.personality_id === toy.default_personality_id) ?? ofToy[0];
+        if (!fallback?.personality_id) return;
+        setPersonalityIdState(fallback.personality_id);
+        setIpKeyState(toy.ip_key);
+        void updateUser(
+            supabase,
+            { personality_id: fallback.personality_id },
+            currentUser.user_id
+        );
+        // Once, for what the page loaded with.
+    }, []);
 
     const onPersonalityPicked = async (personalityIdPicked: string) => {
         setPersonalityIdState(personalityIdPicked);

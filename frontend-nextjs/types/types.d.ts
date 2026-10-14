@@ -51,6 +51,9 @@ declare global {
         image_url: string | null;
         is_hidden: boolean;
         sort_order: number;
+        // Who a board in this toy is when the account's character belongs to
+        // another IP. Null: the IP's first visible character.
+        default_personality_id: string | null;
         ip_modes?: { mode_key: string; prompt: string }[];
         ip_styles?: { style_key: string }[];
     }
@@ -82,6 +85,9 @@ declare global {
         volume: number;
         mac_address: string;
         user_code: string;
+        // The toy this board is sewn into; it only runs that IP's characters.
+        // Null: not locked. Set by a super admin, never by the owner.
+        ip_key: string | null;
     }
 
     interface IUser {

@@ -7,6 +7,9 @@ so it resolves the same data server-side:
 
     devices.mac_address -> devices.user_id -> users.personality_id -> personalities
 
+unless the board is locked into a toy (devices.ip_key), whose IP the character
+must belong to (_board_character).
+
 Everything here fails open. A device that is unknown, a Supabase that is down,
 or a misconfigured key all fall back to the built-in defaults rather than
 refusing the session -- a toy that goes silent because a database was slow is
@@ -52,19 +55,29 @@ _IP_SELECT = (
     "ip_modes(mode_key,prompt),ip_styles(style_key))"
 )
 
+_CHARACTER_FIELDS = (
+    "key,title,character_prompt,voice_prompt,first_message_prompt,oai_voice,voices,"
+    f"mode_key,style_key,{_IP_SELECT}"
+)
+
 # One account and its character, the same for the toy and the browser: both
 # resolve the character the parent picked from the account row, so the two can
 # never disagree, and nothing about the character is taken from the client.
 _ACCOUNT_SELECT = (
     "supervisee_name,supervisee_age,supervisee_persona,language_code,"
     "region:region_code(name,timezone,latitude,longitude),"
-    "personality:personality_id("
-    "key,title,character_prompt,voice_prompt,first_message_prompt,oai_voice,voices,"
-    f"mode_key,style_key,{_IP_SELECT}"
-    ")"
+    f"personality:personality_id({_CHARACTER_FIELDS})"
 )
 
-_SELECT = f"volume,user_id,memories_revision,user:user_id({_ACCOUNT_SELECT})"
+# The toy the board is sewn into, if it has been set, and who that toy is when
+# the account's character belongs to another toy (see _board_character).
+_TOY_SELECT = (
+    f"toy:ip_key(ip_key,default_character:default_personality_id({_CHARACTER_FIELDS}))"
+)
+
+_SELECT = (
+    f"volume,user_id,memories_revision,{_TOY_SELECT},user:user_id({_ACCOUNT_SELECT})"
+)
 
 
 @dataclass(frozen=True)
@@ -228,6 +241,73 @@ def _supabase_configured(what: str) -> bool:
     return False
 
 
+def _ip_key_of(character: object) -> str | None:
+    if not isinstance(character, dict):
+        return None
+    ip = character.get("ip")
+    return _clean(ip.get("ip_key")) if isinstance(ip, dict) else None
+
+
+def _toy_key(row: dict) -> str | None:
+    """The IP of the toy this board is in, or None when it is not locked."""
+    toy = row.get("toy")
+    return _clean(toy.get("ip_key")) if isinstance(toy, dict) else None
+
+
+async def _first_character_in(ip_key: str) -> dict | None:
+    """The IP's first visible character, for a toy with no default set."""
+    url = (
+        f"{SUPABASE_URL}/rest/v1/personalities"
+        f"?ip_key=eq.{quote(ip_key, safe='')}"
+        f"&is_hidden=not.is.true"
+        f"&select={quote(_CHARACTER_FIELDS, safe='()*,:')}"
+        f"&order=created_at.asc&limit=1"
+    )
+    rows = await _fetch_rows(url, f"characters of IP {ip_key}")
+    return rows[0] if rows else None
+
+
+async def _board_character(row: dict, mac_address: str) -> dict:
+    """The device row, with the character this board may actually run.
+
+    A board in a toy is that toy (an IP is one physical toy): the rabbit plush
+    never runs 波波熊, whatever the account picked. The account's character
+    stays when it belongs to the toy's IP. Otherwise the toy's default
+    character, then its first visible one. A toy IP with no character at all
+    is a setup mistake, and gets the built-in pal rather than another toy's
+    animal.
+    """
+    toy_key = _toy_key(row)
+    if not toy_key:
+        return row
+    user = row.get("user") if isinstance(row.get("user"), dict) else {}
+    picked = user.get("personality")
+    if _ip_key_of(picked) == toy_key:
+        return row
+
+    default = (row.get("toy") or {}).get("default_character")
+    # A default that has since moved to another IP is not this toy any more.
+    character = default if _ip_key_of(default) == toy_key else None
+    if character is None:
+        character = await _first_character_in(toy_key)
+    if character is None or _ip_key_of(character) != toy_key:
+        logger.warning(
+            "Device {} is in toy {}, which has no character; using the built-in pal",
+            mac_address,
+            toy_key,
+        )
+        character = None
+    else:
+        logger.info(
+            "Device {} is in toy {}: running {} instead of the account's {}",
+            mac_address,
+            toy_key,
+            character.get("key") or "unknown",
+            (picked or {}).get("key") or "default",
+        )
+    return {**row, "user": {**user, "personality": character}}
+
+
 async def fetch_device_personality(mac_address: str | None) -> DevicePersonality:
     """Resolve the personality assigned to `mac_address`.
 
@@ -255,7 +335,8 @@ async def fetch_device_personality(mac_address: str | None) -> DevicePersonality
         logger.info("No device row for mac={}, using default character", mac_address)
         return DevicePersonality()
 
-    personality = replace(_parse(rows[0]), claimed=bool(_clean(rows[0].get("user_id"))))
+    row = await _board_character(rows[0], mac_address)
+    personality = replace(_parse(row), claimed=bool(_clean(row.get("user_id"))))
     logger.info(
         "Device {} resolved to character={} ip={} mode={} style={} voice={} volume={} user={}",
         mac_address,
