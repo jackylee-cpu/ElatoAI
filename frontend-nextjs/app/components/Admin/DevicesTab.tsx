@@ -77,6 +77,8 @@ interface DevicesTabProps {
         models: IOpenRouterModel[] | null;
     };
     ips: IIp[];
+    // A search to start with, when another page sent you here for one toy.
+    initialQuery?: string;
 }
 
 function macKey(device: IAdminDevice): string {
@@ -127,10 +129,10 @@ function when(iso: string | null): string {
  * refuses them. Conversations, memories and the child's details are not read
  * here at all (Q7).
  */
-const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPresence, usage, ips }) => {
+const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPresence, usage, ips, initialQuery = "" }) => {
     const [presence, setPresence] = useState<PresenceMap>(initialPresence);
     const [now, setNow] = useState(() => Date.now());
-    const [query, setQuery] = useState("");
+    const [query, setQuery] = useState(initialQuery);
     const [state, setState] = useState<string>(ALL);
     const [firmware, setFirmware] = useState<string>(ALL);
     const [selected, setSelected] = useState<string | null>(devices[0]?.device_id ?? null);

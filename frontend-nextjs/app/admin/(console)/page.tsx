@@ -9,6 +9,7 @@ import { requireAdmin, roleAllows } from "@/lib/admin";
 import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
 import { listAuditLog } from "@/db/auditLog";
 import { listDevicesForAdmin } from "@/db/adminDevices";
+import { listFirmwareReleasesForAdmin } from "@/db/firmwareReleases";
 import { fetchDevicePresence } from "@/lib/devicePresence";
 import { getUsageByDay, getUsageByDevice } from "@/db/usage";
 import { fetchOpenRouterModels } from "@/lib/openrouterCatalogue";
@@ -76,6 +77,9 @@ export default async function AdminPage() {
             isSuper ? fetchDevicePresence() : Promise.resolve(null),
         ]);
 
+    // After the devices: the OTA page counts boards per stage from their MACs.
+    const firmwareReleases = isSuper ? await listFirmwareReleasesForAdmin(supabase, devices) : [];
+
     return (
         <AdminDashboard
             roles={roles}
@@ -91,6 +95,7 @@ export default async function AdminPage() {
             audit={audit}
             devices={devices}
             presence={presence}
+            firmwareReleases={firmwareReleases}
             usage={{
                 thisMonth: usageThisMonth,
                 lastMonth: usageLastMonth,

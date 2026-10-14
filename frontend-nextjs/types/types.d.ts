@@ -522,6 +522,44 @@ declare global {
         ip_key: string | null;
     }
 
+    /** What one board did with one release it was offered (firmware_rollout_devices). */
+    interface IAdminRolloutDevice {
+        device_id: string;
+        mac_address: string | null;
+        first_offered_at: string;
+        last_offered_at: string;
+        offer_count: number;
+        running_at: string | null;
+        failed_at: string | null;
+    }
+
+    /** A firmware release for the admin OTA page, with what the rollout has done so far. */
+    interface IAdminFirmwareRelease {
+        release_id: string;
+        board: string;
+        board_label: string;
+        version: string;
+        size_bytes: number;
+        sha256: string;
+        notes: string | null;
+        created_at: string;
+        is_current: boolean;
+        rollout_percent: number;
+        rollout_macs: string[];
+        paused_at: string | null;
+        paused_reason: string | null;
+        paused_by: string | null;
+        stage_changed_at: string | null;
+        /** The board's OTA app slot, and the smaller one of boards flashed before P2-12. */
+        app_slot: number | null;
+        legacy_app_slot: number | null;
+        /** Boards of this kind each stage would offer it to, whitelist included. */
+        reach: Record<0 | 10 | 50 | 100, number>;
+        /** Boards that last reported running this version. */
+        running: number;
+        rollout: IAdminRolloutDevice[];
+    }
+
     /** STT, TTS and currency rates for pricing usage; LLM prices come from OpenRouter. */
     interface IUsageRates {
         stt_usd_per_hour: number;

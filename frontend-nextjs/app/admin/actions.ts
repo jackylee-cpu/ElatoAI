@@ -1093,3 +1093,54 @@ async function dropBoardSession(mac: string): Promise<boolean> {
         return false;
     }
 }
+
+export type FirmwareRolloutChange =
+    | { action: "current" | "resume" | "withdraw" }
+    | { action: "stage"; percent: 0 | 10 | 50 | 100 }
+    | { action: "whitelist"; macs: string[] }
+    | { action: "pause"; reason: string };
+
+/**
+ * Move a firmware release along its rollout from the OTA page (P2-21): make it
+ * current, change its stage or whitelist, pause or resume it, or withdraw it.
+ * admin_change_firmware_rollout() checks super_admin itself, and the change is
+ * audited under the admin's own name.
+ */
+export async function changeFirmwareRolloutAction(
+    releaseId: string,
+    change: FirmwareRolloutChange,
+): Promise<ActionResult> {
+    const { supabase } = await requireAdmin("super_admin");
+
+    let reason: string | null = null;
+    if (change.action === "pause") {
+        reason = cleanReason(change.reason);
+        if (!reason) {
+            return { ok: false, error: `Give a reason, up to ${MAX_REASON_LENGTH} characters` };
+        }
+    }
+
+    const { error } = await supabase.rpc("admin_change_firmware_rollout", {
+        p_release_id: releaseId,
+        p_action: change.action,
+        p_percent: change.action === "stage" ? change.percent : null,
+        p_macs: change.action === "whitelist" ? change.macs : null,
+        p_reason: reason,
+    });
+    if (error) {
+        console.error("changeFirmwareRolloutAction failed", error);
+        const { code } = error;
+        return {
+            ok: false,
+            error:
+                code === "42501" ? "Only a super admin can do that"
+                : code === "23514" ? "One of those is not a MAC address (like F8:5B:1B:53:62:70)"
+                : code === "55000" ? "Only the current release can be paused"
+                : code === "P0002" ? "No such release"
+                : "Could not change the rollout",
+        };
+    }
+
+    revalidatePath("/admin");
+    return { ok: true };
+}

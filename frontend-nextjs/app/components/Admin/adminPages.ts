@@ -101,7 +101,7 @@ export const ADMIN_PAGE_GROUPS: AdminPageGroup[] = [
                 title: "OTA releases",
                 description:
                     "Upload a build and roll it out in stages; too many rollbacks pause it.",
-                kind: "preview",
+                kind: "live",
                 superOnly: true,
             },
             {

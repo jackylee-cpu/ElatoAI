@@ -62,30 +62,6 @@ export const PREVIEW_ACCOUNT = {
     ] as [string, string][],
 };
 
-export interface PreviewRelease {
-    version: string;
-    state: "rolling" | "current" | "old";
-    sizeMb: number;
-    publishedAt: string;
-    notes: string;
-    updated: number | null;
-    targeted: number | null;
-    rolledBack: number | null;
-}
-
-export const PREVIEW_RELEASES: PreviewRelease[] = [
-    { version: "1.0.2", state: "rolling", sizeMb: 1.71, publishedAt: "10/14 18:00", notes: "C3 TLS fragmentation: free the Opus buffers before the wss connect", updated: 4, targeted: 5, rolledBack: 0 },
-    { version: "1.0.1", state: "current", sizeMb: 1.66, publishedAt: "10/12 11:20", notes: "Device secret exchanged for a 24 h token; OTA probation and rollback", updated: 18, targeted: 19, rolledBack: 1 },
-    { version: "1.0.0", state: "old", sizeMb: 1.62, publishedAt: "10/08 16:45", notes: "First cloud build", updated: null, targeted: null, rolledBack: null },
-];
-
-export const ROLLOUT_STAGES: [string, string][] = [
-    ["Internal", "4 allow-listed toys"],
-    ["10%", "about 2 toys"],
-    ["50%", "about 12 toys"],
-    ["100%", "all 23 toys"],
-];
-
 export interface PreviewBoard {
     mac: string;
     plush: string | null;
