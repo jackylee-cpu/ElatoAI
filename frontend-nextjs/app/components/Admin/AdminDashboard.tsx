@@ -11,7 +11,6 @@ import AccountsTab from "./AccountsTab";
 import AuditTab from "./AuditTab";
 import UsageTab from "./UsageTab";
 import OverviewPreview from "./preview/OverviewPreview";
-import DevicesPreview from "./preview/DevicesPreview";
 import SupportPreview from "./preview/SupportPreview";
 import OtaPreview from "./preview/OtaPreview";
 import FactoryPreview from "./preview/FactoryPreview";
@@ -120,8 +119,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         switch (id) {
             case "overview":
                 return <OverviewPreview onOpen={open} />;
-            case "devices":
-                return <DevicesPreview />;
             case "support":
                 return <SupportPreview />;
             case "ota":

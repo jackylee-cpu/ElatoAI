@@ -1,7 +1,11 @@
 import React from "react";
-import { Divider, Events, Facts, FakeButton, Note, Panel, SimpleTable, TwoColumns } from "./PreviewKit";
-import { PREVIEW_ACCOUNT, PREVIEW_DEVICES } from "./previewData";
-import { DeviceStatePill } from "./DevicesPreview";
+import { Divider, Events, Facts, FakeButton, Note, Panel, Pill, SimpleTable, TwoColumns } from "./PreviewKit";
+import { DEVICE_STATES, PREVIEW_ACCOUNT, PREVIEW_DEVICES, PreviewDevice } from "./previewData";
+
+function DeviceStatePill({ device }: { device: PreviewDevice }) {
+    const [tone, label] = DEVICE_STATES[device.state];
+    return <Pill tone={tone}>{label}</Pill>;
+}
 
 const SupportPreview: React.FC = () => {
     const account = PREVIEW_ACCOUNT;
