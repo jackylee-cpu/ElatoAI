@@ -25,15 +25,29 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/use-toast";
 import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Pencil, Plus } from "lucide-react";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Loader2, MoreHorizontal, Plus } from "lucide-react";
 import { Field, Toggle } from "./CharacterEditSheet";
-import { saveIpAction, type IpDraft } from "@/app/admin/actions";
+import { saveIpAction, setIpHiddenAction, type IpDraft } from "@/app/admin/actions";
 
 interface IpsTabProps {
     ips: IIp[];
@@ -45,12 +59,23 @@ interface IpsTabProps {
 const IpsTab: React.FC<IpsTabProps> = ({ ips, modes, styles, personalities }) => {
     const [editing, setEditing] = useState<IIp | null>(null);
     const [creating, setCreating] = useState(false);
+    const [busyKey, setBusyKey] = useState<string | null>(null);
+    const [removing, setRemoving] = useState<IIp | null>(null);
 
     const characterCount = (ipKey: string) =>
         personalities.filter((p) => (p.ip_key ?? "house") === ipKey).length;
 
     const summary = (allowedCount: number, restricted: boolean, total: number) =>
         restricted ? `${allowedCount} of ${total}` : "all";
+
+    const onToggleHidden = async (ip: IIp) => {
+        setBusyKey(ip.ip_key);
+        const result = await setIpHiddenAction(ip.ip_key, !ip.is_hidden);
+        setBusyKey(null);
+        if (!result.ok) {
+            toast({ title: "Could not change it", description: result.error });
+        }
+    };
 
     return (
         <div className="flex flex-col gap-4">
@@ -127,15 +152,38 @@ const IpsTab: React.FC<IpsTabProps> = ({ ips, modes, styles, personalities }) =>
                                     <TableCell className="text-xs text-muted-foreground tabular-nums">
                                         {ip.guardrails ? `${ip.guardrails.length} chars` : "none"}
                                     </TableCell>
-                                    <TableCell>
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            title="Edit"
-                                            onClick={() => setEditing(ip)}
-                                        >
-                                            <Pencil className="h-4 w-4" />
-                                        </Button>
+                                    <TableCell className="w-12 text-right">
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8"
+                                                    aria-label={`Actions for ${ip.name}`}
+                                                    disabled={busyKey === ip.ip_key}
+                                                >
+                                                    <MoreHorizontal className="h-4 w-4" />
+                                                </Button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent align="end">
+                                                <DropdownMenuItem onSelect={() => setEditing(ip)}>
+                                                    Edit
+                                                </DropdownMenuItem>
+                                                {ip.is_hidden ? (
+                                                    <DropdownMenuItem onSelect={() => onToggleHidden(ip)}>
+                                                        Show
+                                                    </DropdownMenuItem>
+                                                ) : (
+                                                    <DropdownMenuItem
+                                                        className="text-rose-700 focus:bg-rose-50 focus:text-rose-800"
+                                                        onSelect={() => setRemoving(ip)}
+                                                    >
+                                                        Delete
+                                                    </DropdownMenuItem>
+                                                )}
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
                                     </TableCell>
                                 </TableRow>
                             ))}
@@ -166,6 +214,42 @@ const IpsTab: React.FC<IpsTabProps> = ({ ips, modes, styles, personalities }) =>
                     onClose={() => setCreating(false)}
                 />
             )}
+            <Dialog open={removing !== null} onOpenChange={(open) => !open && !busyKey && setRemoving(null)}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Delete {removing?.name ?? "this IP"}</DialogTitle>
+                        <DialogDescription>
+                            Takes it off the playground. The row stays, and children already
+                            on one of its characters keep it. You can show it again from this menu.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter className="gap-2">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-full"
+                            onClick={() => setRemoving(null)}
+                            disabled={busyKey !== null}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="destructive"
+                            className="rounded-full"
+                            disabled={busyKey !== null}
+                            onClick={() => {
+                                if (!removing) return;
+                                const ip = removing;
+                                setRemoving(null);
+                                onToggleHidden(ip);
+                            }}
+                        >
+                            Delete
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 };

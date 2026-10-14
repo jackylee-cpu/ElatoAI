@@ -20,8 +20,22 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "@/components/ui/use-toast";
-import { Eye, EyeOff, Pencil, Plus } from "lucide-react";
+import { MoreHorizontal, Plus } from "lucide-react";
 import Image from "next/image";
 import { getPersonalityAvatarSrc } from "@/lib/utils";
 import CharacterEditSheet from "./CharacterEditSheet";
@@ -53,6 +67,7 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
     const [editing, setEditing] = useState<IAdminPersonality | null>(null);
     const [creating, setCreating] = useState(false);
     const [busyId, setBusyId] = useState<string | null>(null);
+    const [removing, setRemoving] = useState<IAdminPersonality | null>(null);
 
     const filtered = useMemo(() => {
         const needle = search.trim().toLowerCase();
@@ -183,30 +198,15 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
                                     <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
                                         {entry.character_prompt?.length ?? 0} chars
                                     </TableCell>
-                                    <TableCell>
-                                        <div className="flex flex-row gap-1 justify-end">
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                title="Edit"
-                                                onClick={() => setEditing(entry)}
-                                            >
-                                                <Pencil className="h-4 w-4" />
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                title={entry.is_hidden ? "Show" : "Hide"}
-                                                disabled={busyId === entry.personality_id}
-                                                onClick={() => onToggleHidden(entry)}
-                                            >
-                                                {entry.is_hidden ? (
-                                                    <EyeOff className="h-4 w-4" />
-                                                ) : (
-                                                    <Eye className="h-4 w-4" />
-                                                )}
-                                            </Button>
-                                        </div>
+                                    <TableCell className="w-12 text-right">
+                                        <RowMenu
+                                            label={entry.title || entry.key || "character"}
+                                            hidden={Boolean(entry.is_hidden)}
+                                            busy={busyId === entry.personality_id}
+                                            onEdit={() => setEditing(entry)}
+                                            onDelete={() => setRemoving(entry)}
+                                            onShow={() => onToggleHidden(entry)}
+                                        />
                                     </TableCell>
                                 </TableRow>
                             ))}
@@ -239,8 +239,108 @@ const CharactersTab: React.FC<CharactersTabProps> = ({
                     styles={styles}
                 />
             )}
+            <HideDialog
+                open={removing !== null}
+                title={removing?.title || removing?.key || "this character"}
+                busy={busyId !== null}
+                body="Takes it off the picker. The row stays, so children already using it are not moved to the default character. You can show it again from this menu."
+                onClose={() => setRemoving(null)}
+                onConfirm={() => {
+                    if (!removing) return;
+                    const entry = removing;
+                    setRemoving(null);
+                    onToggleHidden(entry);
+                }}
+            />
         </div>
     );
 };
+
+function RowMenu({
+    label,
+    hidden,
+    busy,
+    onEdit,
+    onDelete,
+    onShow,
+}: {
+    label: string;
+    hidden: boolean;
+    busy: boolean;
+    onEdit: () => void;
+    onDelete: () => void;
+    onShow: () => void;
+}) {
+    return (
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    aria-label={`Actions for ${label}`}
+                    disabled={busy}
+                >
+                    <MoreHorizontal className="h-4 w-4" />
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>
+                {hidden ? (
+                    <DropdownMenuItem onSelect={onShow}>Show</DropdownMenuItem>
+                ) : (
+                    <DropdownMenuItem
+                        className="text-rose-700 focus:bg-rose-50 focus:text-rose-800"
+                        onSelect={onDelete}
+                    >
+                        Delete
+                    </DropdownMenuItem>
+                )}
+            </DropdownMenuContent>
+        </DropdownMenu>
+    );
+}
+
+function HideDialog({
+    open,
+    title,
+    busy,
+    body,
+    onClose,
+    onConfirm,
+}: {
+    open: boolean;
+    title: string;
+    busy: boolean;
+    body: string;
+    onClose: () => void;
+    onConfirm: () => void;
+}) {
+    return (
+        <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
+            <DialogContent className="max-w-md">
+                <DialogHeader>
+                    <DialogTitle>Delete {title}</DialogTitle>
+                    <DialogDescription>{body}</DialogDescription>
+                </DialogHeader>
+                <DialogFooter className="gap-2">
+                    <Button type="button" variant="outline" className="rounded-full" onClick={onClose} disabled={busy}>
+                        Cancel
+                    </Button>
+                    <Button
+                        type="button"
+                        variant="destructive"
+                        className="rounded-full"
+                        onClick={onConfirm}
+                        disabled={busy}
+                    >
+                        Delete
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+}
 
 export default CharactersTab;

@@ -158,6 +158,33 @@ export async function setPersonalityHiddenAction(
     return updatePersonalityAction(personalityId, { is_hidden: isHidden });
 }
 
+/** Take an IP off the playground, or put it back. The row stays. */
+export async function setIpHiddenAction(
+    ipKey: string,
+    isHidden: boolean,
+): Promise<ActionResult> {
+    const { supabase } = await requireAdmin("content_admin");
+
+    const key = ipKey.trim().toLowerCase();
+    if (!key) {
+        return { ok: false, error: "Missing IP" };
+    }
+
+    const { data, error } = await supabase
+        .from("ips")
+        .update({ is_hidden: isHidden })
+        .eq("ip_key", key)
+        .select("ip_key");
+    if (error || !data || data.length === 0) {
+        console.error("setIpHiddenAction failed", error);
+        return { ok: false, error: "Could not change the IP" };
+    }
+
+    revalidatePath("/admin");
+    revalidatePath("/home");
+    return { ok: true };
+}
+
 export async function createPersonalityAction(
     personality: Partial<IPersonality>,
 ): Promise<ActionResult> {
