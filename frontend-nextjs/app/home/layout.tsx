@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
-import { Gamepad2, Settings, SlidersHorizontal } from "lucide-react";
+import { Gamepad2, SlidersHorizontal, User } from "lucide-react";
 import { Metadata } from "next";
 import { getOpenGraphMetadata } from "@/lib/utils";
 import { createUser, getUserById } from "@/db/users";
@@ -26,9 +26,9 @@ const sidebarNavItems: SidebarNavItem[] = [
         icon: <Gamepad2 size={ICON_SIZE} />,
     },
     {
-        title: "Settings",
-        href: "/home/settings",
-        icon: <Settings size={ICON_SIZE} />,
+        title: "Me",
+        href: "/home/account",
+        icon: <User size={ICON_SIZE} />,
     },
     // No "Create new": parents do not make characters in phase 1. See
     // app/home/create/page.tsx.
@@ -75,7 +75,7 @@ export default async function RootLayout({
         ? [...sidebarNavItems, adminNavItem]
         : sidebarNavItems;
 
-    // Playground and Settings. "Create" used to sit between them and is gone
+    // Playground and Me. "Create" used to sit between them and is gone
     // with /home/create; indexing [2] here would hand MobileNav undefined.
     const mobileNavItems = sidebarNavItems;
 

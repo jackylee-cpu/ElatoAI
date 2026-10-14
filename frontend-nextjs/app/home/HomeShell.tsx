@@ -16,11 +16,14 @@ export function HomeShell({
     mobileNavItems: SidebarNavItem[];
 }) {
     const pathname = usePathname();
-    const isNewHomeUi = pathname === "/home" || pathname === "/home/settings";
+    const isNewHomeUi =
+        pathname === "/home" ||
+        pathname === "/home/settings" ||
+        pathname.startsWith("/home/account");
 
     if (isNewHomeUi) {
         // The background lives here rather than in each page, so switching
-        // between Playground and Settings keeps the same <Image>
+        // between Playground, Settings and Me keeps the same <Image>
         // mounted instead of tearing down and repainting a 440KB backdrop on
         // every navigation. Pages render only their own z-10 content column.
         return (

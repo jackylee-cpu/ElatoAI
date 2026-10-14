@@ -41,6 +41,14 @@ export async function GET(request: Request) {
         }
     }
 
+    // The forgot-password email asks to land on the change-password page.
+    // Only a path on this site is honoured: not a full URL, and not "//host"
+    // or "/\host", which browsers also read as another site.
+    const redirectTo = requestUrl.searchParams.get("redirect_to");
+    if (redirectTo && /^\/(?![\/\\])/.test(redirectTo) && !redirectTo.includes("\\")) {
+        return NextResponse.redirect(`${origin}${redirectTo}`);
+    }
+
     // URL to redirect to after sign up process completes
     return NextResponse.redirect(`${origin}/home`);
 }

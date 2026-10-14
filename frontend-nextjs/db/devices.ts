@@ -129,3 +129,36 @@ export const getUserDevices = async (
     }
     return (data ?? []) as Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume">[];
 };
+
+/**
+ * One device on this account with what its settings page shows, or null when
+ * the account does not own it. The firmware fields are what the board last
+ * reported to /api/ota/check; last_seen_at is when it last fetched a token,
+ * at boot or once a day, so it is not a live online indicator.
+ */
+export const getUserDevice = async (
+    supabase: SupabaseClient,
+    userId: string,
+    deviceId: string,
+) => {
+    const { data, error } = await supabase
+        .from("devices")
+        .select(
+            "device_id, mac_address, user_code, volume, claimed_at, last_seen_at, firmware_version, firmware_reported_at",
+        )
+        .eq("user_id", userId)
+        .eq("device_id", deviceId)
+        .maybeSingle();
+
+    if (error) {
+        throw error;
+    }
+    return data as
+        | (Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & {
+            claimed_at: string | null;
+            last_seen_at: string | null;
+            firmware_version: string | null;
+            firmware_reported_at: string | null;
+        })
+        | null;
+};

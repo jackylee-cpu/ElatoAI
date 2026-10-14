@@ -27,6 +27,8 @@ interface MemorySectionProps {
     selectedUser: IUser;
     /** Bumped when a device is claimed or unbound, to re-list them. */
     devicesVersion?: number;
+    /** Show this device only. The account page opens memory from one toy. */
+    deviceId?: string;
 }
 
 type Device = Awaited<ReturnType<typeof getUserDevices>>[number];
@@ -43,16 +45,25 @@ type Device = Awaited<ReturnType<typeof getUserDevices>>[number];
  * Memory belongs to a device: each toy remembers its own child. With more
  * than one on the account, the parent picks which toy to look at.
  */
-const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser, devicesVersion }) => {
+const MemorySection: React.FC<MemorySectionProps> = ({
+    selectedUser,
+    devicesVersion,
+    deviceId: fixedDeviceId,
+}) => {
     const supabase = createClient();
     const { toast } = useToast();
-    const [devices, setDevices] = React.useState<Device[] | null>(null);
-    const [deviceId, setDeviceId] = React.useState<string | null>(null);
+    const [devices, setDevices] = React.useState<Device[] | null>(fixedDeviceId ? [] : null);
+    const [deviceId, setDeviceId] = React.useState<string | null>(fixedDeviceId ?? null);
     const [segments, setSegments] = React.useState<IMemorySegment[] | null>(null);
     const [facts, setFacts] = React.useState<IMemoryFact[] | null>(null);
     const [busyId, setBusyId] = React.useState<string | null>(null);
 
     React.useEffect(() => {
+        if (fixedDeviceId) {
+            setDeviceId(fixedDeviceId);
+            setDevices([]);
+            return;
+        }
         let cancelled = false;
         getUserDevices(supabase, selectedUser.user_id)
             .then((loaded) => {
@@ -71,7 +82,7 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser, devicesVers
         return () => {
             cancelled = true;
         };
-    }, [supabase, selectedUser.user_id, devicesVersion]);
+    }, [supabase, selectedUser.user_id, devicesVersion, fixedDeviceId]);
 
     const load = React.useCallback(async () => {
         if (!deviceId) {
@@ -168,7 +179,7 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser, devicesVers
                 )}
             </div>
 
-            {devices !== null && devices.length > 1 && (
+            {!fixedDeviceId && devices !== null && devices.length > 1 && (
                 <div className="flex flex-row flex-wrap gap-2">
                     {devices.map((device) => (
                         <button
@@ -193,7 +204,7 @@ const MemorySection: React.FC<MemorySectionProps> = ({ selectedUser, devicesVers
                 <Loader2 className="animate-spin text-muted-foreground" size={16} />
             )}
 
-            {devices !== null && devices.length === 0 && (
+            {!fixedDeviceId && devices !== null && devices.length === 0 && (
                 <p className="text-sm text-muted-foreground">{memoryNoDevice}</p>
             )}
 

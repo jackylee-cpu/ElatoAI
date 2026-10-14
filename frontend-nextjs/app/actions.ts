@@ -15,6 +15,7 @@ import {
 } from "@/db/devices";
 import { clearDeviceMemory } from "@/db/memories";
 import { getSimpleUserById } from "@/db/users";
+import type { DeviceWifiState, WifiOp } from "@/lib/deviceWifi";
 
 export async function deleteUserApiKey(userId: string) {
     const supabase = createClient();
@@ -58,7 +59,7 @@ export const forgotPasswordAction = async (formData: FormData) => {
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo:
-            `${origin}/auth/callback?redirect_to=/protected/reset-password`,
+            `${origin}/auth/callback?redirect_to=/home/account/password`,
     });
 
     if (error) {
@@ -81,41 +82,30 @@ export const forgotPasswordAction = async (formData: FormData) => {
     );
 };
 
-export const resetPasswordAction = async (formData: FormData) => {
-    const supabase = createClient();
-
-    const password = formData.get("password") as string;
-    const confirmPassword = formData.get("confirmPassword") as string;
-
+/**
+ * Sets a new password for the signed-in user. Used from Me > Personal Info and
+ * at the end of the forgot-password email, whose link signs the user in first.
+ * Returns the error to show instead of redirecting, so the form keeps its place.
+ */
+export const changePasswordAction = async (
+    password: string,
+    confirmPassword: string,
+): Promise<{ error?: string }> => {
     if (!password || !confirmPassword) {
-        encodedRedirect(
-            "error",
-            "/protected/reset-password",
-            "Password and confirm password are required",
-        );
+        return { error: "Please fill in both fields." };
     }
-
     if (password !== confirmPassword) {
-        encodedRedirect(
-            "error",
-            "/protected/reset-password",
-            "Passwords do not match",
-        );
+        return { error: "The passwords do not match." };
     }
 
-    const { error } = await supabase.auth.updateUser({
-        password: password,
-    });
-
+    const supabase = createClient();
+    const { error } = await supabase.auth.updateUser({ password });
     if (error) {
-        encodedRedirect(
-            "error",
-            "/protected/reset-password",
-            "Password update failed",
-        );
+        // Supabase's messages here are meant for users ("Password should be at
+        // least 6 characters", "New password should be different...").
+        return { error: error.message };
     }
-
-    encodedRedirect("success", "/protected/reset-password", "Password updated");
+    return {};
 };
 
 export const signOutAction = async () => {
@@ -265,6 +255,75 @@ export const refreshDeviceSession = async () => {
         .map((device) => device.mac_address)
         .filter((mac): mac is string => !!mac);
     return await dropDeviceSessions(macs);
+};
+
+/**
+ * Read or change a board's saved Wi-Fi networks (R-37), relayed by the voice
+ * server over the board's live socket.
+ *
+ * Ownership is checked here, with the signed-in client: RLS only lets a parent
+ * read their own devices, so a device id that is not theirs finds no row. The
+ * password goes straight through to the board and is not stored or logged on
+ * the way.
+ */
+export const deviceWifiAction = async (
+    deviceId: string,
+    op: WifiOp,
+    ssid?: string,
+    password?: string,
+): Promise<DeviceWifiState> => {
+    const failed = (error: string): DeviceWifiState => ({
+        online: false,
+        status: null,
+        status_at: null,
+        ok: false,
+        error,
+    });
+
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return failed("forbidden");
+    }
+    const { data: device } = await supabase
+        .from("devices")
+        .select("mac_address")
+        .eq("device_id", deviceId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+    if (!device?.mac_address) {
+        return failed("forbidden");
+    }
+
+    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    if (!internalUrl || !internalToken) {
+        return failed("unavailable");
+    }
+
+    try {
+        const response = await fetch(`${internalUrl}/internal/device_wifi`, {
+            method: "POST",
+            cache: "no-store",
+            // The server waits up to 20s for the board; a scan takes a few.
+            signal: AbortSignal.timeout(25_000),
+            headers: {
+                "Content-Type": "application/json",
+                "X-Internal-Token": internalToken,
+            },
+            body: JSON.stringify({ mac: device.mac_address, op, ssid, password }),
+        });
+        if (response.status === 400) {
+            return failed("invalid");
+        }
+        if (!response.ok) {
+            return failed("unavailable");
+        }
+        return (await response.json()) as DeviceWifiState;
+    } catch {
+        // Deliberately not logged: the error can carry the request body.
+        return failed("unavailable");
+    }
 };
 
 /**

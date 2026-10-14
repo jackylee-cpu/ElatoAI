@@ -161,6 +161,15 @@ export function SettingsIcon({ className }: IconProps) {
     );
 }
 
+export function MeIcon({ className }: IconProps) {
+    return (
+        <svg viewBox="0 0 64 64" className={className} fill="#4C8DF6" aria-hidden="true">
+            <circle cx="32" cy="19" r="14" />
+            <path d="M6 56.5C6 45 15 37 26 37h12c11 0 20 8 20 19.5a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z" />
+        </svg>
+    );
+}
+
 // 3x3 star grid, simplified like the original 36px artwork.
 const US_FLAG_STARS =
     "M4.5 1.3L5.06 2.83L6.69 2.89L5.4 3.89L5.85 5.46L4.5 4.55L3.15 5.46L3.6 3.89L2.31 2.89L3.94 2.83Z" +

@@ -1,38 +1,11 @@
-import SettingsDashboard from "@/app/components/Settings/SettingsDashboard";
-import { getAllLanguages } from "@/db/languages";
-import { getAllRegions } from "@/db/regions";
-import { getUserById } from "@/db/users";
-import { getOpenGraphMetadata } from "@/lib/utils";
-import { createClient } from "@/utils/supabase/server";
-import { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-    title: "Settings",
-    ...getOpenGraphMetadata("Settings"),
-};
-
-export default async function Home() {
-    const supabase = createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-
-    const dbUser = user ? await getUserById(supabase, user.id) : null;
-    const [allLanguages, allRegions] = await Promise.all([
-        getAllLanguages(supabase),
-        getAllRegions(supabase),
-    ]);
-
-    return (
-        <>
-            {dbUser && (
-                <SettingsDashboard
-                    selectedUser={dbUser}
-                    allLanguages={allLanguages}
-                    allRegions={allRegions}
-                />
-            )}
-        </>
-    );
+// The parent app used to keep a second settings screen here, beside Me.
+// Bookmarks still land: child details on My Info, everything else on Me.
+export default function SettingsPage({
+    searchParams,
+}: {
+    searchParams: { tab?: string };
+}) {
+    redirect(searchParams.tab === "setting" ? "/home/account" : "/home/account/child");
 }
