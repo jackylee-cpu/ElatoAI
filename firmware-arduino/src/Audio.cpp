@@ -1024,6 +1024,10 @@ void audioStreamTask(void *parameter) {
     // delaying it.
 #ifndef SKIP_BOOT_CHIME
     playBootChime();
+#ifdef ASSET_PROMPT_TEST
+    void playAssetPromptTest();
+    playAssetPromptTest();
+#endif
 #else
     Serial.println("Chime: boot skipped (SKIP_BOOT_CHIME)");
 #endif

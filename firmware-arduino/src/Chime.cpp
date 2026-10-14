@@ -1,5 +1,6 @@
 #include "Chime.h"
 
+#include "Assets.h"
 #include "Audio.h"
 #include "Config.h"
 #include "SoundData.h"
@@ -167,17 +168,41 @@ static void playResampledOnOpenPort(const int16_t *pcm, unsigned frames, int src
 
 }  // namespace
 
+// The brand's own recording when the assets partition has one (P2-12), else
+// the one built into the app.
+static AssetSound pickSound(const char *name, const int16_t *pcm, unsigned frames, int rate) {
+    AssetSound s;
+    if (assetsFind(name, &s)) return s;
+    return AssetSound{nullptr, pcm, frames, rate};
+}
+
 void playBootChime() {
-    Serial.printf("Chime: boot, %u frames @ %d Hz -> %u Hz on the open port\n",
-                  kBootSoundFrames, kBootSoundRate, (unsigned)SAMPLE_RATE);
-    playResampledOnOpenPort(kBootSoundPcm, kBootSoundFrames, kBootSoundRate);
+    AssetSound s = pickSound("boot", kBootSoundPcm, kBootSoundFrames, kBootSoundRate);
+    Serial.printf("Chime: boot (%s), %u frames @ %d Hz -> %u Hz on the open port\n",
+                  s.name ? "assets" : "built-in", s.frames, s.rate, (unsigned)SAMPLE_RATE);
+    playResampledOnOpenPort(s.pcm, s.frames, s.rate);
+}
+
+bool playAssetSound(const char *name) {
+    AssetSound s;
+    if (!assetsFind(name, &s)) {
+        Serial.printf("Chime: no '%s' in assets\n", name);
+        return false;
+    }
+    Serial.printf("Chime: %s, %u frames @ %d Hz\n", name, s.frames, s.rate);
+    boardSetSpeakerAmp(true);
+    playResampledOnOpenPort(s.pcm, s.frames, s.rate);
+    boardSetSpeakerAmp(false);
+    return true;
 }
 
 void playLowBatteryReminder() {
-    Serial.printf("Chime: low battery, %u frames @ %d Hz -> %u Hz on the open port\n",
-                  kLowBatterySoundFrames, kLowBatterySoundRate, (unsigned)SAMPLE_RATE);
+    AssetSound s = pickSound("low_battery", kLowBatterySoundPcm, kLowBatterySoundFrames,
+                             kLowBatterySoundRate);
+    Serial.printf("Chime: low battery (%s), %u frames @ %d Hz -> %u Hz on the open port\n",
+                  s.name ? "assets" : "built-in", s.frames, s.rate, (unsigned)SAMPLE_RATE);
     boardSetSpeakerAmp(true);
-    playResampledOnOpenPort(kLowBatterySoundPcm, kLowBatterySoundFrames, kLowBatterySoundRate);
+    playResampledOnOpenPort(s.pcm, s.frames, s.rate);
     boardSetSpeakerAmp(false);
 }
 
@@ -185,3 +210,21 @@ void playSleepChime() {
     Serial.printf("Chime: sleep, %u frames @ %d Hz\n", kSleepSoundFrames, kSleepSoundRate);
     playSample(kSleepSoundPcm, kSleepSoundFrames, kSleepSoundRate);
 }
+
+#ifdef ASSET_PROMPT_TEST
+// Test builds only: every sound in the assets partition, in order, then the
+// low-battery reminder through its own path.
+void playAssetPromptTest() {
+    for (int i = 0; i < assetsCount(); i++) {
+        AssetSound s;
+        assetsAt(i, &s);
+        if (strcmp(s.name, "boot") == 0 || strcmp(s.name, "sleep") == 0) continue;
+        vTaskDelay(pdMS_TO_TICKS(1200));
+        Serial.printf("ASSET_PROMPT_TEST %d/%d volume %d\n", i + 1, assetsCount(), currentVolume);
+        playAssetSound(s.name);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    playLowBatteryReminder();
+    Serial.println("ASSET_PROMPT_TEST done");
+}
+#endif

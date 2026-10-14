@@ -29,6 +29,7 @@ import json
 import os
 import pathlib
 import re
+import struct
 import sys
 import urllib.error
 import urllib.parse
@@ -52,6 +53,31 @@ def firmware_version() -> str:
     if not match:
         sys.exit("FIRMWARE_VERSION not found in src/OTA.h")
     return match.group(1)
+
+
+# Boards flashed before P2-12 have partition.csv's 2MB app slots, and OTA can
+# never change a board's partition table.
+LEGACY_APP_SLOT = 0x200000
+
+
+def smallest_app_slot(partitions_bin: pathlib.Path) -> int:
+    """Size of the smallest OTA app slot in a built partition table.
+
+    pio's "Flash: 99%" counts sections, not the padded image: on 2026-10-14 it
+    passed a 2,147,728-byte image for a 2,097,152-byte slot, and the board
+    boot-looped in the bootloader. So the image itself is checked here.
+    """
+    data = partitions_bin.read_bytes()
+    sizes = []
+    for i in range(0, len(data), 32):
+        magic, ptype, subtype, _offset, size = struct.unpack_from("<HBBII", data, i)
+        if magic != 0x50AA:
+            break
+        if ptype == 0x00 and 0x10 <= subtype <= 0x1F:  # app, ota_0..ota_15
+            sizes.append(size)
+    if not sizes:
+        sys.exit(f"{partitions_bin}: no OTA app slots found")
+    return min(sizes)
 
 
 class Supabase:
@@ -118,6 +144,13 @@ def publish(args, db):
     if not binary.exists():
         sys.exit(f"{binary} not found; run: pio run -e {env}")
     image = binary.read_bytes()
+    slot = smallest_app_slot(binary.parent / "partitions.bin")
+    if len(image) > slot:
+        sys.exit(f"{binary} is {len(image)} bytes but this build's app slot is {slot}: "
+                 "boards could not boot it")
+    if len(image) > LEGACY_APP_SLOT:
+        print(f"warning: {len(image)} bytes is over the {LEGACY_APP_SLOT}-byte app slot of boards "
+              "flashed with partition.csv; those boards cannot install it")
     version = firmware_version()
     if args.version:
         if not args.dev:

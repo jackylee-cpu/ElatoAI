@@ -1,0 +1,20 @@
+# Production layout proposal for the 16MB Spotpear AI Toy (P2-12). Frozen with
+# the factory image: once a board ships, OTA can change the app but never this.
+# nvs and otadata stay where partition.csv put them, so a board moved to this
+# table by USB keeps its Wi-Fi, device secret and volume.
+#
+# Name,    Type, SubType,   Offset,   Size,     Flags
+nvs,       data, nvs,       0x9000,   0x5000,
+otadata,   data, ota,       0xe000,   0x2000,
+app0,      app,  ota_0,     0x10000,  0x400000,
+app1,      app,  ota_1,     0x410000, 0x400000,
+# Brand sounds: boot, low battery, Wi-Fi setup prompts. Written per brand at
+# the factory (tools/build_assets.py); read in place by src/Assets.cpp.
+assets,    data, 0x40,      0x810000, 0x200000,
+# Reserved for NVS encryption with flash encryption on (P0-14).
+nvs_keys,  data, nvs_keys,  0xa10000, 0x1000,   encrypted
+# The core already writes a crash dump here when one exists (sdkconfig
+# ESP_COREDUMP_ENABLE_TO_FLASH); partition.csv has nowhere to put it.
+coredump,  data, coredump,  0xa20000, 0x10000,
+# Offline songs and stories (R-14), the rest of the chip.
+media,     data, 0x41,      0xa30000, 0x5d0000,

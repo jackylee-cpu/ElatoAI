@@ -26,4 +26,9 @@ void playSleepChime();
 // length of the sound and off again.
 void playLowBatteryReminder();
 
+// A sound from the assets partition by name (P2-12), e.g. "wifi_ok". Same
+// rules as the low-battery reminder: audioStreamTask only, nothing else
+// playing. False, and silent, when the board has no such sound.
+bool playAssetSound(const char *name);
+
 #endif
