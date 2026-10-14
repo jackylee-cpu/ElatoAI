@@ -44,6 +44,7 @@ const VERBS: Record<string, string> = {
     "account.delete": "Deleted",
     "device.unbind": "Force-unbound",
     "device.reset_key": "Reset the key of",
+    "device.set_ip": "Set the toy IP of",
 };
 
 function describe(entry: IAdminAuditEntry): string {

@@ -33,6 +33,7 @@ import {
     forceUnbindDeviceAction,
     getDevicePresenceAction,
     resetDeviceSecretAction,
+    setDeviceIpAction,
 } from "@/app/admin/actions";
 import type { DevicePresence, PresenceMap } from "@/lib/devicePresence";
 import { DeviceUsage, deviceName, formatMoney, llmPriceMap, usageByDevice } from "@/lib/usageCost";
@@ -75,6 +76,7 @@ interface DevicesTabProps {
         rates: IUsageRates;
         models: IOpenRouterModel[] | null;
     };
+    ips: IIp[];
 }
 
 function macKey(device: IAdminDevice): string {
@@ -125,7 +127,7 @@ function when(iso: string | null): string {
  * refuses them. Conversations, memories and the child's details are not read
  * here at all (Q7).
  */
-const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPresence, usage }) => {
+const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPresence, usage, ips }) => {
     const [presence, setPresence] = useState<PresenceMap>(initialPresence);
     const [now, setNow] = useState(() => Date.now());
     const [query, setQuery] = useState("");
@@ -281,7 +283,14 @@ const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPrese
                                                 <StatePill state={rowState} />
                                             </TableCell>
                                             <TableCell className="whitespace-nowrap">
-                                                <div className="font-medium">{deviceName(device.mac_address)}</div>
+                                                <div className="font-medium">
+                                                    {deviceName(device.mac_address)}
+                                                    {device.ip_key && (
+                                                        <span className="ml-1.5 font-normal text-muted-foreground">
+                                                            {ipName(ips, device.ip_key)}
+                                                        </span>
+                                                    )}
+                                                </div>
                                                 <div className="font-mono text-[11px] text-muted-foreground">
                                                     {device.mac_address ?? "—"}
                                                 </div>
@@ -327,6 +336,7 @@ const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPrese
                         usage={usageByMac.get(current.device.device_id) ?? null}
                         rates={usage.rates}
                         now={now}
+                        ips={ips}
                     />
                 )}
             </div>
@@ -334,7 +344,11 @@ const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPrese
     );
 };
 
-type PendingAction = "reset" | "unbind" | null;
+type PendingAction = "reset" | "unbind" | "ip" | null;
+
+function ipName(ips: IIp[], ipKey: string): string {
+    return ips.find((ip) => ip.ip_key === ipKey)?.name ?? ipKey;
+}
 
 function DeviceDetail({
     device,
@@ -343,6 +357,7 @@ function DeviceDetail({
     usage,
     rates,
     now,
+    ips,
 }: {
     device: IAdminDevice;
     live: DevicePresence | undefined;
@@ -350,6 +365,7 @@ function DeviceDetail({
     usage: DeviceUsage | null;
     rates: IUsageRates;
     now: number;
+    ips: IIp[];
 }) {
     const [pending, setPending] = useState<PendingAction>(null);
     const name = deviceName(device.mac_address);
@@ -376,7 +392,13 @@ function DeviceDetail({
                     <dd>{device.firmware_board ?? "—"}</dd>
 
                     <dt className="text-muted-foreground">IP</dt>
-                    <dd className="text-muted-foreground">Not locked yet (arrives with factory registration, R-38)</dd>
+                    <dd>
+                        {device.ip_key ? (
+                            ipName(ips, device.ip_key)
+                        ) : (
+                            <span className="text-muted-foreground">Not locked: runs the account&apos;s character</span>
+                        )}
+                    </dd>
 
                     <dt className="text-muted-foreground">Firmware</dt>
                     <dd>
@@ -435,6 +457,9 @@ function DeviceDetail({
                 </dl>
 
                 <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-4">
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => setPending("ip")}>
+                        Set toy IP
+                    </Button>
                     <Button
                         variant="outline"
                         size="sm"
@@ -455,8 +480,8 @@ function DeviceDetail({
                     </Button>
                 </div>
                 <p className="rounded-xl bg-sky-50 px-3 py-2 text-xs text-sky-900">
-                    Conversations, memories and the child&apos;s details are never shown here. Both actions ask for a
-                    reason and go to the audit log.
+                    Conversations, memories and the child&apos;s details are never shown here. Every action asks for a
+                    reason and goes to the audit log.
                 </p>
             </CardContent>
 
@@ -464,6 +489,7 @@ function DeviceDetail({
                 key={`${device.device_id}-${pending}`}
                 device={device}
                 action={pending}
+                ips={ips}
                 onClose={() => setPending(null)}
             />
         </Card>
@@ -483,18 +509,30 @@ const DIALOG_TEXT: Record<Exclude<PendingAction, null>, { title: string; body: s
             "Releases the toy from its account. If it is online it reconnects within seconds and goes back to pairing. What it remembers stays with the old account; whoever binds it next starts empty.",
         confirm: "Unbind",
     },
+    ip: {
+        title: "Set toy IP",
+        body:
+            "Which toy this board is sewn into. It then only runs that IP's characters: the account's pick if it is one of them, otherwise the IP's default character. Not locked runs whatever the account picked. If it is online it reconnects within seconds as the new character.",
+        confirm: "Save",
+    },
 };
+
+const NOT_LOCKED = "__none__";
 
 function ReasonDialog({
     device,
     action,
+    ips,
     onClose,
 }: {
     device: IAdminDevice;
     action: PendingAction;
+    ips: IIp[];
     onClose: () => void;
 }) {
     const [reason, setReason] = useState("");
+    const [ipChoice, setIpChoice] = useState(device.ip_key ?? NOT_LOCKED);
+    const ipUnchanged = action === "ip" && ipChoice === (device.ip_key ?? NOT_LOCKED);
     const [busy, setBusy] = useState(false);
     const text = action ? DIALOG_TEXT[action] : null;
 
@@ -504,7 +542,9 @@ function ReasonDialog({
         const result =
             action === "reset"
                 ? await resetDeviceSecretAction(device.device_id, reason)
-                : await forceUnbindDeviceAction(device.device_id, reason);
+                : action === "ip"
+                  ? await setDeviceIpAction(device.device_id, ipChoice === NOT_LOCKED ? null : ipChoice, reason)
+                  : await forceUnbindDeviceAction(device.device_id, reason);
         setBusy(false);
         if (!result.ok) {
             toast({ description: result.error, variant: "destructive" });
@@ -514,7 +554,9 @@ function ReasonDialog({
             description:
                 action === "reset"
                     ? `${deviceName(device.mac_address)}: key reset`
-                    : `${deviceName(device.mac_address)} unbound from ${device.owner_email ?? "its account"}`,
+                    : action === "ip"
+                      ? `${deviceName(device.mac_address)}: ${ipChoice === NOT_LOCKED ? "not locked" : ipName(ips, ipChoice)}`
+                      : `${deviceName(device.mac_address)} unbound from ${device.owner_email ?? "its account"}`,
         });
         onClose();
     };
@@ -529,13 +571,29 @@ function ReasonDialog({
                         </DialogTitle>
                         <DialogDescription>{text.body}</DialogDescription>
                     </DialogHeader>
+                    {action === "ip" && (
+                        <Select value={ipChoice} onValueChange={setIpChoice}>
+                            <SelectTrigger className="rounded-full">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={NOT_LOCKED}>Not locked</SelectItem>
+                                {ips.map((ip) => (
+                                    <SelectItem key={ip.ip_key} value={ip.ip_key}>
+                                        {ip.name}
+                                        {ip.is_hidden ? " (hidden)" : ""}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    )}
                     <Textarea
                         value={reason}
                         onChange={(event) => setReason(event.target.value)}
                         placeholder="Reason (goes to the audit log)"
                         maxLength={500}
                         rows={3}
-                        autoFocus
+                        autoFocus={action !== "ip"}
                     />
                     <DialogFooter className="gap-2">
                         <Button variant="outline" className="rounded-full" onClick={onClose} disabled={busy}>
@@ -545,7 +603,7 @@ function ReasonDialog({
                             variant={action === "unbind" ? "destructive" : "default"}
                             className="rounded-full"
                             onClick={submit}
-                            disabled={busy || reason.trim() === ""}
+                            disabled={busy || reason.trim() === "" || ipUnchanged}
                         >
                             {busy ? "Working…" : text.confirm}
                         </Button>

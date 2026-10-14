@@ -519,6 +519,7 @@ declare global {
         ota_failed_version: string | null;
         ota_failed_at: string | null;
         key_issued_at: string | null;
+        ip_key: string | null;
     }
 
     /** STT, TTS and currency rates for pricing usage; LLM prices come from OpenRouter. */

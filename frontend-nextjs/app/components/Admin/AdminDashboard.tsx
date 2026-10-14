@@ -105,7 +105,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             case "usage":
                 return <UsageTab {...usage} />;
             case "devices":
-                return <DevicesTab devices={devices} presence={presence} usage={usage} />;
+                return <DevicesTab devices={devices} presence={presence} usage={usage} ips={ips} />;
             case "characters":
                 return (
                     <CharactersTab

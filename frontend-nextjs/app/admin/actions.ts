@@ -960,6 +960,7 @@ function deviceActionError(error: unknown, fallback: string): string {
     if (code === "P0002") {
         if (message?.includes("not bound")) return "This toy is not bound to anyone";
         if (message?.includes("no key")) return "This toy has no key to reset";
+        if (message?.includes("no IP")) return "No such IP";
         return "No such toy";
     }
     return fallback;
@@ -1023,6 +1024,42 @@ export async function forceUnbindDeviceAction(
     if (error) {
         console.error("forceUnbindDeviceAction failed", error);
         return { ok: false, error: deviceActionError(error, "Could not unbind the toy") };
+    }
+
+    if (typeof mac === "string" && mac) {
+        await dropBoardSession(mac);
+    }
+    revalidatePath("/admin");
+    return { ok: true };
+}
+
+/**
+ * Say which toy a board is sewn into. A board in a toy only runs that IP's
+ * characters, whatever the account picked; null unlocks it.
+ *
+ * The board's live session is dropped so it reconnects as the toy straight
+ * away. Best effort: a toy that is asleep picks it up when it next wakes.
+ */
+export async function setDeviceIpAction(
+    deviceId: string,
+    ipKey: string | null,
+    reason: string,
+): Promise<ActionResult> {
+    const { supabase } = await requireAdmin("super_admin");
+
+    const why = cleanReason(reason);
+    if (!why) {
+        return { ok: false, error: `Give a reason, up to ${MAX_REASON_LENGTH} characters` };
+    }
+
+    const { data: mac, error } = await supabase.rpc("admin_set_device_ip", {
+        p_device_id: deviceId,
+        p_ip_key: ipKey,
+        p_reason: why,
+    });
+    if (error) {
+        console.error("setDeviceIpAction failed", error);
+        return { ok: false, error: deviceActionError(error, "Could not set the toy") };
     }
 
     if (typeof mac === "string" && mac) {
