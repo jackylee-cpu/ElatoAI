@@ -24,9 +24,13 @@
 -- (user_id, device_id, ip_key), so it stays with the old owner and the next
 -- account to claim the board starts empty (see 20261009140000).
 --
--- Re-runnable.
+-- Re-runnable, including after 20261014170500, which adds a column to
+-- admin_list_devices(): CREATE OR REPLACE cannot change a return type, so the
+-- function is dropped first. Run 20261014170500 again afterwards.
 
-CREATE OR REPLACE FUNCTION public.admin_list_devices()
+DROP FUNCTION IF EXISTS public.admin_list_devices();
+
+CREATE FUNCTION public.admin_list_devices()
 RETURNS TABLE (
     device_id            uuid,
     mac_address          text,

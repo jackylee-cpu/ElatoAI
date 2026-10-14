@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
-# Admin audit log (P1-10) + usage and cost per toy (P2-09) release -- run ON THE SERVER.
+# Admin audit log (P1-10), usage and cost (P2-09), admin Devices (P2-14),
+# account editing, battery state (R-41) and boards locked to their toy's IP
+# -- run ON THE SERVER.
 #
-# Takes production from 8db9d9c to this release. Besides P1-10 and P2-09 it
-# ships everything merged to dev since then, none of which needs a schema
-# change:
+# Takes production from 8db9d9c to this release. Probed 2026-10-14 from the
+# public API: production had none of the seven migrations below. Schema
+# changes, all in step 3:
+#   - P1-10 audit log, P2-09 usage columns (see below)
+#   - P2-14: admin_list_devices / admin_reset_device_secret /
+#     admin_unbind_device; the Devices page is live, not a preview
+#   - admin_delete_account: Accounts can edit, disable and delete logins
+#   - R-41: devices.battery_* -- the app shows the toy's battery state
+#   - an IP is one physical toy: devices.ip_key keeps a board on its toy's
+#     characters, ips.default_personality_id says who the toy is, and
+#     admin_set_device_ip sets it from the Devices page. Every board starts
+#     unlocked, so nothing changes for a toy until someone sets its IP.
+# It also ships, with no schema change:
+#   - Characters and IPs get a row menu: Edit, and Delete (hide) or Show
 #   - login page offers email only (Apple, Google, Facebook removed)
 #   - R-37: the web app relays Wi-Fi status/scan/add/delete to a board's live
 #     socket. Boards on firmware 1.0.1 do not answer yet; for them the page
@@ -11,8 +24,8 @@
 #     reaches them by OTA. Harmless, but expect it.
 #   - the parent Settings screen becomes a Me section
 #   - the upstream Elato storefront (checkout route, product schema) is gone
-#   - the admin console moves to a grouped sidebar; Overview, Devices,
-#     Support, OTA releases and Factory are previews with example data
+#   - the admin console moves to a grouped sidebar; Overview, Support,
+#     OTA releases and Factory are previews with example data
 #   - P1-10: admin_audit_log, written by triggers on every table an admin
 #     edits; append-only for everyone. New "Audit log" admin page.
 #   - P2-09: turn_metrics gains device_id, stt_audio_ms, tts_chars, row_kind;
@@ -39,6 +52,8 @@
 #   -> new voice server + web app -> checks.
 # The new voice server sends turn_metrics columns the old table does not have,
 # and PostgREST would refuse every such row, so it must not start before step 3.
+# It also reads devices.ip_key when a board connects: without the column that
+# lookup fails and every board falls back to the built-in character.
 # The old voice server and web app work unchanged on the new schema.
 #
 # Rollback: step 0 prints the running image ids. Putting them back with
@@ -61,9 +76,24 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 # Step 6 counts the rows written since the new voice server started.
 MARK_FILE="$BACKUP_DIR/release-2026-10-14-voice-started-at"
 
+# In this order: 140000 and 150000 write to the audit log from 120000, and
+# 170500 replaces the admin_list_devices() that 140000 creates.
 MIGRATIONS=(
     20261014120000_admin_audit_log.sql
     20261014130000_usage_cost.sql
+    20261014140000_admin_devices.sql
+    20261014150000_admin_accounts.sql
+    20261014153000_device_battery.sql
+    20261014170000_lock_boards_to_their_ip.sql
+    20261014170500_admin_set_device_ip.sql
+)
+# Each admin function is refused to anon and checks the role itself.
+ADMIN_FUNCTIONS=(
+    "admin_list_devices()"
+    "admin_reset_device_secret(uuid,text)"
+    "admin_unbind_device(uuid,text)"
+    "admin_set_device_ip(uuid,text,text)"
+    "admin_delete_account(uuid,text)"
 )
 AUDITED_TABLES=(app_settings personalities ips ip_modes ip_styles admin_roles)
 
@@ -77,6 +107,7 @@ apply() {
 }
 has_column() { [ "$(q "select count(*) from information_schema.columns where table_schema='public' and table_name='$1' and column_name='$2'")" = "1" ]; }
 has_table()  { [ "$(q "select to_regclass('public.$1') is not null")" = "t" ]; }
+has_function() { [ "$(q "select to_regprocedure('public.$1') is not null")" = "t" ]; }
 env_value() { grep -E "^$1=" "$2" | tail -1 | cut -d= -f2- || true; }
 frontend_container() { (cd "$FRONTEND_DIR" && docker compose -f docker-compose.ghcr.yml ps -q frontend); }
 fastapi_container()  { (cd "$FASTAPI_DIR" && docker compose -f docker-compose.ghcr.yml ps -q fastapi); }
@@ -155,18 +186,25 @@ if step 2; then
 fi
 
 if step 3; then
-    say "3. Audit log + usage columns (additive: the running code ignores them)"
+    say "3. Migrations (additive: the running code ignores them)"
     # Each file runs in one transaction (-1) and is re-runnable, so a failure
     # rolls back cleanly and the step can simply be run again.
     for m in "${MIGRATIONS[@]}"; do apply "$m"; done
     has_table admin_audit_log && has_column turn_metrics row_kind && has_column turn_metrics device_id \
+        && has_column devices battery_low && has_column devices ip_key && has_column ips default_personality_id \
         || { echo "  objects still missing"; exit 1; }
+    for f in "${ADMIN_FUNCTIONS[@]}"; do
+        has_function "$f" || { echo "  function $f missing"; exit 1; }
+    done
+    [ "$(q "select pg_get_function_result('public.admin_list_devices()'::regprocedure) like '%ip_key%'")" = "t" ] \
+        || { echo "  admin_list_devices() has no ip_key -- 20261014170500 did not run last"; exit 1; }
     echo "  ok"
 fi
 
 if step 4; then
     say "4. Images $RELEASE (waits for CI)"
-    has_column turn_metrics row_kind || { echo "  step 3 has not run -- the new voice server's metrics writes would all fail"; exit 1; }
+    has_column turn_metrics row_kind && has_column devices ip_key \
+        || { echo "  step 3 has not run -- the new voice server's metrics writes and board lookups would fail"; exit 1; }
     for img in fastapi frontend; do
         tries=0
         until out="$(docker pull -q "ghcr.io/jackylee-cpu/aibuddy/$img:$RELEASE" 2>&1)"; do
@@ -259,6 +297,30 @@ SQL
         fetch('https://openrouter.ai/api/v1/models').then(r => console.log(r.status), e => console.log('unreachable: ' + e.cause?.code))" 2>&1 || true)"
     [ "$code" = "200" ] && ok "web app reaches the OpenRouter catalogue" || bad "OpenRouter catalogue from the web app: $code"
 
+    # -- P2-14, accounts, R-41, toy IPs --
+    for c in "devices battery_low" "devices battery_at" "devices ip_key" "ips default_personality_id"; do
+        has_column $c && ok "${c/ /.}" || bad "${c/ /.} missing"
+    done
+    for f in "${ADMIN_FUNCTIONS[@]}"; do
+        if ! has_function "$f"; then bad "$f missing"; continue; fi
+        [ "$(q "select has_function_privilege('anon', 'public.$f', 'EXECUTE')")" = "f" ] \
+            && ok "anon cannot call $f" || bad "anon can call $f"
+    done
+    # Called as authenticated without an admin role: refused inside the
+    # function. Rolled back, so even a wrong answer changes nothing.
+    out="$(docker exec -i "$DB" psql -X -q -At -U postgres -d postgres 2>&1 <<'SQL' || true
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000000","role":"authenticated"}', true);
+SELECT count(*) FROM public.admin_list_devices();
+ROLLBACK;
+SQL
+)"
+    echo "$out" | grep -q "only a super admin" && ok "a signed-in parent is refused admin_list_devices" || bad "admin_list_devices for a parent: $out"
+    [ "$(q "select count(*) from public.devices where ip_key is not null")" = "0" ] \
+        && ok "no board is locked to a toy yet (as expected on first release)" \
+        || ok "$(q "select count(*) from public.devices where ip_key is not null") board(s) locked to a toy"
+
     # -- the rest of the release --
     token="$(env_value INTERNAL_API_TOKEN "$FRONTEND_DIR/.env.production")"
     url="$(env_value VOICE_SERVER_INTERNAL_URL "$FRONTEND_DIR/.env.production")"
@@ -269,6 +331,13 @@ SQL
         .then(r => console.log(r.status), e => console.log('unreachable: ' + e.cause?.code))" "$token" 2>&1 || true)"
     unset token
     [ "$code" = "200" ] && ok "web app -> voice server /internal answers 200" || bad "web app -> voice server /internal: $code"
+    token="$(env_value INTERNAL_API_TOKEN "$FRONTEND_DIR/.env.production")"
+    code="$(docker exec "$(frontend_container)" node -e "
+        fetch('$url/internal/devices_presence', {method: 'POST',
+            headers: {'X-Internal-Token': process.argv[1]}})
+        .then(r => console.log(r.status), e => console.log('unreachable: ' + e.cause?.code))" "$token" 2>&1 || true)"
+    unset token
+    [ "$code" = "200" ] && ok "Devices page can read who is online (/internal/devices_presence)" || bad "/internal/devices_presence: $code"
     for p in /login /signup; do
         c="$(curl -s -o /dev/null -w '%{http_code}' "$SITE$p")"
         [ "$c" = "200" ] && ok "$p -> 200" || bad "$p -> $c"
@@ -303,6 +372,18 @@ SQL
     shows only chars=/lengths, never the words
   - Usage & cost: this month lists the board you talked to by its AIBuddy-XXXX
     name with STT, LLM and TTS amounts; no "could not reach OpenRouter" banner
+  - Devices: every board is listed, the one you talked to shows Online with
+    its Wi-Fi; its IP reads "Not locked"
+  - Accounts: create a throwaway account, edit its email, disable it (it can
+    no longer sign in), then delete it with a reason -> Audit log has
+    account.create / account.update / account.delete records
+  - Characters / IPs: the row menu hides one and Show brings it back; the
+    page stays clickable after each confirmation
+  - Toy lock, when you set up a real toy: make one IP per toy (e.g. rabbit),
+    move its character in, pick it as the IP's default, put "you are a rabbit"
+    in the IP's rules, then Devices -> Set toy IP. Pick a different character
+    as the parent: the board still speaks as the toy's character
+  - a parent's Me page shows the toy's battery (low / ok) after it connects
   - /admin as a content admin: only Characters and IPs
   - a parent: /login offers email only (no Apple, Google, Facebook); Me shows
     their board(s); a board on
