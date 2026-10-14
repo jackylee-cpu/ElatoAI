@@ -18,6 +18,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 import app_settings
 import device_auth
+import device_wifi
 import session_content
 from bot import create_esp32_auth_message, run_bot_session
 from device_registry import fetch_device_personality, fetch_user_personality
@@ -247,7 +248,7 @@ def create_browser_transport(websocket: WebSocket) -> BrowserWebsocketTransport:
     )
 
 
-def create_esp32_transport(websocket: WebSocket) -> Esp32WebsocketTransport:
+def create_esp32_transport(websocket: WebSocket, mac: str | None) -> Esp32WebsocketTransport:
     return Esp32WebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
@@ -255,7 +256,10 @@ def create_esp32_transport(websocket: WebSocket) -> Esp32WebsocketTransport:
             audio_out_enabled=True,
             audio_in_sample_rate=ESP32_INPUT_SAMPLE_RATE,
             audio_out_sample_rate=AUDIO_OUTPUT_SAMPLE_RATE,
-            serializer=RawPCMFrameSerializer(input_sample_rate=ESP32_INPUT_SAMPLE_RATE),
+            serializer=RawPCMFrameSerializer(
+                input_sample_rate=ESP32_INPUT_SAMPLE_RATE,
+                on_control=lambda message: device_wifi.handle_device_message(mac, message),
+            ),
         ),
     )
 
@@ -422,7 +426,7 @@ def create_app() -> FastAPI:
         await websocket.send_text(
             json.dumps(create_esp32_auth_message(volume=personality.volume))
         )
-        transport = create_esp32_transport(websocket)
+        transport = create_esp32_transport(websocket, mac_address)
 
         # Memory is keyed by the account the device is claimed by, the device
         # itself and the character's IP: each board on an account remembers
@@ -452,6 +456,7 @@ def create_app() -> FastAPI:
         if session_key:
             async with _sessions_lock:
                 _esp32_sessions[session_key].add(websocket)
+            device_wifi.register(session_key, websocket)
         try:
             await run_bot_session(
                 transport,
@@ -483,6 +488,7 @@ def create_app() -> FastAPI:
                 except Exception as exc:  # noqa: BLE001 - teardown must not raise
                     logger.warning("Could not persist memory for {}: {}", mac_address, exc)
             if session_key:
+                device_wifi.unregister(session_key, websocket)
                 async with _sessions_lock:
                     _esp32_sessions[session_key].discard(websocket)
                     if not _esp32_sessions[session_key]:
@@ -523,6 +529,49 @@ def create_app() -> FastAPI:
 
         logger.info("Device refresh for {} closed {} session(s)", mac, closed)
         return {"ok": True, "closed": closed}
+
+    @app.post("/internal/device_wifi")
+    async def device_wifi_endpoint(
+        payload: dict = Body(...),
+        x_internal_token: str | None = Header(default=None),
+    ):
+        """Read or change a board's saved Wi-Fi networks (R-37).
+
+        The web app has already checked that the signed-in parent owns this
+        board; this only trusts the internal token. op is "status" (ask the
+        board, or return the last list if it is asleep), "peek" (the last list
+        and whether it is online, without bothering the board -- what the page
+        polls), "add", "delete" or "scan". The password in an add is relayed
+        and dropped -- never logged, never kept.
+        """
+        _require_internal_token(x_internal_token)
+
+        mac = str(payload.get("mac", "")).strip().upper()
+        op = payload.get("op")
+        if not mac or op not in ("status", "peek", "add", "delete", "scan"):
+            raise HTTPException(status_code=400, detail="mac and a valid op are required")
+
+        if op == "peek":
+            return {**device_wifi.snapshot(mac), "ok": True}
+        if op == "status":
+            if not device_wifi.snapshot(mac)["online"]:
+                return {**device_wifi.snapshot(mac), "ok": True}
+            return await device_wifi.request(mac, "status")
+        if op == "scan":
+            return await device_wifi.request(mac, "scan")
+
+        ssid = payload.get("ssid")
+        if not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32:
+            raise HTTPException(status_code=400, detail="ssid must be 1-32 bytes")
+        if op == "delete":
+            return await device_wifi.request(mac, "delete", ssid=ssid)
+
+        password = payload.get("password", "")
+        if not isinstance(password, str) or (
+            password and not 8 <= len(password.encode("utf-8")) <= 63
+        ):
+            raise HTTPException(status_code=400, detail="password must be empty or 8-63 bytes")
+        return await device_wifi.request(mac, "add", ssid=ssid, password=password)
 
     @app.post("/internal/settings_refresh")
     async def settings_refresh(x_internal_token: str | None = Header(default=None)):

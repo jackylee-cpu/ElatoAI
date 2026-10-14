@@ -1,5 +1,6 @@
 #include "OTA.h"
 #include "Audio.h"
+#include "WifiManager.h"
 #include "DecodeStats.h"
 #include "Chime.h"
 #include "PitchShift.h"
@@ -1390,7 +1391,14 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_TEXT:
     {
-        Serial.printf("[WSc] get text: %s\n", payload);
+        // A Wi-Fi request can carry a password (R-37), so it never goes to the
+        // serial log. Checked before parsing: deserializeJson rewrites the
+        // buffer in place.
+        if (strstr((const char *)payload, "\"wifi\"") == nullptr) {
+            Serial.printf("[WSc] get text: %s\n", payload);
+        } else {
+            Serial.println("[WSc] get text: (Wi-Fi request)");
+        }
 
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, (char *)payload);
@@ -1403,6 +1411,29 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         }
 
         String type = doc["type"];
+
+        // Wi-Fi management from the web app's Network page (R-37). Queued for
+        // the Wi-Fi task, which answers on this socket.
+        if (type == "wifi") {
+            const char *id = doc["id"] | "";
+            if (!*id || !wifiRemoteEnqueue(doc["op"] | "", id, doc["ssid"] | "", doc["password"] | "")) {
+                JsonDocument busy;
+                busy["type"] = "wifi_result";
+                busy["id"] = id;
+                busy["ok"] = false;
+                busy["error"] = "busy";
+                String out;
+                serializeJson(busy, out);
+                webSocket.sendTXT(out);   // wsMutex is already held here
+            }
+            // The password lives on in doc until it goes out of scope here;
+            // wipe the parsed copy now rather than leave it in the heap.
+            if (doc["password"].is<const char *>()) {
+                char *pw = (char *)doc["password"].as<const char *>();
+                memset(pw, 0, strlen(pw));
+            }
+            break;
+        }
 
         // auth messages
         if (strcmp((char*)type.c_str(), "auth") == 0) {
@@ -1443,6 +1474,10 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             // The voice server answered. A new image is confirmed if it now
             // stays up (OTA.cpp).
             otaServerReached();
+
+            // Tell the server which Wi-Fi this board is on and has saved, so
+            // the web app can show it even after the board falls asleep.
+            wifiRemoteEnqueue("status", "", "", "");
 
             // "Update now": the check runs on every boot, so a restart is the
             // whole job. Not if this boot's check failed, though -- the flag

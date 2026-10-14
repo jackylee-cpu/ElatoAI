@@ -1,0 +1,212 @@
+"""Remote Wi-Fi management relay (R-37).
+
+The board answers over its own socket, so these stand in a fake socket that
+records what the server sent and lets the test play the board's reply.
+"""
+import asyncio
+import json
+import os
+import sys
+
+import pytest
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import device_wifi  # noqa: E402
+from esp32_transport import RawPCMFrameSerializer  # noqa: E402
+
+MAC = "AA:BB:CC:DD:EE:FF"
+SECRET = "hunter2-very-secret"
+
+
+class FakeSocket:
+    def __init__(self, fail=False):
+        self.sent: list[dict] = []
+        self.fail = fail
+
+    async def send_text(self, text):
+        if self.fail:
+            raise RuntimeError(f"socket closed while sending {text}")
+        self.sent.append(json.loads(text))
+
+
+@pytest.fixture
+def logs():
+    """Everything loguru writes during the test. caplog cannot see loguru."""
+    from loguru import logger
+
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="DEBUG")
+    yield lines
+    logger.remove(sink)
+
+
+@pytest.fixture(autouse=True)
+def clean_boards():
+    device_wifi._boards.clear()
+    yield
+    device_wifi._boards.clear()
+
+
+def board_replies(socket, **reply):
+    """Answer the last request the server sent, as the board would."""
+    async def answer():
+        while not socket.sent:
+            await asyncio.sleep(0)
+        request = socket.sent[-1]
+        device_wifi.handle_device_message(MAC, {"type": "wifi_result", "id": request["id"], **reply})
+    return asyncio.create_task(answer())
+
+
+STATUS = {
+    "current": {"ssid": "Home", "rssi": -48},
+    "saved": [{"ssid": "Home", "joined": True}, {"ssid": "Phone", "joined": False}],
+    "max": 8,
+}
+
+
+def test_offline_board_reports_offline():
+    result = asyncio.run(device_wifi.request(MAC, "status"))
+    assert result["ok"] is False and result["error"] == "offline"
+    assert result["online"] is False
+
+
+async def test_add_round_trip_relays_password_and_caches_names_only(logs):
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    task = board_replies(socket, ok=True, **STATUS)
+
+    result = await device_wifi.request(MAC, "add", ssid="Phone", password=SECRET)
+    await task
+
+    assert socket.sent[0]["op"] == "add"
+    assert socket.sent[0]["password"] == SECRET  # the board does need it
+    assert result["ok"] is True and result["online"] is True
+    assert result["status"]["saved"][1] == {"ssid": "Phone", "joined": False}
+    # Nothing kept or returned carries the password.
+    assert SECRET not in json.dumps(device_wifi.snapshot(MAC))
+    assert SECRET not in json.dumps(result)
+    assert logs and SECRET not in "".join(logs)
+
+
+async def test_board_error_is_passed_on():
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    task = board_replies(socket, ok=False, error="current", **STATUS)
+    result = await device_wifi.request(MAC, "delete", ssid="Home")
+    await task
+    assert result == {**device_wifi.snapshot(MAC), "ok": False, "error": "current"}
+
+
+async def test_timeout(monkeypatch):
+    monkeypatch.setattr(device_wifi, "REQUEST_TIMEOUT_S", 0.05)
+    device_wifi.register(MAC, FakeSocket())
+    result = await device_wifi.request(MAC, "status")
+    assert result["ok"] is False and result["error"] == "timeout"
+    assert device_wifi._boards[MAC].pending == {}
+
+
+async def test_send_failure_does_not_log_the_payload(logs):
+    device_wifi.register(MAC, FakeSocket(fail=True))
+    result = await device_wifi.request(MAC, "add", ssid="Phone", password=SECRET)
+    assert result["error"] == "offline"
+    assert logs and SECRET not in "".join(logs)
+
+
+async def test_disconnect_fails_waiters_at_once():
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    pending = asyncio.create_task(device_wifi.request(MAC, "scan"))
+    while not socket.sent:
+        await asyncio.sleep(0)
+    device_wifi.unregister(MAC, socket)
+    result = await asyncio.wait_for(pending, 1)
+    assert result["error"] == "offline" and result["online"] is False
+
+
+def test_unprompted_status_is_cached_and_cleaned():
+    device_wifi.handle_device_message(
+        MAC.lower(),
+        {
+            "type": "wifi_status",
+            **STATUS,
+            "saved": STATUS["saved"] + [{"ssid": 5}, "junk"],
+            "password": "should-not-stick",
+        },
+    )
+    snap = device_wifi.snapshot(MAC)
+    assert snap["online"] is False
+    assert snap["status"] == STATUS
+    assert "should-not-stick" not in json.dumps(snap)
+
+
+async def test_serializer_keeps_wifi_messages_out_of_the_pipeline():
+    seen = []
+    serializer = RawPCMFrameSerializer(
+        16000, on_control=lambda m: seen.append(m) or device_wifi.handle_device_message(MAC, m)
+    )
+    assert await serializer.deserialize(json.dumps({"type": "wifi_status", **STATUS})) is None
+    frame = await serializer.deserialize(json.dumps({"type": "instruction", "msg": "end_of_speech"}))
+    assert frame is not None and frame.message["msg"] == "end_of_speech"
+    assert len(seen) == 2
+
+
+@pytest.fixture
+def client(monkeypatch):
+    import server
+
+    monkeypatch.setattr(server, "INTERNAL_API_TOKEN", "t0ken")
+    return TestClient(server.create_app())
+
+
+def test_endpoint_requires_internal_token(client):
+    response = client.post("/internal/device_wifi", json={"mac": MAC, "op": "status"})
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"mac": MAC, "op": "explode"},
+        {"op": "status"},
+        {"mac": MAC, "op": "add", "ssid": ""},
+        {"mac": MAC, "op": "add", "ssid": "x" * 33},
+        {"mac": MAC, "op": "add", "ssid": "Home", "password": "short"},
+        {"mac": MAC, "op": "delete"},
+    ],
+)
+def test_endpoint_validates(client, body):
+    response = client.post(
+        "/internal/device_wifi", json=body, headers={"x-internal-token": "t0ken"}
+    )
+    assert response.status_code == 400
+    if "password" in body:
+        assert body["password"] not in response.text
+
+
+def test_endpoint_status_of_sleeping_board_returns_last_list(client):
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    response = client.post(
+        "/internal/device_wifi",
+        json={"mac": MAC.lower(), "op": "status"},
+        headers={"x-internal-token": "t0ken"},
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["ok"] is True and body["online"] is False
+    assert body["status"] == STATUS
+
+
+def test_endpoint_peek_never_contacts_the_board(client):
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    response = client.post(
+        "/internal/device_wifi",
+        json={"mac": MAC, "op": "peek"},
+        headers={"x-internal-token": "t0ken"},
+    )
+    assert response.json() == {**device_wifi.snapshot(MAC), "ok": True}
+    assert response.json()["online"] is True
+    assert socket.sent == []

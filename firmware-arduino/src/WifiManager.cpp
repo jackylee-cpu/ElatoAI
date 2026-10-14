@@ -206,7 +206,11 @@ void wifiTask(void* param) {
       worstStack = stackLeft;
       Serial.printf("[WIFI] Task stack headroom: %u bytes\n", (unsigned)stackLeft);
     }
-    vTaskDelay(xDelay);
+    // Sleeps the same 10s as before, but a remote Wi-Fi request (R-37) wakes
+    // it early so the web page is not left waiting. loop() keeps its own
+    // interval, so an early wake does not mean an early health check.
+    ulTaskNotifyTake(pdTRUE, xDelay);
+    wifimanager->serviceRemote();
   }
 }
 
@@ -370,6 +374,7 @@ void WIFIMANAGER::clearApList() {
   for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
     apList[i].apName = "";
     apList[i].apPass = "";
+    apList[i].joined = false;
   }
 }
 
@@ -390,9 +395,14 @@ bool WIFIMANAGER::loadFromNVS() {
         if (apName.length() > 0) {
           sprintf(tmpKey, "apPass%d", i);
           String apPass = preferences.getString(tmpKey);
+          // Absent on networks saved before R-37: shown as "not joined yet"
+          // until the board next connects to them.
+          sprintf(tmpKey, "apOk%d", i);
+          const bool joined = preferences.isKey(tmpKey) && preferences.getBool(tmpKey, false);
           logMessage(String("[WIFI] Load SSID '") + apName + "' to " + String(i+1) + ". slot.\n");
           apList[i].apName = apName;
           apList[i].apPass = apPass;
+          apList[i].joined = joined;
           configuredSSIDs++;
         }
       }
@@ -425,6 +435,9 @@ bool WIFIMANAGER::writeToNVS() {
 
     snprintf(tmpKey, sizeof(tmpKey), "apPass%d", i);
     preferences.putString(tmpKey, apList[i].apPass);
+
+    snprintf(tmpKey, sizeof(tmpKey), "apOk%d", i);
+    preferences.putBool(tmpKey, apList[i].joined);
   }
 
   preferences.end();
@@ -440,7 +453,8 @@ bool WIFIMANAGER::writeToNVS() {
  * @return false on failure
  */
 bool WIFIMANAGER::addWifi(String apName, String apPass, bool updateNVS) {
-  if(apName.length() < 1 || apName.length() > 31) {
+  // An SSID is up to 32 bytes; 31 used to turn away a legal name.
+  if(apName.length() < 1 || apName.length() > 32) {
     logMessage("[WIFI] No SSID given or ssid too long");
     return false;
   }
@@ -450,11 +464,24 @@ bool WIFIMANAGER::addWifi(String apName, String apPass, bool updateNVS) {
     return false;
   }
 
+  // Adding a name already saved replaces its password instead of filling a
+  // second slot with a duplicate that tryConnect() could pick either way.
+  for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
+    if (apList[i].apName == apName) {
+      logMessage(String("[WIFI] Updating the saved credentials for SSID '") + apName + "'.\n");
+      apList[i].apPass = apPass;
+      apList[i].joined = false;
+      if (updateNVS) return writeToNVS();
+      else return true;
+    }
+  }
+
   for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
     if (apList[i].apName == "") {
       logMessage(String("[WIFI] Found unused slot Nr. ") + String(i) + " to store the new SSID '" + apName + "' credentials.\n");
       apList[i].apName = apName;
       apList[i].apPass = apPass;
+      apList[i].joined = false;
       configuredSSIDs++;
       if (updateNVS) return writeToNVS();
       else return true;
@@ -472,8 +499,12 @@ bool WIFIMANAGER::addWifi(String apName, String apPass, bool updateNVS) {
  */
 bool WIFIMANAGER::delWifi(uint8_t apId) {
   if (apId < WIFIMANAGER_MAX_APS) {
+    // Without this the count only ever grew, so after a delete tryConnect()
+    // could take the one-network shortcut to a slot that is now empty.
+    if (apList[apId].apName.length() && configuredSSIDs > 0) configuredSSIDs--;
     apList[apId].apName.clear();
     apList[apId].apPass.clear();
+    apList[apId].joined = false;
     return writeToNVS();
   }
   return false;
@@ -551,6 +582,10 @@ void WIFIMANAGER::loop() {
     for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
       if (WiFi.SSID() == apList[i].apName) {
         logMessage(String("[WIFI][STATUS] Connected to known SSID: '") + WiFi.SSID() + "' with IP " + WiFi.localIP().toString() + "\n");
+        if (!apList[i].joined) {
+          apList[i].joined = true;
+          writeToNVS();
+        }
         startSessionIfReady();
         return;
       }
@@ -662,6 +697,10 @@ bool WIFIMANAGER::tryConnect() {
         break;
       case WL_CONNECTED: // 3
         logMessage("[WIFI] Connection successful\n");
+        if (!apList[choosenAp].joined) {
+          apList[choosenAp].joined = true;
+          writeToNVS();
+        }
         logMessage("[WIFI] SSID   : " + WiFi.SSID() + "\n");
         logMessage("[WIFI] IP     : " + WiFi.localIP().toString() + "\n");
         connectCb();
@@ -1422,4 +1461,166 @@ void WIFIMANAGER::attachUI() {
 #endif
 
   });
+}
+// ── Remote Wi-Fi management (R-37) ─────────────────────────────────────────
+// The web app's Network page reaches the board through the voice server and
+// this websocket: webSocketEvent() queues the request here, the Wi-Fi task
+// does it in serviceRemote() and answers. One request at a time is plenty for
+// a parent tapping a page, and keeps the password in exactly one place.
+
+extern WIFIMANAGER WifiManager;
+
+enum WifiRemoteOp : uint8_t { WIFI_OP_NONE, WIFI_OP_STATUS, WIFI_OP_ADD, WIFI_OP_DELETE, WIFI_OP_SCAN };
+
+static portMUX_TYPE remoteMux = portMUX_INITIALIZER_UNLOCKED;
+static WifiRemoteOp remoteOp = WIFI_OP_NONE;
+static char remoteId[24];
+static char remoteSsid[33];
+static char remotePass[64];
+
+// Zero rather than just clear: the buffer is static and would otherwise hold
+// the last password until the next request overwrote it.
+static void wipeRemote() {
+  memset(remotePass, 0, sizeof(remotePass));
+  memset(remoteSsid, 0, sizeof(remoteSsid));
+  memset(remoteId, 0, sizeof(remoteId));
+}
+
+bool wifiRemoteEnqueue(const char *op, const char *id, const char *ssid, const char *pass) {
+  WifiRemoteOp parsed = WIFI_OP_NONE;
+  if (strcmp(op, "status") == 0) parsed = WIFI_OP_STATUS;
+  else if (strcmp(op, "add") == 0) parsed = WIFI_OP_ADD;
+  else if (strcmp(op, "delete") == 0) parsed = WIFI_OP_DELETE;
+  else if (strcmp(op, "scan") == 0) parsed = WIFI_OP_SCAN;
+  if (parsed == WIFI_OP_NONE) return false;
+
+  bool queued = false;
+  taskENTER_CRITICAL(&remoteMux);
+  if (remoteOp == WIFI_OP_NONE) {
+    strlcpy(remoteId, id ? id : "", sizeof(remoteId));
+    strlcpy(remoteSsid, ssid ? ssid : "", sizeof(remoteSsid));
+    strlcpy(remotePass, pass ? pass : "", sizeof(remotePass));
+    remoteOp = parsed;
+    queued = true;
+  }
+  taskEXIT_CRITICAL(&remoteMux);
+
+  if (queued && WifiManager.WifiCheckTask) {
+    xTaskNotifyGive(WifiManager.WifiCheckTask);
+  }
+  return queued;
+}
+
+void WIFIMANAGER::serviceRemote() {
+  WifiRemoteOp op;
+  char id[sizeof(remoteId)];
+  char ssid[sizeof(remoteSsid)];
+  String pass;
+  taskENTER_CRITICAL(&remoteMux);
+  op = remoteOp;
+  if (op != WIFI_OP_NONE) {
+    memcpy(id, remoteId, sizeof(id));
+    memcpy(ssid, remoteSsid, sizeof(ssid));
+  }
+  taskEXIT_CRITICAL(&remoteMux);
+  if (op == WIFI_OP_NONE) return;
+  // Copied out of the critical section: String allocates, which must not
+  // happen with interrupts off.
+  pass = remotePass;
+
+  const bool connected = WiFi.status() == WL_CONNECTED;
+  const String current = connected ? WiFi.SSID() : String();
+
+  JsonDocument doc;
+  doc["type"] = id[0] ? "wifi_result" : "wifi_status";
+  if (id[0]) doc["id"] = id;
+  bool ok = true;
+  const char *error = nullptr;
+
+  switch (op) {
+    case WIFI_OP_ADD: {
+      // Saved only: the board stays on the network it is on, and moves to this
+      // one when that one disappears (tryConnect() picks the strongest).
+      bool known = false;
+      for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; i++) {
+        if (apList[i].apName == ssid) known = true;
+      }
+      if (!known && configuredSSIDs >= WIFIMANAGER_MAX_APS) {
+        ok = false; error = "full";
+      } else if (connected && current == ssid) {
+        // Re-saving the network it is on with a new password would only be
+        // tested the next time it reconnects; a typo would strand the board.
+        ok = false; error = "current";
+      } else if (!addWifi(ssid, pass)) {
+        ok = false; error = "invalid";
+      } else {
+        logMessage(String("[WIFI] Saved SSID '") + ssid + "' from the web app\n");
+      }
+      break;
+    }
+    case WIFI_OP_DELETE:
+      if (connected && current == ssid) {
+        ok = false; error = "current";
+      } else if (!delWifi(String(ssid))) {
+        ok = false; error = "unknown";
+      } else {
+        logMessage(String("[WIFI] Forgot SSID '") + ssid + "' from the web app\n");
+      }
+      break;
+    case WIFI_OP_SCAN: {
+      // Blocks this task for a few seconds; the voice socket runs on another
+      // task and keeps going, though the radio is shared.
+      const int16_t found = WiFi.scanNetworks(false, false);
+      JsonArray networks = doc["networks"].to<JsonArray>();
+      for (int16_t i = 0; i < found && networks.size() < 20; i++) {
+        String name = WiFi.SSID(i);
+        if (name.isEmpty()) continue;
+        bool duplicate = false;
+        for (JsonObject seen : networks) {
+          if (name == seen["ssid"].as<const char *>()) { duplicate = true; break; }
+        }
+        if (duplicate) continue;   // results come strongest first
+        JsonObject network = networks.add<JsonObject>();
+        network["ssid"] = name;
+        network["rssi"] = WiFi.RSSI(i);
+        network["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+      }
+      WiFi.scanDelete();
+      if (found < 0) { ok = false; error = "scan"; }
+      break;
+    }
+    case WIFI_OP_STATUS:
+    default:
+      break;
+  }
+
+  if (pass.length()) memset((void *)pass.c_str(), 0, pass.length());
+  pass = String();
+  taskENTER_CRITICAL(&remoteMux);
+  wipeRemote();
+  remoteOp = WIFI_OP_NONE;
+  taskEXIT_CRITICAL(&remoteMux);
+
+  doc["ok"] = ok;
+  if (error) doc["error"] = error;
+  if (connected) {
+    doc["current"]["ssid"] = current;
+    doc["current"]["rssi"] = WiFi.RSSI();
+  } else {
+    doc["current"] = nullptr;
+  }
+  JsonArray saved = doc["saved"].to<JsonArray>();
+  for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; i++) {
+    if (apList[i].apName.isEmpty()) continue;
+    JsonObject entry = saved.add<JsonObject>();
+    entry["ssid"] = apList[i].apName;
+    entry["joined"] = apList[i].joined;
+  }
+  doc["max"] = WIFIMANAGER_MAX_APS;
+
+  String out;
+  serializeJson(doc, out);
+  xSemaphoreTake(wsMutex, portMAX_DELAY);
+  if (webSocket.isConnected()) webSocket.sendTXT(out);
+  xSemaphoreGive(wsMutex);
 }

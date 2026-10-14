@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import av
@@ -32,10 +33,18 @@ from pipecat.transports.websocket.fastapi import (
 class RawPCMFrameSerializer(FrameSerializer):
     """Deserialize raw PCM and JSON control messages."""
 
-    def __init__(self, input_sample_rate: int, input_channels: int = 1):
+    def __init__(
+        self,
+        input_sample_rate: int,
+        input_channels: int = 1,
+        on_control: Callable[[dict], bool] | None = None,
+    ):
         super().__init__()
         self._input_sample_rate = input_sample_rate
         self._input_channels = input_channels
+        # Gets each JSON message first; True means it was handled outside the
+        # voice pipeline (device Wi-Fi management) and must not enter it.
+        self._on_control = on_control
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, (OutputTransportMessageFrame, OutputTransportMessageUrgentFrame)):
@@ -57,6 +66,8 @@ class RawPCMFrameSerializer(FrameSerializer):
                 message = json.loads(data)
             except json.JSONDecodeError:
                 logger.warning("Ignoring non-JSON websocket text frame")
+                return None
+            if isinstance(message, dict) and self._on_control and self._on_control(message):
                 return None
             return InputTransportMessageFrame(message=message)
 

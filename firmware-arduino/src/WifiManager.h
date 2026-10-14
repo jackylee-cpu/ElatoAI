@@ -9,7 +9,9 @@
 #define WIFIMANAGER_h
 
 #ifndef WIFIMANAGER_MAX_APS
-#define WIFIMANAGER_MAX_APS 4   // Valid range is uint8_t
+// R-37: room for home, a phone hotspot and a few relatives'. NVS keys are
+// apName0..7, so going past 10 would need a new key scheme.
+#define WIFIMANAGER_MAX_APS 8   // Valid range is uint8_t
 #endif
 
 #ifndef ASYNC_WEBSERVER
@@ -30,6 +32,13 @@ void wifiTask(void* param);
 // Callback for when the device connects to Wifi
 void connectCb();
 
+// R-37: Wi-Fi management asked for over the voice websocket. Called from
+// webSocketEvent (networkTask); the work happens on the Wi-Fi task, which
+// answers with {"type":"wifi_result"}. op is "status", "add", "delete" or
+// "scan"; an empty id asks for an unprompted {"type":"wifi_status"}. Returns
+// false when a request is already waiting, so the caller can say "busy".
+bool wifiRemoteEnqueue(const char *op, const char *id, const char *ssid, const char *pass);
+
 
 class WIFIMANAGER {
   protected:
@@ -47,6 +56,7 @@ class WIFIMANAGER {
     struct apCredentials_t {
       String apName;                    // Name of the AP SSID
       String apPass;                    // Password if required to the AP
+      bool joined = false;              // Connected successfully at least once (R-37)
     };
     apCredentials_t apList[WIFIMANAGER_MAX_APS];  // Stored AP list
 
@@ -129,6 +139,10 @@ class WIFIMANAGER {
 
     // Run in the loop to maintain state
     void loop();
+
+    // Do a request queued by wifiRemoteEnqueue() and send the answer. Runs on
+    // the Wi-Fi task, so a scan or NVS write never stalls the audio socket.
+    void serviceRemote();
 
     // Write AP Settings into persistent storage. Called on each addAP;
     bool writeToNVS();
