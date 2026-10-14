@@ -14,7 +14,8 @@
 --                    a paused release is offered to nobody; boards that already
 --                    took it keep it. paused_by is NULL when the server paused
 --                    it on its own (too many rollbacks, P2-19).
---   stage_changed_at when it was last promoted or moved to another stage.
+--   stage_changed_at when it was last promoted or moved to another stage;
+--                    NULL for a release that has never been current (a draft).
 --
 -- firmware_rollout_devices keeps one row per (release, board) once the server
 -- has offered that release to that board:
@@ -42,8 +43,22 @@ ALTER TABLE public.firmware_releases
     ADD COLUMN IF NOT EXISTS rollout_macs     text[] NOT NULL DEFAULT '{}',
     ADD COLUMN IF NOT EXISTS paused_at        timestamptz,
     ADD COLUMN IF NOT EXISTS paused_reason    text,
-    ADD COLUMN IF NOT EXISTS paused_by        uuid,
-    ADD COLUMN IF NOT EXISTS stage_changed_at timestamptz;
+    ADD COLUMN IF NOT EXISTS paused_by        uuid;
+
+-- Releases from before this migration may have been current, and boards may
+-- run them, so they must not count as never-rolled-out drafts (which the admin
+-- console can delete, 20261014210000). Backfilled once, when the column is
+-- added: a re-run leaves real drafts alone.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'firmware_releases'
+                      AND column_name = 'stage_changed_at') THEN
+        ALTER TABLE public.firmware_releases ADD COLUMN stage_changed_at timestamptz;
+        UPDATE public.firmware_releases SET stage_changed_at = created_at;
+    END IF;
+END
+$$;
 
 ALTER TABLE public.firmware_releases
     DROP CONSTRAINT IF EXISTS firmware_releases_rollout_percent_check,

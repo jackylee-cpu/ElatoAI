@@ -11,8 +11,8 @@
 -- A new release is a draft: not current, and at the whitelist stage
 -- (rollout_percent 0), so making it current offers it to the whitelist only.
 -- Nothing is offered to any board until then. A draft can be deleted; a
--- release that has ever been current cannot, since boards may run it and its
--- results are the rollout's record.
+-- release that has ever been current, or that any board reports running,
+-- cannot, since boards may run it and its results are the rollout's record.
 --
 -- tools/release_firmware.py keeps working as before, with the service role.
 --
@@ -71,14 +71,20 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
+    -- A draft: never current, never offered, and no board reports running it
+    -- (one flashed over USB, say).
     DELETE FROM public.firmware_releases AS f
      WHERE f.release_id = p_release_id
        AND NOT f.is_current
        AND f.stage_changed_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM public.firmware_rollout_devices AS r
+                        WHERE r.release_id = f.release_id)
+       AND NOT EXISTS (SELECT 1 FROM public.devices AS d
+                        WHERE d.firmware_board = f.board AND d.firmware_version = f.version)
     RETURNING f.storage_path INTO path;
     IF path IS NULL THEN
         IF EXISTS (SELECT 1 FROM public.firmware_releases AS f WHERE f.release_id = p_release_id) THEN
-            RAISE EXCEPTION 'release % has been rolled out; only a draft can be deleted', p_release_id
+            RAISE EXCEPTION 'release % has been rolled out or is running on a board; only a draft can be deleted', p_release_id
                 USING ERRCODE = '55000';
         END IF;
         RAISE EXCEPTION 'no release %', p_release_id
