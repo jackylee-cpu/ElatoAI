@@ -215,7 +215,7 @@ class RecordingStore:
 def consolidating(summary="", facts=()):
     """A stand-in for summarise.consolidate that answers without a network."""
 
-    async def fake(turns, known, today, language=None):
+    async def fake(turns, known, today, language=None, on_usage=None):
         return Consolidation(summary=summary, facts=list(facts))
 
     return fake

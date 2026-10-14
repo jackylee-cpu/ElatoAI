@@ -31,6 +31,7 @@ from evals.beam.prompts import ADULT_CONSOLIDATION_SYSTEM
 from memory import privacy, store, summarise
 from memory import session as memory_session
 from memory.session import MemorySession
+from metrics import store as metrics_store
 
 # Stretches of BEAM turns are far longer than a child's: a six-turn stretch of
 # technical answers is ~30k characters. The production 20s would time out on
@@ -163,11 +164,16 @@ def patched_store(fake: FakeStore):
     saved = [(name, getattr(store, name)) for name in _PATCHED]
     for name in _PATCHED:
         setattr(store, name, getattr(fake, name))
+    # Consolidation calls also bill themselves to turn_metrics. An eval's
+    # made-up children must not land in the real usage figures.
+    saved_record_turn = metrics_store.record_turn
+    metrics_store.record_turn = lambda row: None
     try:
         yield
     finally:
         for name, original in saved:
             setattr(store, name, original)
+        metrics_store.record_turn = saved_record_turn
 
 
 # ── counting consolidation calls per conversation ────────────────────────────

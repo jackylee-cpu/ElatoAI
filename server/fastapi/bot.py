@@ -600,6 +600,7 @@ async def run_bot_session(
     child=None,
     user_id: str | None = None,
     chat_group_id: str | None = None,
+    device_id: str | None = None,
     language_code: str | None = None,
     region=None,
     ip=None,
@@ -706,6 +707,7 @@ async def run_bot_session(
             TurnMetricsObserver(
                 user_id=user_id,
                 chat_group_id=chat_group_id,
+                device_id=device_id,
                 transport=transport_kind,
                 personality_key=(child or {}).get("personality_key"),
                 # Only the classic route is a three-provider stack. gem_live and

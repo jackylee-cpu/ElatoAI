@@ -1,20 +1,10 @@
 import React from "react";
-import {
-    PREVIEW_ACTIVE,
-    PREVIEW_COST_PER_TURN,
-    PREVIEW_DAYS,
-    PREVIEW_TURNS,
-} from "./previewData";
+import { PREVIEW_ACTIVE, PREVIEW_DAYS, PREVIEW_TURNS } from "./previewData";
 
 const ACCENT = "#2a78cf";
 const ACCENT_SOFT = "#d6e7f8";
 const GRID = "#e8eff6";
 const LABEL = "#6b7280";
-const PROVIDERS = [
-    { key: "stt" as const, label: "STT · Azure", color: "#8cbdec" },
-    { key: "llm" as const, label: "LLM · OpenRouter", color: ACCENT },
-    { key: "tts" as const, label: "TTS · MiniMax", color: "#f0a14a" },
-];
 
 function Legend({ items }: { items: { label: string; color: string }[] }) {
     return (
@@ -78,64 +68,6 @@ export function ActivityChart() {
                     { label: "Active toys (right)", color: ACCENT },
                 ]}
             />
-        </>
-    );
-}
-
-/** Daily cost in HK$, stacked by provider. */
-export function CostChart() {
-    const W = 640, H = 230, L = 40, R = 12, T = 16, B = 26;
-    const innerW = W - L - R, innerH = H - T - B;
-    const band = innerW / PREVIEW_DAYS.length;
-    const max = 20;
-    const x = (i: number) => L + band * i + band * 0.18;
-    const y = (v: number) => T + innerH - (v / max) * innerH;
-    const last = PREVIEW_DAYS.length - 1;
-
-    return (
-        <>
-            <svg viewBox={`0 0 ${W} ${H}`} className="max-h-[280px] w-full" role="img" aria-label="Daily cost by provider, last 14 days">
-                {[0, 5, 10, 15, 20].map((v) => (
-                    <g key={v}>
-                        <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke={GRID} />
-                        <text x={L - 6} y={y(v) + 4} textAnchor="end" fontSize={11} fill={LABEL}>{v}</text>
-                    </g>
-                ))}
-                {PREVIEW_TURNS.map((turns, i) => {
-                    let base = 0;
-                    const bars = PROVIDERS.map((provider) => {
-                        const value = turns * PREVIEW_COST_PER_TURN[provider.key];
-                        const bar = (
-                            <rect
-                                key={provider.key}
-                                x={x(i)}
-                                y={y(base + value)}
-                                width={band * 0.64}
-                                height={Math.max((value / max) * innerH - 1, 0)}
-                                fill={provider.color}
-                            />
-                        );
-                        base += value;
-                        return bar;
-                    });
-                    return (
-                        <g key={i}>
-                            {bars}
-                            {i === last && (
-                                <text x={x(i) + band * 0.32} y={y(base) - 6} textAnchor="middle" fontSize={11} fontWeight={500} fill="#111827">
-                                    {base.toFixed(1)}
-                                </text>
-                            )}
-                        </g>
-                    );
-                })}
-                {PREVIEW_DAYS.map((day, i) =>
-                    i % 2 === 1 || i === last ? (
-                        <text key={day} x={x(i) + band * 0.32} y={H - 8} textAnchor="middle" fontSize={11} fill={LABEL}>{day}</text>
-                    ) : null
-                )}
-            </svg>
-            <Legend items={PROVIDERS} />
         </>
     );
 }

@@ -153,7 +153,7 @@ async def test_ingest_carries_facts_across_sessions_on_each_anchor_day():
     seen_days = []
     calls = {"n": 0}
 
-    async def fake_consolidate(turns, known, today, language=None):
+    async def fake_consolidate(turns, known, today, language=None, on_usage=None):
         seen_days.append(today)
         calls["n"] += 1
         if calls["n"] == 1:

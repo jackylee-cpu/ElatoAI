@@ -142,7 +142,7 @@ async def test_a_failed_consolidation_is_retried_once():
     memory_session.CONSOLIDATE_RETRY_SECONDS = 0
     calls = []
 
-    async def flaky(turns, known, today, language=None):
+    async def flaky(turns, known, today, language=None, on_usage=None):
         calls.append(today)
         return None if len(calls) == 1 else Consolidation(summary="Built a rocket.")
 
@@ -161,6 +161,109 @@ async def test_a_failed_consolidation_is_retried_once():
         restore_store(saved)
 
 
+class _FakeResponse:
+    status = 200
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+    async def text(self):
+        return ""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeClientSession:
+    payload = {}
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def post(self, *args, **kwargs):
+        return _FakeResponse(self.payload)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+async def test_a_consolidation_reports_its_tokens_even_when_the_reply_is_junk():
+    """OpenRouter bills the call whether or not the JSON parses."""
+    keys = ("OPENROUTER_API_KEY", "OPENROUTER_MODEL", "MEMORY_SUMMARY_MODEL")
+    saved = {key: os.environ.get(key) for key in keys}
+    original_session = summarise.aiohttp.ClientSession
+    heard = []
+    try:
+        os.environ["OPENROUTER_API_KEY"] = "test"
+        os.environ["OPENROUTER_MODEL"] = "deepseek/deepseek-v4-flash"
+        os.environ.pop("MEMORY_SUMMARY_MODEL", None)
+        _FakeClientSession.payload = {
+            "choices": [{"message": {"content": "not json at all"}}],
+            "usage": {"prompt_tokens": 930, "completion_tokens": 41},
+        }
+        summarise.aiohttp.ClientSession = _FakeClientSession
+        result = await summarise.consolidate(
+            [turn("今日去咗公園")], [], __import__("datetime").date(2026, 10, 14),
+            on_usage=lambda model, usage: heard.append((model, usage)),
+        )
+        assert result is None, "junk must still read as a failure"
+        assert heard == [("deepseek/deepseek-v4-flash",
+                          {"prompt_tokens": 930, "completion_tokens": 41})], heard
+        print("  ok: the tokens of a billed call are reported before parsing")
+    finally:
+        summarise.aiohttp.ClientSession = original_session
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+async def test_a_consolidation_call_is_billed_to_the_board():
+    """It runs outside the voice pipeline, so the turn observer never sees it."""
+    fake = RecordingStore(facts=[])
+    saved = []
+    patch_store(saved, fake)
+    original = memory_session.consolidate
+    original_record = memory_session.metrics_store.record_turn
+    rows = []
+
+    async def billed(turns, known, today, language=None, on_usage=None):
+        on_usage("deepseek/deepseek-v4-flash", {"prompt_tokens": 900, "completion_tokens": 60})
+        return Consolidation(summary="Talked about the park.")
+
+    memory_session.consolidate = billed
+    memory_session.metrics_store.record_turn = rows.append
+    try:
+        session = MemorySession("child-1", "board-1", "house")
+        session.chat_group_id = "group-1"
+        session._pending_episodes = [turn("今日去咗公園")]
+        session._turns_seen = 1
+        await session._summarise_pending(reason="test")
+
+        assert len(rows) == 1, rows
+        row = rows[0]
+        assert row["row_kind"] == "memory"
+        assert (row["device_id"], row["user_id"], row["chat_group_id"]) == (
+            "board-1", "child-1", "group-1"), row
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (900, 60)
+        assert row["llm_model"] == "deepseek/deepseek-v4-flash"
+        print("  ok: each consolidation call is a memory row on the board")
+    finally:
+        memory_session.consolidate = original
+        memory_session.metrics_store.record_turn = original_record
+        restore_store(saved)
+
+
 async def test_the_session_end_stretch_survives_close_and_the_next_session():
     """The last stretch is most sessions' only one. It must outlive close()."""
     fake = RecordingStore()
@@ -169,7 +272,7 @@ async def test_the_session_end_stretch_survives_close_and_the_next_session():
     original = memory_session.consolidate
     gate = asyncio.Event()
 
-    async def slow(turns, known, today, language=None):
+    async def slow(turns, known, today, language=None, on_usage=None):
         await gate.wait()
         return Consolidation(summary="Asked about the moon.", facts=[NewFact("Wants to be an astronaut.")])
 
@@ -208,7 +311,7 @@ async def test_a_boundary_does_not_hold_up_the_next_write():
     store.insert_conversation_turn = lambda *a, **k: _immediate(True)
     gate = asyncio.Event()
 
-    async def blocked(turns, known, today, language=None):
+    async def blocked(turns, known, today, language=None, on_usage=None):
         await gate.wait()
         return Consolidation()
 
@@ -290,6 +393,8 @@ async def main():
         test_reasoning_is_turned_off_only_for_a_chosen_model,
         test_facts_are_recorded_and_a_replacement_retires_the_old_one,
         test_a_failed_consolidation_is_retried_once,
+        test_a_consolidation_reports_its_tokens_even_when_the_reply_is_junk,
+        test_a_consolidation_call_is_billed_to_the_board,
         test_the_session_end_stretch_survives_close_and_the_next_session,
         test_a_boundary_does_not_hold_up_the_next_write,
         test_the_brief_skips_sessions_that_only_asked_the_time,

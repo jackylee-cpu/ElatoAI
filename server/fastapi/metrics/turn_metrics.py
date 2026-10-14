@@ -71,8 +71,10 @@ from pipecat.utils.time import time_now_iso8601
 from pipecat.metrics.metrics import (
     LLMUsageMetricsData,
     ProcessingMetricsData,
+    STTUsageMetricsData,
     TTFAMetricsData,
     TTFBMetricsData,
+    TTSUsageMetricsData,
 )
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
@@ -145,6 +147,8 @@ class TurnMetricsObserver(BaseObserver):
             device or an anonymous browser session.
         chat_group_id: The session's uuid, shared with `conversations` and
             `memory_segments` so a slow turn can be read next to what was said.
+        device_id: The board, from its verified token, so cost can be summed
+            per toy. None for the web playground.
         transport: "browser" or "esp32".
         personality_key / stt_provider / llm_provider / tts_provider / llm_model:
             recorded on every row, because the whole point is comparing them.
@@ -160,6 +164,7 @@ class TurnMetricsObserver(BaseObserver):
         *,
         user_id: str | None = None,
         chat_group_id: str | None = None,
+        device_id: str | None = None,
         transport: str | None = None,
         personality_key: str | None = None,
         stt_provider: str | None = None,
@@ -173,6 +178,7 @@ class TurnMetricsObserver(BaseObserver):
         super().__init__(**kwargs)
         self._user_id = user_id
         self._chat_group_id = chat_group_id
+        self._device_id = device_id
         self._transport = transport
         self._personality_key = personality_key
         self._stt_provider = stt_provider
@@ -183,6 +189,16 @@ class TurnMetricsObserver(BaseObserver):
 
         self._turn = _Turn()
         self._turn_index = 0
+
+        # What the STT and TTS vendors bill on, since the last row was written.
+        # Kept here rather than on the turn: usage reports arrive on their own
+        # schedule (Azure's on each final phrase, TTS per sentence), often
+        # after the turn they belong to has been flushed, and a press where
+        # nothing was said is billed without ever becoming a turn. Each row
+        # takes what has accumulated, so the sum over a session is right even
+        # where a single row's share is a little early or late.
+        self._stt_audio_s = 0.0
+        self._tts_chars = 0
 
         # Bounded deque + set, the same pattern pipecat's own observers use: the
         # set answers "seen it?" in O(1), the deque bounds how much is kept.
@@ -313,7 +329,7 @@ class TurnMetricsObserver(BaseObserver):
             return
 
         if isinstance(frame, (EndFrame, CancelFrame)):
-            self._flush()
+            self._flush(final=True)
             return
 
         if isinstance(frame, MetricsFrame):
@@ -386,13 +402,61 @@ class TurnMetricsObserver(BaseObserver):
                     {"processor": item.processor, "model": item.model, "secs": item.value}
                 )
             elif isinstance(item, LLMUsageMetricsData):
-                turn.prompt_tokens = item.value.prompt_tokens
-                turn.completion_tokens = item.value.completion_tokens
+                # Summed: a turn whose LLM ran twice was billed twice.
+                turn.prompt_tokens = (turn.prompt_tokens or 0) + (item.value.prompt_tokens or 0)
+                turn.completion_tokens = (turn.completion_tokens or 0) + (
+                    item.value.completion_tokens or 0
+                )
+            elif isinstance(item, STTUsageMetricsData):
+                self._stt_audio_s += item.value.audio_seconds or 0.0
+            elif isinstance(item, TTSUsageMetricsData):
+                self._tts_chars += item.value or 0
 
-    def _flush(self) -> None:
+    def _take_usage(self) -> dict[str, Any]:
+        """The STT and TTS usage accumulated since the last row, and reset it."""
+        usage = {
+            "stt_audio_ms": round(self._stt_audio_s * 1000),
+            "tts_chars": self._tts_chars,
+        }
+        self._stt_audio_s = 0.0
+        self._tts_chars = 0
+        return usage
+
+    def _identity(self, row: dict[str, Any]) -> dict[str, Any]:
+        # PostgREST rejects an empty string where a uuid is expected, so these
+        # are omitted rather than sent blank.
+        if self._user_id:
+            row["user_id"] = self._user_id
+        if self._chat_group_id:
+            row["chat_group_id"] = self._chat_group_id
+        if self._device_id:
+            row["device_id"] = self._device_id
+        return row
+
+    def _flush(self, final: bool = False) -> None:
         turn = self._turn
         self._turn = _Turn()
         if not turn.has_anything():
+            # Nothing to time, but possibly something billed: audio from a
+            # press that produced no answer, or the recognizer's last report.
+            # Only written as the session ends; until then it rides along on
+            # the next real turn.
+            if final and (self._stt_audio_s > 0 or self._tts_chars > 0):
+                self._sink(
+                    self._identity(
+                        {
+                            "row_kind": "usage",
+                            "turn_index": self._turn_index,
+                            "transport": self._transport,
+                            "personality_key": self._personality_key,
+                            "stt_provider": self._stt_provider,
+                            "llm_provider": self._llm_provider,
+                            "tts_provider": self._tts_provider,
+                            "llm_model": self._llm_model,
+                            **self._take_usage(),
+                        }
+                    )
+                )
             return
 
         self._turn_index += 1
@@ -419,6 +483,7 @@ class TurnMetricsObserver(BaseObserver):
             "completion_tokens": turn.completion_tokens,
             "transcript_chars": len(turn.transcript_text),
             "response_chars": len(turn.response_text),
+            **self._take_usage(),
             "interrupted": turn.interrupted,
             "detail": {
                 "ttfb": turn.ttfb,
@@ -438,12 +503,7 @@ class TurnMetricsObserver(BaseObserver):
                 "late_release": turn.late_release,
             },
         }
-        # PostgREST rejects an empty string where a uuid is expected, so these
-        # are omitted rather than sent blank.
-        if self._user_id:
-            row["user_id"] = self._user_id
-        if self._chat_group_id:
-            row["chat_group_id"] = self._chat_group_id
+        self._identity(row)
 
         logger.info(
             "Turn {} metrics: stt={}ms (from {}) turn_close={}ms llm_ttfb={}ms "

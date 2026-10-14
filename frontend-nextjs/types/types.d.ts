@@ -221,6 +221,14 @@ declare global {
         response_chars: number | null;
         interrupted: boolean;
         detail: ITurnMetricDetail;
+        // What the vendors bill on (P2-09). Null on rows written before them.
+        stt_audio_ms: number | null;
+        tts_chars: number | null;
+        // The board, from its verified token; null for the web playground.
+        device_id: string | null;
+        // 'turn' is a conversational turn. 'usage' and 'memory' only carry
+        // billing: usage with no turn to ride on, and memory consolidation.
+        row_kind: "turn" | "usage" | "memory";
     }
 
     // The services' own reported figures, kept next to ours. When they
@@ -471,6 +479,43 @@ declare global {
         created_at: string;
         last_sign_in_at: string | null;
         confirmed: boolean;
+    }
+
+    /** One row of admin_audit_log (P1-10). */
+    interface IAdminAuditEntry {
+        audit_id: number;
+        created_at: string;
+        actor_id: string | null;
+        actor_email: string | null;
+        action: string;
+        target_table: string | null;
+        target_id: string | null;
+        target_label: string | null;
+        reason: string | null;
+        before: Record<string, unknown> | null;
+        after: Record<string, unknown> | null;
+    }
+
+    /** STT, TTS and currency rates for pricing usage; LLM prices come from OpenRouter. */
+    interface IUsageRates {
+        stt_usd_per_hour: number;
+        tts_usd_per_million_chars: number;
+        usd_to_hkd: number;
+    }
+
+    /** Usage summed by the database, per board and model or per day and model. */
+    interface IUsageAggregate {
+        device_id?: string | null;
+        mac_address?: string | null;
+        day?: string;
+        llm_model: string | null;
+        turns: number;
+        devices?: number;
+        stt_audio_ms: number;
+        tts_chars: number;
+        prompt_tokens: number;
+        completion_tokens: number;
+        last_at?: string | null;
     }
 
     /** One role held by one account, for the super admin's list. */

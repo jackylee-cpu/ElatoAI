@@ -37,6 +37,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import Any, Callable
 
 import aiohttp
 from loguru import logger
@@ -251,12 +252,17 @@ async def consolidate(
     known: list[str],
     today: date,
     language_code: str | None = None,
+    on_usage: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> Consolidation | None:
     """A segment and any new facts for these turns. None if the call failed.
 
     An empty Consolidation is a success that found nothing worth keeping; None
     is a failure the caller may retry. The two must not be confused, or a
     network blip reads as "nothing happened".
+
+    `on_usage(model, usage)` hears the token counts of every call that was
+    answered, including one whose reply then fails to parse: the provider
+    bills it either way.
     """
     if not render_turns(turns).strip():
         return Consolidation()
@@ -318,6 +324,13 @@ async def consolidate(
     except Exception as exc:  # noqa: BLE001 - a summary is never worth an outage
         logger.warning("Memory consolidation errored: {}", exc)
         return None
+
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if on_usage is not None and isinstance(usage, dict):
+        try:
+            on_usage(model, usage)
+        except Exception as exc:  # noqa: BLE001 - accounting must not lose a summary
+            logger.warning("Recording memory consolidation usage errored: {}", exc)
 
     try:
         raw = data["choices"][0]["message"]["content"] or ""

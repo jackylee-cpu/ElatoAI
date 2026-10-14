@@ -35,6 +35,7 @@ from loguru import logger
 
 from memory import privacy, store
 from memory.summarise import consolidate
+from metrics import store as metrics_store
 
 # Completed turns between cold-path summaries. Every boundary costs one LLM
 # call, so this trades money for how much of an abandoned session survives:
@@ -439,6 +440,9 @@ class MemorySession:
                 [fact.content for fact in known],
                 self._today(),
                 self.language_code,
+                on_usage=lambda model, usage: self._record_usage(
+                    model, usage, stretch.chat_group_id
+                ),
             )
             if result is not None:
                 break
@@ -489,6 +493,26 @@ class MemorySession:
             )
 
         await self._record_facts(result.facts, known, stretch.chat_group_id)
+
+    def _record_usage(self, model: str, usage: dict, chat_group_id: str | None) -> None:
+        """Bill one consolidation call to this board, beside its turns.
+
+        It runs outside the voice pipeline, so the turn observer never sees
+        it; without this row the usage page would undercount every session
+        that was long enough to be summarised.
+        """
+        row = {
+            "row_kind": "memory",
+            "llm_provider": "openrouter" if os.getenv("OPENROUTER_API_KEY") else "openai",
+            "llm_model": model,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "user_id": self.user_id,
+            "device_id": self.device_id,
+        }
+        if chat_group_id:
+            row["chat_group_id"] = chat_group_id
+        metrics_store.record_turn(row)
 
     async def _record_facts(self, new_facts, known: list[store.Fact], chat_group_id) -> None:
         known_texts = {fact.content.strip() for fact in known}

@@ -130,5 +130,3 @@ export const PREVIEW_AUDIT: PreviewAuditEntry[] = [
 export const PREVIEW_DAYS = ["10/01", "10/02", "10/03", "10/04", "10/05", "10/06", "10/07", "10/08", "10/09", "10/10", "10/11", "10/12", "10/13", "10/14"];
 export const PREVIEW_ACTIVE = [3, 3, 4, 4, 3, 4, 4, 4, 4, 4, 4, 9, 19, 21];
 export const PREVIEW_TURNS = [41, 38, 52, 60, 35, 49, 66, 58, 63, 71, 55, 148, 365, 412];
-// HK$ per turn by provider, so the stacked bars add up to HK$0.045 a turn.
-export const PREVIEW_COST_PER_TURN = { stt: 0.011, llm: 0.017, tts: 0.017 };

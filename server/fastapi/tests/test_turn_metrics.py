@@ -29,10 +29,14 @@ from pipecat.frames.frames import (  # noqa: E402
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
+from pipecat.frames.frames import EndFrame  # noqa: E402
 from pipecat.metrics.metrics import (  # noqa: E402
     LLMTokenUsage,
     LLMUsageMetricsData,
+    STTUsage,
+    STTUsageMetricsData,
     TTFBMetricsData,
+    TTSUsageMetricsData,
 )
 from pipecat.frames.frames import LLMContextFrame  # noqa: E402
 from pipecat.observers.base_observer import FramePushed  # noqa: E402
@@ -524,6 +528,108 @@ def test_service_reported_metrics_and_tokens_are_kept():
     print("  ok: the vendors' own numbers are kept next to ours")
 
 
+def stt_usage(seconds):
+    return MetricsFrame(data=[
+        STTUsageMetricsData(processor="FinalizingAzureSTTService", model=None,
+                            value=STTUsage(audio_seconds=seconds)),
+    ])
+
+
+def tts_usage(chars):
+    return MetricsFrame(data=[
+        TTSUsageMetricsData(processor="MiniMaxHttpTTSService", model="speech-2.6-turbo",
+                            value=chars),
+    ])
+
+
+def test_stt_audio_and_tts_characters_are_written_on_the_turn():
+    """What Azure and MiniMax bill on, so the usage page can price a turn."""
+    rows = []
+    observer = make_observer(rows)
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(observer, stt_usage(1.25), 300)
+    push(observer, TranscriptionFrame(text="hello", user_id="u", timestamp=""), 340)
+    push(observer, LLMTextFrame(text="Hi! How are you?"), 690)
+    push(observer, tts_usage(4), 700)
+    push(observer, tts_usage(12), 900)
+    push(observer, BotStartedSpeakingFrame(), 980)
+    push(observer, BotStoppedSpeakingFrame(), 3200)
+
+    assert rows[0]["stt_audio_ms"] == 1250, rows[0]["stt_audio_ms"]
+    assert rows[0]["tts_chars"] == 16, rows[0]["tts_chars"]
+    print("  ok: STT seconds and TTS characters land on the turn")
+
+
+def test_usage_reported_after_a_turn_rides_on_the_next_one():
+    """Azure reports on its own schedule; nothing billed may be dropped."""
+    rows = []
+    observer = make_observer(rows)
+    a_complete_turn(observer)
+    push(observer, stt_usage(0.5), 3300)  # the first turn's last phrase, late
+    a_complete_turn(observer, start=4000, user_stop=4100, transcript=4340,
+                    llm_first=4690, llm_end=5450, bot_start=4980, bot_stop=7200)
+
+    assert rows[0]["stt_audio_ms"] == 0
+    assert rows[1]["stt_audio_ms"] == 500, rows[1]["stt_audio_ms"]
+    print("  ok: late usage is carried to the next row, not lost")
+
+
+def test_usage_with_no_turn_left_is_written_when_the_session_ends():
+    """A press with nothing said is still streamed audio Azure bills for."""
+    rows = []
+    observer = make_observer(rows)
+    a_complete_turn(observer)
+    push(observer, UserStartedSpeakingFrame(), 4000)
+    push(observer, stt_usage(2.0), 6000)
+    push(observer, EndFrame(), 6100)
+
+    assert len(rows) == 2, rows
+    usage = rows[1]
+    assert usage["row_kind"] == "usage"
+    assert usage["stt_audio_ms"] == 2000
+    assert "stt_ms" not in usage and "interrupted" not in usage
+    print("  ok: leftover usage is written as a usage row at the end")
+
+
+def test_no_usage_row_when_nothing_is_left_over():
+    rows = []
+    observer = make_observer(rows)
+    a_complete_turn(observer)
+    push(observer, EndFrame(), 4000)
+    assert len(rows) == 1 and "row_kind" not in rows[0]
+    print("  ok: a clean end writes nothing extra")
+
+
+def test_rows_carry_the_board_they_ran_on():
+    rows = []
+    observer = TurnMetricsObserver(
+        transport="esp32", device_id="9b0c3f0e-0000-4000-8000-000000000001",
+        user_id="11111111-0000-4000-8000-000000000001", sink=rows.append,
+    )
+    a_complete_turn(observer)
+    push(observer, stt_usage(1.0), 3300)
+    push(observer, EndFrame(), 3400)
+    assert all(row["device_id"] == "9b0c3f0e-0000-4000-8000-000000000001" for row in rows)
+    print("  ok: every row, usage rows included, names the board")
+
+
+def test_two_llm_calls_in_one_turn_are_both_billed():
+    rows = []
+    observer = make_observer(rows)
+    push(observer, UserStartedSpeakingFrame(), 0)
+    push(observer, TranscriptionFrame(text="hi", user_id="u", timestamp=""), 340)
+    push(observer, LLMTextFrame(text="Hi!"), 690)
+    for at in (700, 800):
+        push(observer, MetricsFrame(data=[LLMUsageMetricsData(
+            processor="RoutedOpenRouterLLMService", model="m",
+            value=LLMTokenUsage(prompt_tokens=100, completion_tokens=10, total_tokens=110),
+        )]), at)
+    push(observer, BotStartedSpeakingFrame(), 980)
+    push(observer, BotStoppedSpeakingFrame(), 3200)
+    assert rows[0]["prompt_tokens"] == 200 and rows[0]["completion_tokens"] == 20, rows[0]
+    print("  ok: token counts add up across calls in a turn")
+
+
 def test_turns_are_numbered_in_order():
     rows = []
     observer = make_observer(rows)
@@ -594,6 +700,12 @@ def main():
         test_the_greeting_turn_is_kept_without_a_user_stop,
         test_a_turn_with_nothing_in_it_is_not_written,
         test_service_reported_metrics_and_tokens_are_kept,
+        test_stt_audio_and_tts_characters_are_written_on_the_turn,
+        test_usage_reported_after_a_turn_rides_on_the_next_one,
+        test_usage_with_no_turn_left_is_written_when_the_session_ends,
+        test_no_usage_row_when_nothing_is_left_over,
+        test_rows_carry_the_board_they_ran_on,
+        test_two_llm_calls_in_one_turn_are_both_billed,
         test_turns_are_numbered_in_order,
         test_a_clock_that_runs_backwards_yields_none_not_zero,
         test_the_store_reads_the_environment_lazily,

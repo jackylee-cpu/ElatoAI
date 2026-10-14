@@ -130,8 +130,9 @@ export const ADMIN_PAGE_GROUPS: AdminPageGroup[] = [
                 id: "usage",
                 label: "Usage & cost",
                 title: "Usage & cost",
-                description: "What each toy costs per month: pricing and usage limits depend on this.",
-                kind: "preview",
+                description:
+                    "What each toy costs to run: STT audio, LLM tokens and TTS characters, priced per provider.",
+                kind: "live",
                 superOnly: true,
             },
             {
@@ -184,8 +185,8 @@ export const ADMIN_PAGE_GROUPS: AdminPageGroup[] = [
                 label: "Audit log",
                 title: "Audit log",
                 description:
-                    "Who changed what, when and why. Entries can only be added, not deleted (P1-10).",
-                kind: "preview",
+                    "Who changed what in this console, and when. Records can only be added: nobody can edit or delete them.",
+                kind: "live",
                 superOnly: true,
             },
         ],

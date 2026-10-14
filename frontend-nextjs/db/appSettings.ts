@@ -54,3 +54,50 @@ export const saveVoiceStackSettings = async (
         throw error;
     }
 };
+
+export const USAGE_RATES_KEY = "usage_rates";
+
+/**
+ * What the Usage page prices with until someone sets the real figures. The
+ * migration seeds the same values; these only cover a database that has not
+ * run it.
+ */
+export const DEFAULT_USAGE_RATES: IUsageRates = {
+    stt_usd_per_hour: 1.0,
+    tts_usd_per_million_chars: 60,
+    usd_to_hkd: 7.8,
+};
+
+export const getUsageRates = async (supabase: SupabaseClient): Promise<IUsageRates> => {
+    const { data, error } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", USAGE_RATES_KEY)
+        .maybeSingle();
+
+    if (error) {
+        console.log("error getUsageRates", error);
+    }
+    return { ...DEFAULT_USAGE_RATES, ...((data?.value as Partial<IUsageRates>) ?? {}) };
+};
+
+export const saveUsageRates = async (
+    supabase: SupabaseClient,
+    value: IUsageRates,
+    updatedBy: string | null,
+) => {
+    const { error } = await supabase.from("app_settings").upsert(
+        {
+            key: USAGE_RATES_KEY,
+            value,
+            updated_at: new Date().toISOString(),
+            updated_by: updatedBy,
+        },
+        { onConflict: "key" },
+    );
+
+    if (error) {
+        console.error("error saveUsageRates", error);
+        throw error;
+    }
+};

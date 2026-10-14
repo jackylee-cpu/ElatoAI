@@ -14,6 +14,8 @@ export const getRecentTurnMetrics = async (
     const { data, error } = await supabase
         .from("turn_metrics")
         .select("*")
+        // Usage-only and memory rows carry billing, not timing.
+        .eq("row_kind", "turn")
         .order("created_at", { ascending: false })
         .limit(limit);
 

@@ -471,6 +471,9 @@ def create_app() -> FastAPI:
                 child=child,
                 user_id=personality.user_id,
                 chat_group_id=chat_group_id,
+                # From the verified token, like the memory key above: what
+                # the usage page sums each toy's cost by.
+                device_id=device.device_id,
                 language_code=personality.language_code,
                 region=personality.region,
                 ip=personality.ip,

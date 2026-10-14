@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin";
-import { saveVoiceStackSettings } from "@/db/appSettings";
+import { saveUsageRates, saveVoiceStackSettings } from "@/db/appSettings";
 import { grantAdminRole, revokeAdminRole } from "@/db/adminRoles";
 import { createAccount } from "@/db/accounts";
 import { createServiceClient } from "@/utils/supabase/service";
@@ -316,9 +316,11 @@ export interface IpDraft {
  * Create or update an IP with what it adds to and allows in a session.
  *
  * ip_modes holds a row for a mode that is allowed (under restrict_modes) or
- * flavoured (any time); ip_styles only matters under restrict_styles. Both are
- * rewritten whole from the form, which is the whole of what the admin sees.
- * Not one transaction -- PostgREST has none -- so a failure partway is
+ * flavoured (any time); ip_styles only matters under restrict_styles. The form
+ * is the whole of what the admin sees, so the rows end up exactly as it says
+ * -- but only the rows that differ are written. Every write lands in the
+ * audit log (P1-10), and rewriting them all would record a change on every
+ * save. Not one transaction -- PostgREST has none -- so a failure partway is
  * reported and saving again puts it right.
  */
 export async function saveIpAction(
@@ -377,23 +379,56 @@ export async function saveIpAction(
         // A refused UPDATE comes back as zero rows, not an error.
         if (!saved || saved.length === 0) throw new Error("IP not saved");
 
-        const { error: clearModes } = await supabase
+        const { data: currentModes, error: readModes } = await supabase
             .from("ip_modes")
-            .delete()
+            .select("mode_key, prompt")
             .eq("ip_key", ipKey);
-        if (clearModes) throw clearModes;
-        if (modeRows.length > 0) {
-            const { error } = await supabase.from("ip_modes").insert(modeRows);
+        if (readModes) throw readModes;
+        const wantedModes = new Map(modeRows.map((row) => [row.mode_key, row.prompt]));
+        const droppedModes = (currentModes ?? [])
+            .map((row) => row.mode_key as string)
+            .filter((modeKey) => !wantedModes.has(modeKey));
+        const changedModes = modeRows.filter(
+            (row) =>
+                !(currentModes ?? []).some(
+                    (current) =>
+                        current.mode_key === row.mode_key && current.prompt === row.prompt
+                )
+        );
+        if (droppedModes.length > 0) {
+            const { error } = await supabase
+                .from("ip_modes")
+                .delete()
+                .eq("ip_key", ipKey)
+                .in("mode_key", droppedModes);
+            if (error) throw error;
+        }
+        if (changedModes.length > 0) {
+            const { error } = await supabase
+                .from("ip_modes")
+                .upsert(changedModes, { onConflict: "ip_key,mode_key" });
             if (error) throw error;
         }
 
-        const { error: clearStyles } = await supabase
+        const { data: currentStyles, error: readStyles } = await supabase
             .from("ip_styles")
-            .delete()
+            .select("style_key")
             .eq("ip_key", ipKey);
-        if (clearStyles) throw clearStyles;
-        if (styleRows.length > 0) {
-            const { error } = await supabase.from("ip_styles").insert(styleRows);
+        if (readStyles) throw readStyles;
+        const haveStyles = new Set((currentStyles ?? []).map((row) => row.style_key as string));
+        const wantedStyles = new Set(styleRows.map((row) => row.style_key));
+        const droppedStyles = Array.from(haveStyles).filter((key) => !wantedStyles.has(key));
+        const addedStyles = styleRows.filter((row) => !haveStyles.has(row.style_key));
+        if (droppedStyles.length > 0) {
+            const { error } = await supabase
+                .from("ip_styles")
+                .delete()
+                .eq("ip_key", ipKey)
+                .in("style_key", droppedStyles);
+            if (error) throw error;
+        }
+        if (addedStyles.length > 0) {
+            const { error } = await supabase.from("ip_styles").insert(addedStyles);
             if (error) throw error;
         }
     } catch (error) {
@@ -517,6 +552,20 @@ export async function createAccountAction(
         return { ok: false, error: "Could not create the account" };
     }
 
+    // GoTrue writes auth.users with the service role, so no trigger of ours
+    // sees this; the record goes in by hand, under the admin's own key. The
+    // password is never part of it.
+    const { error: auditError } = await supabase.rpc("admin_audit_record", {
+        p_action: "account.create",
+        p_target_table: "auth.users",
+        p_target_id: userId,
+        p_target_label: address,
+        p_after: { email: address, role },
+    });
+    if (auditError) {
+        console.error("createAccountAction: audit record failed", auditError);
+    }
+
     let roleError: string | undefined;
     if (role !== null) {
         try {
@@ -529,4 +578,37 @@ export async function createAccountAction(
 
     revalidatePath("/admin");
     return { ok: true, userId, roleError };
+}
+
+/**
+ * The STT, TTS and exchange rates the Usage page prices with. LLM prices are
+ * not here: they come from OpenRouter's catalogue for each model.
+ *
+ * Stored under app_settings 'usage_rates', so a corrected rate reprices every
+ * month at once, and the change is in the audit log like any other setting.
+ */
+export async function saveUsageRatesAction(rates: IUsageRates): Promise<ActionResult> {
+    const { supabase, user } = await requireAdmin("super_admin");
+
+    const value: IUsageRates = {
+        stt_usd_per_hour: Number(rates.stt_usd_per_hour),
+        tts_usd_per_million_chars: Number(rates.tts_usd_per_million_chars),
+        usd_to_hkd: Number(rates.usd_to_hkd),
+    };
+    if (Object.values(value).some((rate) => !Number.isFinite(rate) || rate < 0)) {
+        return { ok: false, error: "Rates must be numbers, zero or more" };
+    }
+    if (value.usd_to_hkd === 0) {
+        return { ok: false, error: "The exchange rate cannot be zero" };
+    }
+
+    try {
+        await saveUsageRates(supabase, value, user.id);
+    } catch (error) {
+        console.error("saveUsageRatesAction failed", error);
+        return { ok: false, error: "Could not save the rates" };
+    }
+
+    revalidatePath("/admin");
+    return { ok: true };
 }

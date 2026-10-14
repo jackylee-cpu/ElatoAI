@@ -8,13 +8,13 @@ import CharactersTab from "./CharactersTab";
 import IpsTab from "./IpsTab";
 import AdminsTab from "./AdminsTab";
 import AccountsTab from "./AccountsTab";
+import AuditTab from "./AuditTab";
+import UsageTab from "./UsageTab";
 import OverviewPreview from "./preview/OverviewPreview";
 import DevicesPreview from "./preview/DevicesPreview";
 import SupportPreview from "./preview/SupportPreview";
 import OtaPreview from "./preview/OtaPreview";
 import FactoryPreview from "./preview/FactoryPreview";
-import UsagePreview from "./preview/UsagePreview";
-import AuditPreview from "./preview/AuditPreview";
 import PlannedPage from "./preview/PlannedPage";
 import { PreviewBanner } from "./preview/PreviewKit";
 import { AdminPage, AdminPageId, pagesFor } from "./adminPages";
@@ -32,6 +32,8 @@ interface AdminDashboardProps {
     ips: IIp[];
     modes: IMode[];
     styles: IStyle[];
+    audit: IAdminAuditEntry[];
+    usage: React.ComponentProps<typeof UsageTab>;
 }
 
 const panelClass =
@@ -48,6 +50,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     ips,
     modes,
     styles,
+    audit,
+    usage,
 }) => {
     // Content admins see characters and IPs only. Hiding the rest is for
     // clarity; RLS is what stops them, and the page does not even fetch the
@@ -85,6 +89,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 return <AccountsTab accounts={accounts} />;
             case "admins":
                 return <AdminsTab admins={admins} currentUserId={currentUserId} />;
+            case "audit":
+                return <AuditTab entries={audit} />;
+            case "usage":
+                return <UsageTab {...usage} />;
             case "characters":
                 return (
                     <CharactersTab
@@ -120,10 +128,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 return <OtaPreview />;
             case "factory":
                 return <FactoryPreview />;
-            case "usage":
-                return <UsagePreview />;
-            case "audit":
-                return <AuditPreview />;
             default:
                 return null;
         }
