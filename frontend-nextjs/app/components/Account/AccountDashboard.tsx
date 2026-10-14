@@ -9,9 +9,10 @@ import { AccountAvatar } from "./AccountAvatar";
 import { EmojiComponent } from "../Playground/EmojiImage";
 import { cn, getPersonalityAvatarSrc } from "@/lib/utils";
 import type { DeviceBattery } from "@/lib/deviceBattery";
+import type { DeviceToy } from "@/db/devices";
 import { LowBatteryBadge } from "./BatteryStatus";
 
-type AccountDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code"> & DeviceBattery;
+type AccountDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code"> & DeviceBattery & DeviceToy;
 
 interface AccountDashboardProps {
     currentUser: IUser;
@@ -92,12 +93,22 @@ export default function AccountDashboard({
                                     href={`/home/account/devices/${device.device_id}`}
                                     className={cn(cardClass, "flex items-center gap-4 p-4 transition-transform active:scale-[0.99]")}
                                 >
-                                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#EEF3FF]">
-                                        <span className="text-2xl" aria-hidden="true">🧸</span>
+                                    <div className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-[#EEF3FF]">
+                                        {device.toy?.image_url ? (
+                                            <Image
+                                                src={device.toy.image_url}
+                                                alt=""
+                                                fill
+                                                sizes="56px"
+                                                className="object-cover"
+                                            />
+                                        ) : (
+                                            <span className="text-2xl" aria-hidden="true">🧸</span>
+                                        )}
                                     </div>
                                     <div className="min-w-0 flex-1">
                                         <p className="flex items-center gap-2 font-medium text-gray-900">
-                                            AI Buddy
+                                            <span className="truncate">{device.toy?.name || "AI Buddy"}</span>
                                             <LowBatteryBadge device={device} />
                                         </p>
                                         <p className="truncate text-xs text-gray-500">

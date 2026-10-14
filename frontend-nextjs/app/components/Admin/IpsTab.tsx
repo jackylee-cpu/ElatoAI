@@ -45,7 +45,10 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Loader2, MoreHorizontal, Plus } from "lucide-react";
+import { ImagePlus, Loader2, MoreHorizontal, Plus, X } from "lucide-react";
+import Image from "next/image";
+import { createClient } from "@/utils/supabase/client";
+import { uploadCharacterImage, MAX_CHARACTER_IMAGE_BYTES } from "@/db/personalities";
 import { Field, Toggle } from "./CharacterEditSheet";
 import { saveIpAction, setIpHiddenAction, type IpDraft } from "@/app/admin/actions";
 
@@ -119,15 +122,28 @@ const IpsTab: React.FC<IpsTabProps> = ({ ips, modes, styles, personalities }) =>
                                     className={ip.is_hidden ? "opacity-50" : undefined}
                                 >
                                     <TableCell className="font-medium">
-                                        {ip.name}
-                                        {ip.is_hidden && (
-                                            <Badge
-                                                variant="outline"
-                                                className="ml-2 text-[10px] px-1 py-0"
-                                            >
-                                                hidden
-                                            </Badge>
-                                        )}
+                                        <div className="flex flex-row items-center gap-2">
+                                            <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-md border bg-muted">
+                                                {ip.image_url && (
+                                                    <Image
+                                                        src={ip.image_url}
+                                                        alt=""
+                                                        fill
+                                                        unoptimized
+                                                        className="object-cover"
+                                                    />
+                                                )}
+                                            </div>
+                                            {ip.name}
+                                            {ip.is_hidden && (
+                                                <Badge
+                                                    variant="outline"
+                                                    className="text-[10px] px-1 py-0"
+                                                >
+                                                    hidden
+                                                </Badge>
+                                            )}
+                                        </div>
                                     </TableCell>
                                     <TableCell className="text-xs font-mono">
                                         {ip.ip_key}
@@ -268,6 +284,7 @@ const toDraft = (ip: IIp | null, modes: IMode[]): IpDraft => {
         is_hidden: ip?.is_hidden ?? false,
         sort_order: ip?.sort_order ?? 0,
         default_personality_id: ip?.default_personality_id ?? null,
+        image_url: ip?.image_url ?? null,
         modes: modes.map((mode) => ({
             mode_key: mode.mode_key,
             // Only a restricted IP's rows are an allow list.
@@ -291,6 +308,7 @@ const IpEditSheet: React.FC<{
     const creating = ip === null;
     const [draft, setDraft] = useState<IpDraft>(() => toDraft(ip, modes));
     const [saving, setSaving] = useState(false);
+    const [uploading, setUploading] = useState(false);
 
     const set = <K extends keyof IpDraft>(field: K, value: IpDraft[K]) =>
         setDraft((current) => ({ ...current, [field]: value }));
@@ -308,6 +326,41 @@ const IpEditSheet: React.FC<{
                 ? [...current.style_keys, styleKey]
                 : current.style_keys.filter((key) => key !== styleKey),
         }));
+
+    // Straight from the browser into the character image bucket, as on the
+    // character sheet: the file would not fit through a server action's 1MB
+    // body, and the bucket's policies already let a signed-in user write to
+    // their own folder.
+    const onPickImage = async (file: File | null) => {
+        if (!file) {
+            return;
+        }
+        if (!file.type.startsWith("image/")) {
+            toast({ title: "Not an image", description: "Pick a PNG, JPEG or WebP file." });
+            return;
+        }
+        if (file.size > MAX_CHARACTER_IMAGE_BYTES) {
+            toast({ title: "Image too large", description: "Please pick an image under 5MB." });
+            return;
+        }
+
+        setUploading(true);
+        try {
+            const supabase = createClient();
+            const {
+                data: { user },
+            } = await supabase.auth.getUser();
+            if (!user) {
+                throw new Error("No signed-in user");
+            }
+            set("image_url", await uploadCharacterImage(supabase, user.id, file));
+        } catch (error) {
+            console.error("Could not upload the IP image", error);
+            toast({ title: "Upload failed", description: "The image could not be uploaded." });
+        } finally {
+            setUploading(false);
+        }
+    };
 
     const onSave = async () => {
         setSaving(true);
@@ -362,6 +415,70 @@ const IpEditSheet: React.FC<{
                                 value={draft.description}
                                 onChange={(event) => set("description", event.target.value)}
                             />
+                        </Field>
+
+                        <Field
+                            label="Toy photo"
+                            hint="Shown to the parent once a board set to this toy is bound, so they can tell which toy it is. Without one the app shows a generic bear."
+                        >
+                            <div className="flex flex-row items-center gap-4">
+                                <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border bg-muted">
+                                    {draft.image_url ? (
+                                        <Image
+                                            src={draft.image_url}
+                                            alt={draft.name || "Toy"}
+                                            fill
+                                            unoptimized
+                                            className="object-cover"
+                                        />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                                            <ImagePlus className="h-6 w-6" />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    <label
+                                        htmlFor="adminIpImage"
+                                        className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm font-medium shadow-sm hover:bg-accent"
+                                    >
+                                        {uploading ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <ImagePlus className="h-4 w-4" />
+                                        )}
+                                        {uploading
+                                            ? "Uploading…"
+                                            : draft.image_url
+                                              ? "Replace image"
+                                              : "Upload image"}
+                                    </label>
+                                    <input
+                                        id="adminIpImage"
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        disabled={uploading}
+                                        onChange={(event) => {
+                                            void onPickImage(event.target.files?.[0] ?? null);
+                                            // Let the same file be picked again after removing it.
+                                            event.target.value = "";
+                                        }}
+                                    />
+                                    {draft.image_url && (
+                                        <button
+                                            type="button"
+                                            onClick={() => set("image_url", null)}
+                                            className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                                        >
+                                            <X className="h-3 w-3" /> Remove
+                                        </button>
+                                    )}
+                                    <span className="text-xs text-muted-foreground">
+                                        PNG, JPEG or WebP, up to 5MB
+                                    </span>
+                                </div>
+                            </div>
                         </Field>
 
                         <Field
@@ -499,7 +616,7 @@ const IpEditSheet: React.FC<{
                     <Button variant="outline" onClick={onClose}>
                         Cancel
                     </Button>
-                    <Button onClick={onSave} disabled={saving}>
+                    <Button onClick={onSave} disabled={saving || uploading}>
                         {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                         {creating ? "Create" : "Save"}
                     </Button>

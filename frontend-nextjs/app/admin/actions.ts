@@ -344,6 +344,8 @@ export interface IpDraft {
     sort_order: number;
     // Who a board in this toy is when the account's character is elsewhere.
     default_personality_id: string | null;
+    // A photo of the toy itself, shown to the parent on a board set to this IP.
+    image_url: string | null;
     modes: IpModeDraft[];
     // Under restrict_styles: the styles the IP may use.
     style_keys: string[];
@@ -389,6 +391,7 @@ export async function saveIpAction(
         is_hidden: draft.is_hidden,
         sort_order: Number.isFinite(draft.sort_order) ? Math.trunc(draft.sort_order) : 0,
         default_personality_id: draft.default_personality_id || null,
+        image_url: draft.image_url || null,
     };
     const modeRows = draft.modes
         .map((mode) => ({ ...mode, prompt: mode.prompt.trim() }))

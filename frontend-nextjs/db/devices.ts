@@ -1,6 +1,14 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { BATTERY_COLUMNS, type DeviceBattery } from "@/lib/deviceBattery";
 
+/**
+ * The toy a board is sewn into (devices.ip_key, set by an admin), so the
+ * parent can tell their boards apart: its name and the photo uploaded on the
+ * admin IPs tab. Null for a board in no particular toy.
+ */
+export type DeviceToy = { toy: Pick<IIp, "name" | "image_url"> | null };
+const TOY_COLUMNS = "toy:ips(name, image_url)";
+
 export const dbCheckUserCode = async (
     supabase: SupabaseClient,
     userCode: string,
@@ -121,14 +129,14 @@ export const getUserDevices = async (
 ) => {
     const { data, error } = await supabase
         .from("devices")
-        .select(`device_id, mac_address, user_code, volume, ${BATTERY_COLUMNS}`)
+        .select(`device_id, mac_address, user_code, volume, ${BATTERY_COLUMNS}, ${TOY_COLUMNS}`)
         .eq("user_id", userId)
         .order("claimed_at", { ascending: true, nullsFirst: true });
 
     if (error) {
         throw error;
     }
-    return (data ?? []) as (Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & DeviceBattery)[];
+    return (data ?? []) as unknown as (Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & DeviceBattery & DeviceToy)[];
 };
 
 /**
@@ -145,7 +153,7 @@ export const getUserDevice = async (
     const { data, error } = await supabase
         .from("devices")
         .select(
-            `device_id, mac_address, user_code, volume, claimed_at, last_seen_at, firmware_version, firmware_reported_at, ${BATTERY_COLUMNS}`,
+            `device_id, mac_address, user_code, volume, claimed_at, last_seen_at, firmware_version, firmware_reported_at, ${BATTERY_COLUMNS}, ${TOY_COLUMNS}`,
         )
         .eq("user_id", userId)
         .eq("device_id", deviceId)
@@ -154,13 +162,13 @@ export const getUserDevice = async (
     if (error) {
         throw error;
     }
-    return data as
+    return data as unknown as
         | (Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & {
             claimed_at: string | null;
             last_seen_at: string | null;
             firmware_version: string | null;
             firmware_reported_at: string | null;
-        } & DeviceBattery)
+        } & DeviceBattery & DeviceToy)
         | null;
 };
 

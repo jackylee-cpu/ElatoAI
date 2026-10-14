@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import _ from "lodash";
 import { ChevronRight, Link2Off, Loader2, Volume2, Wifi } from "lucide-react";
 import { unbindDeviceAction } from "@/app/actions";
@@ -25,13 +26,14 @@ import MemorySection from "../Settings/MemorySection";
 import { cn } from "@/lib/utils";
 import type { DeviceBattery } from "@/lib/deviceBattery";
 import { BatteryRow } from "./BatteryStatus";
+import type { DeviceToy } from "@/db/devices";
 
 type SettingsDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & {
     claimed_at: string | null;
     last_seen_at: string | null;
     firmware_version: string | null;
     firmware_reported_at: string | null;
-} & DeviceBattery;
+} & DeviceBattery & DeviceToy;
 
 const cardClass =
     "rounded-[24px] bg-white/90 shadow-[0_8px_24px_rgba(80,120,180,0.08)] backdrop-blur-sm";
@@ -142,10 +144,20 @@ export default function DeviceSettings({
 
             <div className="scrollbar-hide flex flex-1 flex-col gap-5 overflow-y-auto pb-[max(2rem,env(safe-area-inset-bottom))]">
                 <div className="flex flex-col items-center gap-2 pt-2">
-                    <div className="flex h-28 w-28 items-center justify-center rounded-full bg-white/90 shadow-[0_8px_24px_rgba(80,120,180,0.12)] ring-8 ring-white/40">
-                        <span className="text-6xl" aria-hidden="true">🧸</span>
+                    <div className="relative flex h-28 w-28 items-center justify-center overflow-hidden rounded-full bg-white/90 shadow-[0_8px_24px_rgba(80,120,180,0.12)] ring-8 ring-white/40">
+                        {device.toy?.image_url ? (
+                            <Image
+                                src={device.toy.image_url}
+                                alt=""
+                                fill
+                                sizes="112px"
+                                className="object-cover"
+                            />
+                        ) : (
+                            <span className="text-6xl" aria-hidden="true">🧸</span>
+                        )}
                     </div>
-                    <p className="mt-1 text-xl font-semibold text-gray-900">AI Buddy</p>
+                    <p className="mt-1 text-xl font-semibold text-gray-900">{device.toy?.name || "AI Buddy"}</p>
                     <p className="text-sm text-gray-500">SN: {device.user_code}</p>
                 </div>
 
