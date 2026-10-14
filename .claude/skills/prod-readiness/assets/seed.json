@@ -669,6 +669,19 @@
       "test": "① 名單經你確認\n② 私隱政策有對應段落（配合 P1-04）\n③ 前端 bundle 與 repo 裡找不到 service_role key",
       "deps": "",
       "note": "新增"
+    },
+    {
+      "id": "R-38",
+      "priority": "R",
+      "phase": "3 封閉內測",
+      "category": "產品",
+      "title": "公仔出廠鎖死所屬 IP，綁定時顯示該 IP 頭像",
+      "risk": "同一個 App 會同時賣兩種以上鎖死的公仔。若 IP 只靠這套部署裡有哪些角色來區分，一個帳號上的兩隻公仔會共用同一個角色，其中一隻會說成另一個 IP 的人。",
+      "where": "supabase：devices.ip_key、devices.personality_id\nserver/fastapi/device_registry.py\nfrontend-nextjs 認領、My Devices、Playground\nadmin 的 IP image_url\n出廠登記（R-10）",
+      "accept": "共用韌體映像不含某個 IP。出廠工位按 MAC 把 ip_key 和該 IP 的預設角色寫進 devices；板子不報 IP，解綁不清這欄，家長和 App 改不了。ip_key 為空的開發板維持現在的行為。認領前和 My Devices 用 ips.image_url 顯示這隻公仔的頭像；帳號上的 Current Character 仍是角色圖。角色在 devices.personality_id，資料庫拒絕把別的 IP 的角色寫到這台上。一個帳號可以同時綁兩種 IP 的公仔，各說各的角色；Playground 從某台進去，只列該 IP 的角色。語音伺服器讀這台自己的角色。孩子資料仍在帳號。記憶仍是（帳號、設備、ip_key），另一隻聽不到。",
+      "test": "① 登記兩塊 MAC，分別寫入 IP-A、IP-B 和各自的預設角色。兩塊板燒的是同一份韌體。查 devices，ip_key 和 personality_id 正確。\n② 認領清單在按下認領前顯示該 IP 的名稱和 image_url；image_url 為空時用佔位圖。認領後 My Devices 卡片是這張圖，Current Character 仍是角色圖。\n③ 同一帳號再認領另一 IP 的板。兩台設備卡片各顯示自己的 IP 頭像。\n④ 用家長身份更新 devices.ip_key，被拒絕。把 personality_id 改成另一個 IP 的角色，被外鍵拒絕。\n⑤ 從 IP-A 的設備進 Playground，只看到 A 的角色，沒有換到 B 的入口。A 的板開 session，用的是 A 的角色；B 的板不受影響。\n⑥ 解綁 A 再被另一個帳號認領，ip_key 仍是 A，頭像不變。A 的記憶不會出現在 B 的 session。\n⑦ ip_key 為空的開發板仍可選任何角色，session 照現在的帳號角色走。\n⑧ 只更新韌體（OTA 或重燒 app），devices.ip_key 不變。",
+      "deps": "P0-11",
+      "note": "2026-10-13 定案：同一個 App 裡兩種鎖死公仔是一定的。IP 在出廠登記時按 MAC 寫入，不編進韌體。"
     }
   ],
   "questions": [
