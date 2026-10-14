@@ -1,5 +1,4 @@
 import { GeistSans } from "geist/font/sans";
-import { Product, WithContext } from "schema-dts";
 import {
     Inter,
     Baloo_2,
@@ -16,7 +15,6 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Metadata, Viewport } from "next";
 import NextTopLoader from "nextjs-toploader";
-import { GoogleAnalytics } from "@next/third-parties/google";
 import { Karla } from "next/font/google";
 
 const karla = Karla({
@@ -24,8 +22,6 @@ const karla = Karla({
 	variable: "--font-karla",
 });
 
-
-import Script from "next/script";
 
 const inter = Inter({
     subsets: ["latin"],
@@ -102,199 +98,47 @@ const defaultUrl = process.env.VERCEL_URL
 export const metadata: Metadata = {
     metadataBase: new URL(defaultUrl),
     title: {
-        default:
-            "Elato AI: The Compact Device to Bring AI Characters to Life",
-        template:
-            "%s | Elato AI - The Compact Device to Bring AI Characters to Life",
+        default: "AI Buddy",
+        template: "%s | AI Buddy",
     },
-    applicationName: "Elato AI",
+    applicationName: "AI Buddy",
     description:
-        "Elato is an AI-enabled device that brings objects to life through conversational AI. More than a device, it's your gateway to a world where AI brings magic to the ordinary.",
-    authors: [
-        {
-            name: "Akashdeep Deb",
-            url: "https://linkedin.com/in/akashdeep-deb",
-        },
-    ],
+        "A voice companion toy for young children. Parents pick the character and look after the device here.",
     keywords: [
         "AI toy",
         "AI companion",
-        "AI device",
-        "interactive learning",
-        "empathetic companion",
+        "Cantonese",
+        "children",
         "voice assistant",
-        "emotional growth",
-        "Elato AI",
+        "AI Buddy",
         "conversational AI",
-        "google home",
-        "amazon echo",
-        "smart speaker",
-        "AI speaker",
-        "emotional support",
-        "AI for adults",
-        "AI assistant",
-        "smart AI device",
     ],
     openGraph: {
-        title: "Elato AI: The Compact Device to Bring AI Characters to Life",
+        title: "AI Buddy",
         description:
-            "Elato brings objects to life through engaging, conversational AI experiences. More than a device, it's your gateway to a world where AI brings magic to the ordinary.",
-        siteName: "Elato AI",
-        locale: "en-US",
+            "A voice companion toy for young children. Parents pick the character and look after the device here.",
+        siteName: "AI Buddy",
+        locale: "zh-HK",
         type: "website",
-        images: [
-            {
-                url: "https://elatoai.com/images/orange.png",
-                width: 1200,
-                height: 630,
-                alt: "Elato AI conversational device - Front View",
-            },
-        ],
     },
     robots: {
-        index: true,
-        follow: true,
+        index: false,
+        follow: false,
     },
-    generator: "Next.js",
-    creator: "Elato Team",
-    publisher: "Elato AI Ltd.",
-    alternates: {
-        canonical: "https://elatoai.com",
-        languages: {
-            "en-US": "https://elatoai.com",
-            "zh-CN": "https://elatoai.com",
-        },
-    },
-    icons: {
-        icon: "https://elatoai.com/favicon.ico",
-        apple: "https://elatoai.com/favicon.ico",
-    },
-    twitter: {
-        card: "summary_large_image",
-        title: "Elato - An AI-powered device that brings objects to life through engaging, conversational experiences",
-        description:
-            "More than a device, Elato is your gateway to a world where AI brings magic to the ordinary through engaging learning and interactive experiences.",
-        images: ["https://elatoai.com/images/orange.png"],
-    },
-    assets: "https://elatoai.com/images",
     formatDetection: {
         telephone: false,
     },
     appleWebApp: {
         capable: true,
-        title: "Elato AI",
+        title: "AI Buddy",
         statusBarStyle: "black-translucent",
     },
-    category: "AI device",
-    classification: "Interactive, conversational AI Devices",
 };
 
 export const viewport: Viewport = {
     width: "device-width",
     initialScale: 1,
     maximumScale: 1,
-};
-
-const jsonLd: WithContext<Product> = {
-    "@context": "https://schema.org",
-    "@type": "Product",
-    name: "Elato AI",
-    description:
-        "Elato is an AI-enabled device that brings objects to life through conversational AI. More than a device, it's your gateway to a world where AI brings magic to the ordinary.",
-    brand: {
-        "@type": "Brand",
-        name: "Elato AI",
-    },
-    offers: {
-        "@type": "Offer",
-        url: "https://elatoai.com",
-        priceCurrency: "USD",
-        price: "57.99",
-        priceValidUntil: "2024-12-31", // set a realistic date in the future
-        availability: "https://schema.org/InStock",
-        seller: {
-            "@type": "Organization",
-            name: "Elato AI Ltd.",
-        },
-        hasMerchantReturnPolicy: {
-            "@type": "MerchantReturnPolicy",
-            returnPolicyCategory:
-                "https://schema.org/MerchantReturnUnspecified",
-            merchantReturnDays: 30,
-        },
-        shippingDetails: {
-            "@type": "OfferShippingDetails",
-            shippingDestination: {
-                "@type": "DefinedRegion",
-                name: "Worldwide", // Reflects availability in all countries
-            },
-            shippingRate: {
-                "@type": "MonetaryAmount",
-                value: "0.00",
-                currency: "USD", // Free shipping
-            },
-        },
-    },
-    aggregateRating: {
-        "@type": "AggregateRating",
-        ratingValue: "4.9",
-        reviewCount: "14",
-    },
-    review: [
-        {
-            "@type": "Review",
-            author: {
-                "@type": "Person",
-                name: "Kai L.",
-            },
-            reviewRating: {
-                "@type": "Rating",
-                ratingValue: "5",
-            },
-            reviewBody:
-                "I wished to have a toy for my friends kids, chatting just for fun ... and hearing all is 'out-of-the-.box' is a unbelievable awesome",
-        },
-        {
-            "@type": "Review",
-            author: {
-                "@type": "Person",
-                name: "Lauren A. W.",
-            },
-            reviewRating: {
-                "@type": "Rating",
-                ratingValue: "5",
-            },
-            reviewBody:
-                "I want to make a mini me. I think this box will really help!",
-        },
-        {
-            "@type": "Review",
-            author: {
-                "@type": "Person",
-                name: "Steven Z.",
-            },
-            reviewRating: {
-                "@type": "Rating",
-                ratingValue: "5",
-            },
-            reviewBody: "this is fantastic, extremely useful. Thanks so much.",
-        },
-        {
-            "@type": "Review",
-            author: {
-                "@type": "Person",
-                name: "Big cube",
-            },
-            reviewRating: {
-                "@type": "Rating",
-                ratingValue: "4.5",
-            },
-            reviewBody:
-                "Really cool project you've got going on, hoping one day it might use a local llm",
-        },
-    ],
-    image: "https://elatoai.com/images/orange.png",
-    category: "Interactive AI Device",
 };
 
 export default async function RootLayout({
@@ -308,16 +152,6 @@ export default async function RootLayout({
             className={`${GeistSans.className} h-full ${fonts}`}
             suppressHydrationWarning
         >
-            <head>
-                <link rel="canonical" href="https://www.elatoai.com" />
-                <Script
-                    id="product-schema"
-                    type="application/ld+json"
-                    dangerouslySetInnerHTML={{
-                        __html: JSON.stringify(jsonLd),
-                    }}
-                />
-            </head>
             <body className="bg-background text-foreground flex flex-col min-h-screen bg-gray-50 font-karla">
                 <NextTopLoader showSpinner={false} color="#facc15" />
                 <main className="flex-grow mx-auto w-full flex flex-col">
@@ -325,7 +159,6 @@ export default async function RootLayout({
                 </main>
                 <Toaster />
             </body>
-            <GoogleAnalytics gaId="G-CR07NVH6CN" />
         </html>
     );
 }

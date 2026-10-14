@@ -5,7 +5,7 @@ import { defaultPersonalityId } from "./data";
 export const getOpenGraphMetadata = (title: string) => {
     return {
         openGraph: {
-            title: `${title} | Elato AI`,
+            title: `${title} | AI Buddy`,
         },
     };
 };
