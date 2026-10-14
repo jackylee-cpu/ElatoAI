@@ -320,9 +320,10 @@ The full flash backup and the full pin list are in
 | Battery | a cell is fitted, but nothing can measure it: see below |
 | Keys | BOOT (GPIO9) only |
 
-Everything in the xmini-c3 notes above applies, since the chip, flash mode,
-partition table and audio path are the same; `Config.cpp` serves both from
-one block. Two exceptions:
+Everything in the xmini-c3 notes above applies, since the chip, flash mode
+and audio path are the same; `Config.cpp` serves both from one block. The
+partition table is not the same: this board ships with `partition_16m.csv`
+(below). Two exceptions:
 
 - **The mic threshold is borrowed.** `MIC_VOICE_LEVEL` is the xmini-c3's 450,
   which assumes the same codec at the same gains with a similar mic. It has
@@ -431,3 +432,24 @@ rather than the xmini-c3's raw table, battery polling that does not depend
 on the display task (which exits on a headless board), and somewhere for
 the number to go, because nothing in the server or the app carries a
 battery level today.
+
+**Partition table (P2-12, fixed 2026-10-14).** `partition_16m.csv`, which the
+factory image freezes for good -- OTA can replace the app, never the table:
+
+| Partition | Offset | Size | What |
+|---|---|---|---|
+| nvs, otadata | 0x9000, 0xe000 | 20K, 8K | where `partition.csv` had them, so a USB move keeps Wi-Fi and the device secret |
+| app0, app1 | 0x10000, 0x410000 | 4MB each | the app is ~1.6MB, ~2.2MB with BLE provisioning (R-21) |
+| assets | 0x810000 | 2MB | brand sounds: `tools/build_assets.py` packs them, `src/Assets.cpp` plays them in place |
+| nvs_keys | 0xa10000 | 4K | for NVS encryption once flash encryption is on (P0-14) |
+| coredump | 0xa20000 | 64K | the core writes a crash dump here (a test abort left 14.8KB) |
+| media | 0xa30000 | 5.8MB | offline songs and stories (R-14) |
+
+The assets pack is per brand and is not part of the app upload: flash it with
+`esptool.py write_flash 0x810000`. A missing or corrupt pack is reported at
+boot (`Assets: none (...)`) and the board falls back to its built-in boot and
+low-battery sounds; the Wi-Fi prompts exist only in the pack. Do not embed
+sounds in the app instead: on 2026-10-14 seven prompts pushed the image to
+2,147,728 bytes on the old 2MB slot and the board boot-looped silently, while
+pio still printed "Flash 99%" and SUCCESS. `release_firmware.py` now refuses
+an image larger than the build's app slot.

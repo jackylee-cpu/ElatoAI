@@ -1,5 +1,5 @@
-# Production layout proposal for the 16MB Spotpear AI Toy (P2-12). Frozen with
-# the factory image: once a board ships, OTA can change the app but never this.
+# Production layout for the 16MB Spotpear AI Toy, fixed 2026-10-14 (P2-12).
+# Frozen with the factory image: once a board ships, OTA can change the app but never this.
 # nvs and otadata stay where partition.csv put them, so a board moved to this
 # table by USB keeps its Wi-Fi, device secret and volume.
 #
