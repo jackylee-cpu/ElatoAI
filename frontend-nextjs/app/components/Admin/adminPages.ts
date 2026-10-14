@@ -57,7 +57,7 @@ export const ADMIN_PAGE_GROUPS: AdminPageGroup[] = [
                 title: "Devices",
                 description:
                     "Each toy's status, firmware and binding. Conversations and memories are never shown.",
-                kind: "preview",
+                kind: "live",
                 superOnly: true,
             },
             {

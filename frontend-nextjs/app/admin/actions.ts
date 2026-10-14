@@ -13,6 +13,7 @@ import {
 } from "@/db/accounts";
 import { createServiceClient } from "@/utils/supabase/service";
 import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
+import { fetchDevicePresence, PresenceMap } from "@/lib/devicePresence";
 import {
     createBuiltinPersonality,
     updatePersonalityAsAdmin,
@@ -934,11 +935,101 @@ export async function saveUsageRatesAction(rates: IUsageRates): Promise<ActionRe
     return { ok: true };
 }
 
+/**
+ * Which toys are online right now (P2-14), for the Devices page to poll. The
+ * voice server only knows this in memory, so it cannot come with the rest of
+ * the page from the database.
+ */
+export async function getDevicePresenceAction(): Promise<PresenceMap> {
+    await requireAdmin("super_admin");
+    return fetchDevicePresence();
+}
+
 const MAX_REASON_LENGTH = 500;
 
 function cleanReason(reason: string): string | null {
     const clean = reason.trim();
     return clean && clean.length <= MAX_REASON_LENGTH ? clean : null;
+}
+
+/** Turn a refusal from the admin device functions into words. */
+function deviceActionError(error: unknown, fallback: string): string {
+    const { code, message } = error as { code?: string; message?: string };
+    if (code === "42501") return "Only a super admin can do that";
+    if (code === "22023") return "Give a reason";
+    if (code === "P0002") {
+        if (message?.includes("not bound")) return "This toy is not bound to anyone";
+        if (message?.includes("no key")) return "This toy has no key to reset";
+        return "No such toy";
+    }
+    return fallback;
+}
+
+/**
+ * Forget a board's device key, so it is issued a new one the next time it
+ * calls in -- the fix for a board whose NVS was wiped and now gets 401 on
+ * every boot. Until then, whoever calls in with this MAC first gets the key.
+ *
+ * The delete and its audit record are one transaction in the database.
+ */
+export async function resetDeviceSecretAction(
+    deviceId: string,
+    reason: string,
+): Promise<ActionResult> {
+    const { supabase } = await requireAdmin("super_admin");
+
+    const why = cleanReason(reason);
+    if (!why) {
+        return { ok: false, error: `Give a reason, up to ${MAX_REASON_LENGTH} characters` };
+    }
+
+    const { error } = await supabase.rpc("admin_reset_device_secret", {
+        p_device_id: deviceId,
+        p_reason: why,
+    });
+    if (error) {
+        console.error("resetDeviceSecretAction failed", error);
+        return { ok: false, error: deviceActionError(error, "Could not reset the key") };
+    }
+
+    revalidatePath("/admin");
+    return { ok: true };
+}
+
+/**
+ * Release a board from its owner, as support -- for a toy returned without
+ * being unbound, or an account that can no longer sign in. The memory stays
+ * with the old owner; the next account to claim the board starts empty.
+ *
+ * The board's live session is dropped so it reconnects, is refused as
+ * unclaimed and goes back to showing its pairing state. Best effort: a toy
+ * that is asleep finds out when it next wakes.
+ */
+export async function forceUnbindDeviceAction(
+    deviceId: string,
+    reason: string,
+): Promise<ActionResult> {
+    const { supabase } = await requireAdmin("super_admin");
+
+    const why = cleanReason(reason);
+    if (!why) {
+        return { ok: false, error: `Give a reason, up to ${MAX_REASON_LENGTH} characters` };
+    }
+
+    const { data: mac, error } = await supabase.rpc("admin_unbind_device", {
+        p_device_id: deviceId,
+        p_reason: why,
+    });
+    if (error) {
+        console.error("forceUnbindDeviceAction failed", error);
+        return { ok: false, error: deviceActionError(error, "Could not unbind the toy") };
+    }
+
+    if (typeof mac === "string" && mac) {
+        await dropBoardSession(mac);
+    }
+    revalidatePath("/admin");
+    return { ok: true };
 }
 
 /** Close one board's voice session; it reconnects about a second later. */

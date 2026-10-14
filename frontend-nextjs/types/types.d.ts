@@ -504,6 +504,23 @@ declare global {
         after: Record<string, unknown> | null;
     }
 
+    /** One board as the admin Devices page lists it (P2-14). No child data. */
+    interface IAdminDevice {
+        device_id: string;
+        mac_address: string | null;
+        created_at: string;
+        last_seen_at: string | null;
+        claimed_at: string | null;
+        owner_id: string | null;
+        owner_email: string | null;
+        firmware_board: string | null;
+        firmware_version: string | null;
+        firmware_reported_at: string | null;
+        ota_failed_version: string | null;
+        ota_failed_at: string | null;
+        key_issued_at: string | null;
+    }
+
     /** STT, TTS and currency rates for pricing usage; LLM prices come from OpenRouter. */
     interface IUsageRates {
         stt_usd_per_hour: number;

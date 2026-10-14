@@ -32,6 +32,7 @@ const TABLE_LABELS: Record<string, string> = {
     ip_styles: "IP style",
     admin_roles: "Admin role",
     "auth.users": "Account",
+    devices: "Device",
 };
 
 const VERBS: Record<string, string> = {
@@ -41,6 +42,8 @@ const VERBS: Record<string, string> = {
     "account.create": "Created",
     "account.update": "Updated",
     "account.delete": "Deleted",
+    "device.unbind": "Force-unbound",
+    "device.reset_key": "Reset the key of",
 };
 
 function describe(entry: IAdminAuditEntry): string {

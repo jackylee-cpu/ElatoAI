@@ -587,6 +587,19 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="password must be empty or 8-63 bytes")
         return await device_wifi.request(mac, "add", ssid=ssid, password=password)
 
+    @app.post("/internal/devices_presence")
+    async def devices_presence(x_internal_token: str | None = Header(default=None)):
+        """Which boards have a live session right now, for the admin devices
+        page (P2-14). Read-only: online, since when, and the last Wi-Fi list a
+        board reported -- network names and signal, never a password.
+
+        Online means "has a voice socket open". A board in deep sleep has none,
+        so asleep and switched off both read as offline; the page tells them
+        apart by when the board last called in.
+        """
+        _require_internal_token(x_internal_token)
+        return {"ok": True, "devices": device_wifi.presence()}
+
     @app.post("/internal/settings_refresh")
     async def settings_refresh(x_internal_token: str | None = Header(default=None)):
         """Forget the cached app_settings row so the next session re-reads it.

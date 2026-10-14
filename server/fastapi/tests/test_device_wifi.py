@@ -210,3 +210,43 @@ def test_endpoint_peek_never_contacts_the_board(client):
     assert response.json() == {**device_wifi.snapshot(MAC), "ok": True}
     assert response.json()["online"] is True
     assert socket.sent == []
+
+
+def test_presence_lists_known_boards_with_online_and_since():
+    other = "11:22:33:44:55:66"
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    device_wifi.handle_device_message(other, {"type": "wifi_status", **STATUS})
+
+    presence = device_wifi.presence()
+    assert presence[MAC]["online"] is True
+    assert isinstance(presence[MAC]["connected_at"], float)
+    assert presence[other]["online"] is False
+    assert presence[other]["connected_at"] is None
+    assert presence[other]["status"] == STATUS
+
+    device_wifi.unregister(MAC, socket)
+    assert device_wifi.presence()[MAC] == {
+        "online": False, "status": None, "status_at": None, "connected_at": None
+    }
+
+
+def test_presence_since_survives_a_second_socket():
+    first, second = FakeSocket(), FakeSocket()
+    device_wifi.register(MAC, first)
+    since = device_wifi.presence()[MAC]["connected_at"]
+    device_wifi.register(MAC, second)
+    device_wifi.unregister(MAC, first)
+    assert device_wifi.presence()[MAC]["connected_at"] == since
+
+
+def test_presence_endpoint_requires_token_and_returns_boards(client):
+    assert client.post("/internal/devices_presence").status_code == 401
+    device_wifi.register(MAC, FakeSocket())
+    response = client.post(
+        "/internal/devices_presence", headers={"x-internal-token": "t0ken"}
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["ok"] is True
+    assert body["devices"][MAC]["online"] is True

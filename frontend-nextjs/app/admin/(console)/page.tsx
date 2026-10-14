@@ -8,6 +8,8 @@ import { createServiceClient } from "@/utils/supabase/service";
 import { requireAdmin, roleAllows } from "@/lib/admin";
 import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
 import { listAuditLog } from "@/db/auditLog";
+import { listDevicesForAdmin } from "@/db/adminDevices";
+import { fetchDevicePresence } from "@/lib/devicePresence";
 import { getUsageByDay, getUsageByDevice } from "@/db/usage";
 import { fetchOpenRouterModels } from "@/lib/openrouterCatalogue";
 import { hkDayStart, hkDays, hkMonthStart } from "@/lib/usageCost";
@@ -50,6 +52,8 @@ export default async function AdminPage() {
         usageByDay,
         usageRates,
         openRouterModels,
+        devices,
+        presence,
     ] = await Promise.all([
             isSuper ? getVoiceStackSettings(supabase) : Promise.resolve({}),
             isSuper ? getRecentTurnMetrics(supabase) : Promise.resolve([]),
@@ -67,6 +71,9 @@ export default async function AdminPage() {
             isSuper ? getUsageByDay(supabase, firstDay, nextMonth) : Promise.resolve([]),
             isSuper ? getUsageRates(supabase) : Promise.resolve(DEFAULT_USAGE_RATES),
             isSuper ? fetchOpenRouterModels() : Promise.resolve(null),
+            isSuper ? listDevicesForAdmin(supabase) : Promise.resolve([]),
+            // The voice server, not the database: only it knows who is connected.
+            isSuper ? fetchDevicePresence() : Promise.resolve(null),
         ]);
 
     return (
@@ -82,6 +89,8 @@ export default async function AdminPage() {
             modes={modes}
             styles={styles}
             audit={audit}
+            devices={devices}
+            presence={presence}
             usage={{
                 thisMonth: usageThisMonth,
                 lastMonth: usageLastMonth,

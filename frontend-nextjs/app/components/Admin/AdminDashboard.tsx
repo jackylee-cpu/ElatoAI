@@ -10,6 +10,7 @@ import AdminsTab from "./AdminsTab";
 import AccountsTab from "./AccountsTab";
 import AuditTab from "./AuditTab";
 import UsageTab from "./UsageTab";
+import DevicesTab from "./DevicesTab";
 import OverviewPreview from "./preview/OverviewPreview";
 import SupportPreview from "./preview/SupportPreview";
 import OtaPreview from "./preview/OtaPreview";
@@ -17,6 +18,7 @@ import FactoryPreview from "./preview/FactoryPreview";
 import PlannedPage from "./preview/PlannedPage";
 import { PreviewBanner } from "./preview/PreviewKit";
 import { AdminPage, AdminPageId, pagesFor } from "./adminPages";
+import type { PresenceMap } from "@/lib/devicePresence";
 import { BackIcon } from "../Playground/icons";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +34,8 @@ interface AdminDashboardProps {
     modes: IMode[];
     styles: IStyle[];
     audit: IAdminAuditEntry[];
+    devices: IAdminDevice[];
+    presence: PresenceMap;
     usage: React.ComponentProps<typeof UsageTab>;
 }
 
@@ -50,6 +54,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     modes,
     styles,
     audit,
+    devices,
+    presence,
     usage,
 }) => {
     // Content admins see characters and IPs only. Hiding the rest is for
@@ -98,6 +104,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 return <AuditTab entries={audit} />;
             case "usage":
                 return <UsageTab {...usage} />;
+            case "devices":
+                return <DevicesTab devices={devices} presence={presence} usage={usage} />;
             case "characters":
                 return (
                     <CharactersTab

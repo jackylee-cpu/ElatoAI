@@ -41,6 +41,8 @@ class _Board:
     status: dict[str, Any] | None = None
     status_at: float | None = None
     pending: dict[str, asyncio.Future] = field(default_factory=dict)
+    # When the board's current run of sockets began; None while it has none.
+    connected_at: float | None = None
 
 
 _boards: dict[str, _Board] = {}
@@ -90,7 +92,10 @@ def _clean_networks(message: dict[str, Any]) -> list[dict[str, Any]]:
 def register(mac: str | None, websocket: WebSocket) -> None:
     key = _key(mac)
     if key:
-        _board(key).sockets.add(websocket)
+        board = _board(key)
+        if not board.sockets:
+            board.connected_at = time.time()
+        board.sockets.add(websocket)
 
 
 def unregister(mac: str | None, websocket: WebSocket) -> None:
@@ -100,6 +105,7 @@ def unregister(mac: str | None, websocket: WebSocket) -> None:
         return
     board.sockets.discard(websocket)
     if not board.sockets:
+        board.connected_at = None
         # Nobody left to answer; fail the waiters now rather than at timeout.
         for future in board.pending.values():
             if not future.done():
@@ -136,6 +142,19 @@ def snapshot(mac: str | None) -> dict[str, Any]:
         "online": bool(board and board.sockets),
         "status": board.status if board else None,
         "status_at": board.status_at if board else None,
+    }
+
+
+def presence() -> dict[str, dict[str, Any]]:
+    """Every board this process has heard from since it started, by MAC: what
+    the admin devices page shows (P2-14). A board missing here has not had a
+    session since the last restart, which the page shows as offline."""
+    return {
+        mac: {
+            **snapshot(mac),
+            "connected_at": board.connected_at if board.sockets else None,
+        }
+        for mac, board in _boards.items()
     }
 
 
