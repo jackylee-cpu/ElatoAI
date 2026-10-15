@@ -11,8 +11,8 @@
 #include "Battery.h"
 #if BOARD_MIC_DOWNSAMPLE_3_2
 #include "Downsample.h"
-#include "MicAdpcm.h"
 #endif
+#include "MicAdpcm.h"
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
