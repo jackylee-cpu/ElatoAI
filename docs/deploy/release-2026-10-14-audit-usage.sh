@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # Admin audit log (P1-10), usage and cost (P2-09), admin Devices (P2-14),
-# account editing, battery state (R-41) and boards locked to their toy's IP
-# -- run ON THE SERVER.
+# account editing, battery state (R-41), boards locked to their toy's IP,
+# bind tickets (P0-11) and staged OTA rollouts (P2-16) -- run ON THE SERVER.
 #
 # Takes production from 8db9d9c to this release. Probed 2026-10-14 from the
-# public API: production had none of the seven migrations below. Schema
-# changes, all in step 3:
+# public API: production had none of the migrations below. Extended 2026-10-15
+# with five more (bind tickets, four for OTA rollouts) and the web app's new
+# env vars. Schema changes, all in step 3:
+#   - P0-11: device_bind_tickets, issue_device_bind_ticket and
+#     claim_device_with_ticket (service role only). A board is claimed with a
+#     one-time ticket its owner's app hands it over Bluetooth
+#   - P2-16..P2-21: firmware_releases gains rollout_percent (default 100, so
+#     the current release behaves as before), a whitelist and a pause;
+#     firmware_rollout_devices records what each board did; the server pauses
+#     a rollout on its own when too many boards roll back; super admins
+#     upload, stage and delete releases from the OTA page. Changes to
+#     firmware_releases are audited
 #   - P1-10 audit log, P2-09 usage columns (see below)
 #   - P2-14: admin_list_devices / admin_reset_device_secret /
 #     admin_unbind_device; the Devices page is live, not a preview
@@ -34,6 +44,18 @@
 #     child said, the replies and memory are logged at DEBUG only, and
 #     tracebacks no longer print variable values. Production must not set
 #     LOG_LEVEL=DEBUG or LOG_DIAGNOSE (step 0 refuses).
+#   - P0-11 hides the list of unclaimed boards unless DEVICE_CLAIM_LIST=True.
+#     No app can hand a board a ticket yet (R-21), so this UAT keeps the list
+#     on: step 3 adds DEVICE_CLAIM_LIST=True to .env.production when it is not
+#     set (CLAIM_LIST=False to leave it off). Turn it off once the app binds.
+#   - P2-22: the token answer carries the voice and backend URLs boards should
+#     use. Step 3 adds DEVICE_VOICE_URL / DEVICE_BACKEND_URL for $SITE when
+#     they are not set. Today's firmware ignores both; they matter once a
+#     firmware with the P2-22 client is out.
+#   - P2-24: the voice server decodes an IMA ADPCM mic uplink when a board
+#     says so (X-Mic-Codec); boards that do not say so are PCM, as before.
+#   - firmware for R-36, R-37 (switch Wi-Fi), P2-24 and P2-25 is not part of
+#     this script: it goes out by OTA from the OTA page afterwards.
 #
 # Before running, on the dev Mac:
 #   1. the release commit is pushed:   git push mygithub dev:main
@@ -58,12 +80,16 @@
 #
 # Rollback: step 0 prints the running image ids. Putting them back with
 # FASTAPI_IMAGE= / FRONTEND_IMAGE= and `docker compose up -d` is enough at any
-# point: the migrations only add a table, columns with defaults, functions and
+# point: the migrations only add tables, columns with defaults, functions and
 # triggers. The audit triggers keep recording under the old code, which is
-# what we want; nothing needs dropping.
+# what we want; nothing needs dropping. The old web app reads only is_current
+# from firmware_releases, so it offers the current release to every board, as
+# it did. Step 3 backs up .env.production before adding to it; the old image
+# ignores the added variables.
 set -euo pipefail
 
 RELEASE="${RELEASE:?set RELEASE to the short sha pushed to mygithub/main}"
+CLAIM_LIST="${CLAIM_LIST:-True}"   # DEVICE_CLAIM_LIST to add when unset
 REPO="${REPO:-$HOME/aibuddy}"
 DB="${DB:-supabase-db}"
 FASTAPI_DIR="$REPO/server/fastapi"
@@ -76,9 +102,12 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 # Step 6 counts the rows written since the new voice server started.
 MARK_FILE="$BACKUP_DIR/release-2026-10-14-voice-started-at"
 
-# In this order: 140000 and 150000 write to the audit log from 120000, and
-# 170500 replaces the admin_list_devices() that 140000 creates.
+# In this order: 140000 and 150000 write to the audit log from 120000,
+# 170500 replaces the admin_list_devices() that 140000 creates, and 190000
+# replaces 120000's audit_admin_change() and audits firmware_releases.
+# 20261012170000 stands alone (devices and users only).
 MIGRATIONS=(
+    20261012170000_device_bind_tickets.sql
     20261014120000_admin_audit_log.sql
     20261014130000_usage_cost.sql
     20261014140000_admin_devices.sql
@@ -86,6 +115,10 @@ MIGRATIONS=(
     20261014153000_device_battery.sql
     20261014170000_lock_boards_to_their_ip.sql
     20261014170500_admin_set_device_ip.sql
+    20261014190000_firmware_rollout.sql
+    20261014200000_firmware_rollout_autopause.sql
+    20261014210000_admin_firmware_upload.sql
+    20261014220000_admin_firmware_rollout.sql
 )
 # Each admin function is refused to anon and checks the role itself.
 ADMIN_FUNCTIONS=(
@@ -94,8 +127,20 @@ ADMIN_FUNCTIONS=(
     "admin_unbind_device(uuid,text)"
     "admin_set_device_ip(uuid,text,text)"
     "admin_delete_account(uuid,text)"
+    "admin_create_firmware_release(text,text,text,text,integer,text)"
+    "admin_delete_firmware_release(uuid)"
+    "admin_change_firmware_rollout(uuid,text,smallint,text[],text)"
 )
-AUDITED_TABLES=(app_settings personalities ips ip_modes ip_styles admin_roles)
+# Only the web app's server (service role) may call these: boards' token
+# route and the bind-ticket route.
+SERVICE_FUNCTIONS=(
+    "issue_device_bind_ticket(uuid,text,integer,integer)"
+    "claim_device_with_ticket(uuid,text)"
+    "ota_note_offer(uuid,uuid)"
+    "ota_note_report(uuid,text,text,text)"
+    "ota_maybe_pause(uuid)"
+)
+AUDITED_TABLES=(app_settings personalities ips ip_modes ip_styles admin_roles firmware_releases)
 
 step() { [ "$1" -ge "$STEP" ] && [ "$1" -le "$LAST" ]; }
 say()  { printf '\n=== %s\n' "$*"; }
@@ -156,6 +201,9 @@ if step 0; then
     if grep -qiE '^LOG_DIAGNOSE=(1|true|yes|on)' "$FASTAPI_DIR/.env"; then
         echo "  LOG_DIAGNOSE is on in $FASTAPI_DIR/.env -- tracebacks would print variable values; remove it"; exit 1
     fi
+    for v in DEVICE_CLAIM_LIST DEVICE_VOICE_URL DEVICE_BACKEND_URL; do
+        echo "  $v: $(env_value "$v" "$FRONTEND_DIR/.env.production" | grep . || echo "unset (step 3 adds it)")"
+    done
     echo "  turn_metrics rows so far: $(q "select count(*) from public.turn_metrics") (they keep tokens only; STT/TTS are counted from this release)"
     echo "  running images (for rollback):"
     for d in "$FASTAPI_DIR" "$FRONTEND_DIR"; do
@@ -197,14 +245,44 @@ if step 3; then
         has_function "$f" || { echo "  function $f missing"; exit 1; }
     done
     [ "$(q "select pg_get_function_result('public.admin_list_devices()'::regprocedure) like '%ip_key%'")" = "t" ] \
-        || { echo "  admin_list_devices() has no ip_key -- 20261014170500 did not run last"; exit 1; }
+        || { echo "  admin_list_devices() has no ip_key -- 20261014170500 did not run after 140000"; exit 1; }
+    has_table device_bind_tickets && has_table firmware_rollout_devices \
+        && has_column firmware_releases rollout_percent && has_column firmware_releases stage_changed_at \
+        || { echo "  bind-ticket or rollout objects missing"; exit 1; }
+    for f in "${SERVICE_FUNCTIONS[@]}"; do
+        has_function "$f" || { echo "  function $f missing"; exit 1; }
+    done
     echo "  ok"
+
+    say "3b. Web app env (.env.production; read when step 4 recreates the container)"
+    envf="$FRONTEND_DIR/.env.production"
+    add_env() {   # add_env <name> <value> <comment>: only when the name is unset
+        if grep -qE "^$1=" "$envf"; then
+            echo "  $1 already set: $(env_value "$1" "$envf")"
+            return
+        fi
+        [ -f "$envf.bak-$STAMP" ] || cp "$envf" "$envf.bak-$STAMP"
+        printf '\n# %s\n%s=%s\n' "$3" "$1" "$2" >> "$envf"
+        echo "  added $1=$2"
+    }
+    host="${SITE#https://}"; host="${host%%/*}"
+    add_env DEVICE_CLAIM_LIST "$CLAIM_LIST" \
+        "P0-11: True lists unowned boards in Me to claim without a ticket. UAT only, until the app binds over Bluetooth (R-21)."
+    add_env DEVICE_VOICE_URL "wss://$host/fastapi/ws/esp32" \
+        "P2-22: sent to boards with their token. Today's firmware ignores it."
+    add_env DEVICE_BACKEND_URL "https://$host" \
+        "P2-22: sent to boards with their token. Today's firmware ignores it."
+    [ ! -f "$envf.bak-$STAMP" ] || echo "  backup: $envf.bak-$STAMP"
+    unset envf host
 fi
 
 if step 4; then
     say "4. Images $RELEASE (waits for CI)"
     has_column turn_metrics row_kind && has_column devices ip_key \
+        && has_table firmware_rollout_devices && has_table device_bind_tickets \
         || { echo "  step 3 has not run -- the new voice server's metrics writes and board lookups would fail"; exit 1; }
+    grep -qE '^DEVICE_CLAIM_LIST=' "$FRONTEND_DIR/.env.production" \
+        || { echo "  DEVICE_CLAIM_LIST is not in .env.production -- run step 3 (3b) first"; exit 1; }
     for img in fastapi frontend; do
         tries=0
         until out="$(docker pull -q "ghcr.io/jackylee-cpu/aibuddy/$img:$RELEASE" 2>&1)"; do
@@ -321,6 +399,43 @@ SQL
         && ok "no board is locked to a toy yet (as expected on first release)" \
         || ok "$(q "select count(*) from public.devices where ip_key is not null") board(s) locked to a toy"
 
+    # -- P0-11 bind tickets, P2-16 OTA rollouts --
+    for r in anon authenticated; do
+        [ "$(q "select has_table_privilege('$r', 'public.device_bind_tickets', 'SELECT')")" = "f" ] \
+            && ok "$r cannot read device_bind_tickets" || bad "$r can read device_bind_tickets"
+    done
+    for f in "${SERVICE_FUNCTIONS[@]}"; do
+        if ! has_function "$f"; then bad "$f missing"; continue; fi
+        for r in anon authenticated; do
+            [ "$(q "select has_function_privilege('$r', 'public.$f', 'EXECUTE')")" = "f" ] \
+                && ok "$r cannot call $f" || bad "$r can call $f"
+        done
+    done
+    [ "$(q "select has_table_privilege('anon', 'public.firmware_rollout_devices', 'SELECT')")" = "f" ] \
+        && ok "anon cannot read firmware_rollout_devices" || bad "anon can read firmware_rollout_devices"
+    # The current release must still reach every board, as before this release.
+    cur="$(q "select string_agg(board || ' ' || version || ' ' || rollout_percent || '%' || case when paused_at is null then '' else ' PAUSED' end, ', ') from public.firmware_releases where is_current")"
+    if [ -z "$cur" ]; then
+        ok "no current firmware release"
+    elif echo "$cur" | grep -qvE "PAUSED| (0|10|50)%"; then
+        ok "current release(s) still offered to every board: $cur"
+    else
+        bad "a current release is paused or staged: $cur"
+    fi
+    [ "$(q "select count(*) from storage.buckets where id = 'firmware' and not public")" = "1" ] \
+        && ok "private firmware bucket exists (OTA page uploads go there)" || bad "no private 'firmware' storage bucket"
+    c="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$SITE/api/device_bind_ticket" || true)"
+    [ "$c" = "401" ] && ok "signed out POST /api/device_bind_ticket -> 401" || bad "signed out POST /api/device_bind_ticket -> $c"
+    for v in DEVICE_CLAIM_LIST DEVICE_VOICE_URL DEVICE_BACKEND_URL; do
+        val="$(docker exec "$(frontend_container)" printenv "$v" 2>/dev/null || true)"
+        [ -n "$val" ] && ok "web app sees $v=$val" || bad "web app container has no $v"
+    done
+    for v in DEVICE_VOICE_URL:wss DEVICE_BACKEND_URL:https; do
+        val="$(docker exec "$(frontend_container)" printenv "${v%%:*}" 2>/dev/null || true)"
+        case "$val" in "${v##*:}://"*.*) ;; *) bad "${v%%:*} must be ${v##*:}:// on a public name: '$val'" ;; esac
+    done
+    unset cur c val
+
     # -- the rest of the release --
     token="$(env_value INTERNAL_API_TOKEN "$FRONTEND_DIR/.env.production")"
     url="$(env_value VOICE_SERVER_INTERNAL_URL "$FRONTEND_DIR/.env.production")"
@@ -339,11 +454,11 @@ SQL
     unset token
     [ "$code" = "200" ] && ok "Devices page can read who is online (/internal/devices_presence)" || bad "/internal/devices_presence: $code"
     for p in /login /signup; do
-        c="$(curl -s -o /dev/null -w '%{http_code}' "$SITE$p")"
+        c="$(curl -s -o /dev/null -w '%{http_code}' "$SITE$p" || true)"
         [ "$c" = "200" ] && ok "$p -> 200" || bad "$p -> $c"
     done
     for p in /home /admin; do
-        loc="$(curl -s -o /dev/null -w '%{redirect_url}' "$SITE$p")"
+        loc="$(curl -s -o /dev/null -w '%{redirect_url}' "$SITE$p" || true)"
         case "$loc" in */login) ok "signed out $p -> /login" ;; *) bad "signed out $p -> '$loc'" ;; esac
     done
 
@@ -384,6 +499,13 @@ SQL
     in the IP's rules, then Devices -> Set toy IP. Pick a different character
     as the parent: the board still speaks as the toy's character
   - a parent's Me page shows the toy's battery (low / ok) after it connects
+  - Me -> Add a device (DEVICE_CLAIM_LIST=True): an unclaimed board online
+    in the last ten minutes is listed and Add claims it (P0-11)
+  - OTA releases page (super admin): the current release shows 100%, not
+    paused, with its boards. Upload a release build as a draft and delete it
+    again -> the upload is not refused by the proxy (images are ~1.6 MB), and
+    the Audit log has the create and delete. Push R-36/R-37/P2-24/P2-25
+    firmware later from this page: whitelist one board first
   - /admin as a content admin: only Characters and IPs
   - a parent: /login offers email only (no Apple, Google, Facebook); Me shows
     their board(s); a board on
