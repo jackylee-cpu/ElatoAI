@@ -567,6 +567,10 @@ void WIFIMANAGER::loop() {
   // On Wi-Fi but nothing from our server for a while (ServerReach.cpp): leave
   // and join again. Ahead of the interval check, so it happens on this pass.
   if (serverReachTakeWifiReset()) {
+    // On this network but never through it: if another saved network is in
+    // range, try that one this time (a hotspot with no data, a hotel Wi-Fi
+    // behind a login page). With only this one around it simply rejoins.
+    avoidSsid = WiFi.SSID();
     logMessage("[WIFI] Reconnecting to reach the server again\n");
     WiFi.disconnect(false, false);
     lastWifiCheckMillis = millis();
@@ -665,6 +669,10 @@ bool WIFIMANAGER::tryConnect() {
     }
     logMessage(String("[WIFI] Found ") + String(scanResult) + " networks in range\n");
     int choosenRssi = INT_MIN;  // we want to select the strongest signal with the highest priority if we have multiple SSIDs available
+    // The strongest one besides avoidSsid, kept apart so the avoided network
+    // is still the answer when it is the only saved one in range.
+    int otherAp = INT_MIN;
+    int otherRssi = INT_MIN;
     for(int8_t x = 0; x < scanResult; ++x) {
       String ssid;
       uint8_t encryptionType;
@@ -681,9 +689,18 @@ bool WIFIMANAGER::tryConnect() {
             choosenRssi = rssi;
           }
         } // else lower wifi signal
+        if (rssi > otherRssi && apList[i].apName != avoidSsid &&
+            (encryptionType == WIFI_AUTH_OPEN || apList[i].apPass.length() > 0)) {
+          otherAp = i;
+          otherRssi = rssi;
+        }
       }
     }
     WiFi.scanDelete();
+    if (otherAp != INT_MIN && otherAp != choosenAp) {
+      logMessage(String("[WIFI] Passing over '") + avoidSsid + "', which did not reach the server\n");
+      choosenAp = otherAp;
+    }
   }
 
   if (choosenAp == INT_MIN) {
