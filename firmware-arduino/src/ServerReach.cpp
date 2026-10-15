@@ -80,6 +80,15 @@ bool serverReachSilentBoot() {
     initRtc();
     const bool silent = silentNextBoot != 0;
     silentNextBoot = 0;
+    if (silent) {
+        // The outage that caused this restart is still on as far as anyone
+        // nearby can tell: no second "正在連接" (62:70 said it again right
+        // after the restart, 2026-10-15), and the LED stays yellow until the
+        // server answers or the next internet check says otherwise.
+        searchPromptPlayed = true;
+        serverDown = true;
+        status = NET_SERVER_DOWN;
+    }
     return silent;
 }
 
