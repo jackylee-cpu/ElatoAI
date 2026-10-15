@@ -1,6 +1,7 @@
 #include "LEDHandler.h"
 #include "LedRing.h"
 #include "SupplyMonitor.h"
+#include "ServerReach.h"
 
 // This file was written for a discrete RGB LED on three GPIOs, which is what
 // the breadboard kit has. The Waveshare board has a seven-pixel WS2812 ring on
@@ -366,6 +367,19 @@ void ledTask(void *parameter)
         switch (deviceState)
         {
         case IDLE:
+            // No session for a while (ServerReach.cpp): a slow blink, so it
+            // never reads as the steady colours of a working toy. Cyan while
+            // it is getting back on (OTA's colour, also "the network"),
+            // yellow when the internet works and our server does not.
+            if (serverReachStatus() != NET_OK) {
+                if ((currentTime / 600) % 2) {
+                    setStaticColor(serverReachStatus() == NET_SERVER_DOWN ? StaticColor::YELLOW
+                                                                          : StaticColor::CYAN);
+                } else {
+                    turnOnLED();  // common anode: all HIGH is off
+                }
+                break;
+            }
             // Red instead of green once the battery is nearly flat. Only
             // boards with BOARD_LOW_BATTERY_VIA_VDD ever report low.
             setStaticColor(supplyLow() ? StaticColor::RED : StaticColor::GREEN);

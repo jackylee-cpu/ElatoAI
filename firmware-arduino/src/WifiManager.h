@@ -63,6 +63,13 @@ class WIFIMANAGER {
     uint8_t configuredSSIDs = 0;        // Number of stored SSIDs in the NVS
 
     bool softApRunning = false;         // Due to lack of functions, we have to remember if the AP is already running...
+    // A saved network that let the board on but not through to our server
+    // (P2-25). tryConnect() passes it over while another saved one is in
+    // range. RAM only: a restart gives every network another chance.
+    String avoidSsid;
+    // Internet checks that failed in this outage (P2-25): the first moves to
+    // another saved network, the next opens Wi-Fi setup.
+    uint8_t noInternetRounds = 0;
     bool createFallbackAP = true;       // Create an AP for configuration if no other connection is available
 
     uint64_t lastWifiCheckMillis = 0;   // Time of last Wifi health check

@@ -7,6 +7,7 @@
 **/
 #include "WifiManager.h"
 #include "OTA.h"
+#include "ServerReach.h"
 #include "Audio.h"
 #include "AsyncJson.h"
 #include "ArduinoJson.h"
@@ -73,6 +74,13 @@ static bool fetchDeviceToken() {
     serializeJson(request, body);
 
     const int httpCode = http.POST(body);
+    // An answer that ends the attempt is our server talking: 202 (nobody owns
+    // this board, so no socket follows) and refusals alike. A 200 does not
+    // count -- the voice socket comes next and is what has to work. Counting
+    // it cleared the outage at every boot, and a board whose voice server was
+    // down restarted every three minutes (62:70, 2026-10-15). Negative codes
+    // are the connection itself failing.
+    serverReachTokenAnswer(httpCode > 0 && httpCode != HTTP_CODE_OK);
     if (httpCode != HTTP_CODE_OK && httpCode != 202) {
         // 401 is the one that needs a person: this board's secret is missing
         // or wrong, and it cannot get back in by retrying.
@@ -308,6 +316,7 @@ WIFIMANAGER::WIFIMANAGER(const char * ns) {
     logMessage("[WIFI] onEvent() AP mode started!\n");
     softApRunning = true;
     deviceState = SOFT_AP;
+    serverReachSetupOpened(configAvailable());
 #if ESP_ARDUINO_VERSION_MAJOR >= 2
     }, ARDUINO_EVENT_WIFI_AP_START); // arduino-esp32 2.0.0 and later
 #else
@@ -555,7 +564,64 @@ uint8_t WIFIMANAGER::getApEntry() {
  * @brief Background loop function running inside the task
  * @details regulary check if the connection is up&running, try to reconnect or create a fallback AP
  */
+// Whether this network leads to the internet at all, as phones decide it: a
+// generate_204 page answers 204 with nothing in it. A hotel login page answers
+// something else and a hotspot with no data answers nothing. Two providers so
+// one being blocked or down is not taken for the network.
+static bool internetReachable() {
+  static const char *const kUrls[] = {
+#ifdef INTERNET_PROBE_URL
+      // Test builds only: a URL that fails, to play "no internet" on a
+      // network that has it.
+      INTERNET_PROBE_URL,
+#else
+      "http://connectivitycheck.gstatic.com/generate_204",
+      "http://cp.cloudflare.com/generate_204",
+#endif
+  };
+  for (const char *url : kUrls) {
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(4000);
+    http.setTimeout(4000);
+    if (!http.begin(client, url)) continue;
+    const int code = http.GET();
+    http.end();
+    if (code == 204) return true;
+  }
+  return false;
+}
+
 void WIFIMANAGER::loop() {
+  if (serverReachStatus() == NET_OK) noInternetRounds = 0;
+
+  // On Wi-Fi but nothing from our server for a while (ServerReach.cpp). Ahead
+  // of the interval check, so it happens on this pass.
+  if (serverReachTakeWifiCheck()) {
+    if (internetReachable()) {
+      // Their Wi-Fi is fine; our server is the one gone. Nothing for a
+      // parent to fix, and nothing gained by leaving a working network.
+      serverReachInternetUp();
+      return;
+    }
+    if (noInternetRounds++ == 0 && configuredSSIDs > 1) {
+      // On this network but not through it: a hotspot with no data, a hotel
+      // Wi-Fi behind a login page. Try another saved one this time.
+      avoidSsid = WiFi.SSID();
+      logMessage(String("[WIFI] No internet through '") + avoidSsid + "', trying another saved Wi-Fi\n");
+      WiFi.disconnect(false, false);
+      lastWifiCheckMillis = millis();
+      if (tryConnect()) return;
+    }
+    // Nowhere left to go without a person: open Wi-Fi setup, which is what
+    // the app connects to, and say so (serverReachSetupOpened() via the AP
+    // event).
+    logMessage("[WIFI] No internet through any saved Wi-Fi: opening Wi-Fi setup\n");
+    WiFi.disconnect(false, false);
+    runSoftAP();
+    return;
+  }
+
   // While the device is online but still has no token it is polling to be
   // claimed and somebody is watching the web app, so check more often.
   const uint32_t checkInterval =
@@ -647,6 +713,10 @@ bool WIFIMANAGER::tryConnect() {
     }
     logMessage(String("[WIFI] Found ") + String(scanResult) + " networks in range\n");
     int choosenRssi = INT_MIN;  // we want to select the strongest signal with the highest priority if we have multiple SSIDs available
+    // The strongest one besides avoidSsid, kept apart so the avoided network
+    // is still the answer when it is the only saved one in range.
+    int otherAp = INT_MIN;
+    int otherRssi = INT_MIN;
     for(int8_t x = 0; x < scanResult; ++x) {
       String ssid;
       uint8_t encryptionType;
@@ -663,9 +733,18 @@ bool WIFIMANAGER::tryConnect() {
             choosenRssi = rssi;
           }
         } // else lower wifi signal
+        if (rssi > otherRssi && apList[i].apName != avoidSsid &&
+            (encryptionType == WIFI_AUTH_OPEN || apList[i].apPass.length() > 0)) {
+          otherAp = i;
+          otherRssi = rssi;
+        }
       }
     }
     WiFi.scanDelete();
+    if (otherAp != INT_MIN && otherAp != choosenAp) {
+      logMessage(String("[WIFI] Passing over '") + avoidSsid + "', which did not reach the server\n");
+      choosenAp = otherAp;
+    }
   }
 
   if (choosenAp == INT_MIN) {
