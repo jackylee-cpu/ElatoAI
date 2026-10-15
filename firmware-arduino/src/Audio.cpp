@@ -1088,6 +1088,13 @@ void audioStreamTask(void *parameter) {
                 playLowBatteryReminder();
             }
 #endif
+            // "正在連接", "無法連接", "正在配網..." (ServerReach.cpp), from the
+            // assets partition. Same rule: only while nobody is talking.
+            if (deviceState == IDLE || deviceState == SOFT_AP) {
+                if (const char *prompt = serverReachTakePrompt()) {
+                    playAssetSound(prompt);
+                }
+            }
             // Always read: BufferPrint writes with portMAX_DELAY, so a producer
             // that filled the ring stays blocked until something drains it.
             drainAudioBuffer();
@@ -1972,7 +1979,7 @@ void networkTask(void *parameter) {
             continue;
         }
 
-        serverReachPoll(webSocket.isConnected());
+        serverReachPoll(webSocket.isConnected(), deviceState == SOFT_AP);
 
         xSemaphoreTake(wsMutex, portMAX_DELAY);
 

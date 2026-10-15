@@ -316,6 +316,7 @@ WIFIMANAGER::WIFIMANAGER(const char * ns) {
     logMessage("[WIFI] onEvent() AP mode started!\n");
     softApRunning = true;
     deviceState = SOFT_AP;
+    serverReachSetupOpened(configAvailable());
 #if ESP_ARDUINO_VERSION_MAJOR >= 2
     }, ARDUINO_EVENT_WIFI_AP_START); // arduino-esp32 2.0.0 and later
 #else
@@ -563,18 +564,61 @@ uint8_t WIFIMANAGER::getApEntry() {
  * @brief Background loop function running inside the task
  * @details regulary check if the connection is up&running, try to reconnect or create a fallback AP
  */
+// Whether this network leads to the internet at all, as phones decide it: a
+// generate_204 page answers 204 with nothing in it. A hotel login page answers
+// something else and a hotspot with no data answers nothing. Two providers so
+// one being blocked or down is not taken for the network.
+static bool internetReachable() {
+  static const char *const kUrls[] = {
+#ifdef INTERNET_PROBE_URL
+      // Test builds only: a URL that fails, to play "no internet" on a
+      // network that has it.
+      INTERNET_PROBE_URL,
+#else
+      "http://connectivitycheck.gstatic.com/generate_204",
+      "http://cp.cloudflare.com/generate_204",
+#endif
+  };
+  for (const char *url : kUrls) {
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(4000);
+    http.setTimeout(4000);
+    if (!http.begin(client, url)) continue;
+    const int code = http.GET();
+    http.end();
+    if (code == 204) return true;
+  }
+  return false;
+}
+
 void WIFIMANAGER::loop() {
-  // On Wi-Fi but nothing from our server for a while (ServerReach.cpp): leave
-  // and join again. Ahead of the interval check, so it happens on this pass.
-  if (serverReachTakeWifiReset()) {
-    // On this network but never through it: if another saved network is in
-    // range, try that one this time (a hotspot with no data, a hotel Wi-Fi
-    // behind a login page). With only this one around it simply rejoins.
-    avoidSsid = WiFi.SSID();
-    logMessage("[WIFI] Reconnecting to reach the server again\n");
+  if (serverReachStatus() == NET_OK) noInternetRounds = 0;
+
+  // On Wi-Fi but nothing from our server for a while (ServerReach.cpp). Ahead
+  // of the interval check, so it happens on this pass.
+  if (serverReachTakeWifiCheck()) {
+    if (internetReachable()) {
+      // Their Wi-Fi is fine; our server is the one gone. Nothing for a
+      // parent to fix, and nothing gained by leaving a working network.
+      serverReachInternetUp();
+      return;
+    }
+    if (noInternetRounds++ == 0 && configuredSSIDs > 1) {
+      // On this network but not through it: a hotspot with no data, a hotel
+      // Wi-Fi behind a login page. Try another saved one this time.
+      avoidSsid = WiFi.SSID();
+      logMessage(String("[WIFI] No internet through '") + avoidSsid + "', trying another saved Wi-Fi\n");
+      WiFi.disconnect(false, false);
+      lastWifiCheckMillis = millis();
+      if (tryConnect()) return;
+    }
+    // Nowhere left to go without a person: open Wi-Fi setup, which is what
+    // the app connects to, and say so (serverReachSetupOpened() via the AP
+    // event).
+    logMessage("[WIFI] No internet through any saved Wi-Fi: opening Wi-Fi setup\n");
     WiFi.disconnect(false, false);
-    lastWifiCheckMillis = millis();
-    tryConnect();
+    runSoftAP();
     return;
   }
 
