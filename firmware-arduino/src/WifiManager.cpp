@@ -616,6 +616,33 @@ void WIFIMANAGER::loop() {
   }
 }
 
+// How long a failure reported right after WiFi.begin() is not trusted.
+static const uint32_t JOIN_STALE_MS = 6000;
+
+/**
+ * Join one network and wait for the outcome. The driver keeps the previous
+ * attempt's result until an event replaces it, and leaving a network we never
+ * reached raises no event: straight after begin(), WiFi.status() can still say
+ * "not found" about the last network. 62:70 (2026-10-15) took that as the
+ * answer for the network it was going back to and fell into the setup AP. So
+ * a failure only counts once this attempt has had JOIN_STALE_MS to produce
+ * its own; before that, only "connected" ends the wait.
+ */
+static wl_status_t joinFor(const String &ssid, const String &pass, uint32_t timeoutMs) {
+  WiFi.disconnect(false, false);
+  delay(100);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  const uint32_t start = millis();
+  wl_status_t status = WiFi.status();
+  while (millis() - start < timeoutMs) {
+    status = WiFi.status();
+    if (status == WL_CONNECTED) break;
+    if ((status == WL_NO_SSID_AVAIL || status == WL_CONNECT_FAILED) && millis() - start >= JOIN_STALE_MS) break;
+    delay(100);
+  }
+  return status;
+}
+
 /**
  * @brief Try to connect to one of the configured SSIDs (if available).
  * @details If more than 2 SSIDs configured, scan for available WIFIs and connect to the strongest
@@ -676,15 +703,8 @@ bool WIFIMANAGER::tryConnect() {
       + " with password " + (apList[choosenAp].apPass.length() > 0 ? "'***'" : "''") + "\n"
     );
 
-    WiFi.begin(apList[choosenAp].apName.c_str(), apList[choosenAp].apPass.c_str());
-    wl_status_t status = (wl_status_t)WiFi.waitForConnectResult(5000UL);
-
-    auto startTime = millis();
-    // wait for connection, fail, or timeout
-    while(status != WL_CONNECTED && status != WL_NO_SSID_AVAIL && status != WL_CONNECT_FAILED && (millis() - startTime) <= 10000) {
-        delay(10);
-        status = (wl_status_t)WiFi.waitForConnectResult(5000UL);
-    }
+    // Same 15s budget as before, without trusting a stale failure.
+    wl_status_t status = joinFor(apList[choosenAp].apName, apList[choosenAp].apPass, 15000);
     switch(status) {
       case WL_IDLE_STATUS:
         logMessage("[WIFI] Connecting failed (0): Idle\n");
@@ -1543,19 +1563,6 @@ static bool backendReachable() {
   return ok;
 }
 
-static wl_status_t joinFor(const String &ssid, const String &pass, uint32_t timeoutMs) {
-  WiFi.disconnect(false, false);
-  delay(100);
-  WiFi.begin(ssid.c_str(), pass.c_str());
-  const uint32_t start = millis();
-  wl_status_t status = WiFi.status();
-  while (status != WL_CONNECTED && status != WL_NO_SSID_AVAIL && status != WL_CONNECT_FAILED &&
-         millis() - start < timeoutMs) {
-    delay(100);
-    status = WiFi.status();
-  }
-  return status;
-}
 
 void WIFIMANAGER::switchNetwork(uint8_t apId, const String &previous) {
   const String target = apList[apId].apName;
