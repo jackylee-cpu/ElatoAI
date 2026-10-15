@@ -26,6 +26,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams  # noqa:
 import app_settings  # noqa: E402
 import device_auth
 import device_power
+import device_volume
 import device_wifi
 import session_content
 from bot import create_esp32_auth_message, run_bot_session
@@ -490,6 +491,9 @@ def create_app() -> FastAPI:
                 ip=personality.ip,
                 mode_key=personality.mode_key,
                 style_key=personality.style_key,
+                take_volume_update=(
+                    (lambda: device_volume.take(session_key)) if session_key else None
+                ),
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off
@@ -507,6 +511,8 @@ def create_app() -> FastAPI:
                     _esp32_sessions[session_key].discard(websocket)
                     if not _esp32_sessions[session_key]:
                         del _esp32_sessions[session_key]
+                        # The next connect's auth frame carries it anyway.
+                        device_volume.take(session_key)
 
     @app.post("/internal/device_refresh")
     async def device_refresh(
@@ -543,6 +549,41 @@ def create_app() -> FastAPI:
 
         logger.info("Device refresh for {} closed {} session(s)", mac, closed)
         return {"ok": True, "closed": closed}
+
+    @app.post("/internal/device_volume")
+    async def device_volume_endpoint(
+        payload: dict = Body(...),
+        x_internal_token: str | None = Header(default=None),
+    ):
+        """Bring a connected board to the volume just saved in the web app.
+
+        The web app has already checked ownership and written devices.volume,
+        which is what a board gets on its next connect; this only reaches one
+        that is connected now (device_volume.py). Not connected is a success.
+        """
+        _require_internal_token(x_internal_token)
+
+        mac = str(payload.get("mac", "")).strip().upper()
+        volume = payload.get("volume")
+        if not mac or isinstance(volume, bool) or not isinstance(volume, int) or not 0 <= volume <= 100:
+            raise HTTPException(status_code=400, detail="mac and a volume of 0-100 are required")
+
+        async with _sessions_lock:
+            sockets = list(_esp32_sessions.get(mac, ()))
+        if not sockets:
+            return {"ok": True, "sent": 0}
+
+        device_volume.set_pending(mac, volume)
+        sent = 0
+        for socket in sockets:
+            try:
+                await socket.send_text(json.dumps(device_volume.live_frame(volume)))
+                sent += 1
+            except Exception as exc:  # noqa: BLE001 - a dying socket is fine
+                logger.warning("Failed to send volume to {}: {}", mac, exc)
+
+        logger.info("Device volume for {} set to {} on {} session(s)", mac, volume, sent)
+        return {"ok": True, "sent": sent}
 
     @app.post("/internal/device_wifi")
     async def device_wifi_endpoint(

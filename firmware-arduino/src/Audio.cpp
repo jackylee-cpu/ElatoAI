@@ -110,6 +110,21 @@ void applyVolume(int volumePercent) {
     volumePitch.setVolume(currentVolume / 100.0f);
 }
 
+// A level set from the web app. That is the newest touch, so it also drops a
+// level the buttons left in NVS -- otherwise every later auth frame would put
+// the button level back. Called from networkTask; its own handle for the same
+// reason audioPrefs has one.
+void applyRemoteVolume(int volumePercent) {
+    applyVolume(volumePercent);
+    if (hasLocalVolumeOverride()) {
+        Preferences prefs;
+        prefs.begin("audio", false);
+        prefs.remove("volume");
+        prefs.end();
+    }
+    Serial.printf("Volume set remotely -> %d\n", currentVolume);
+}
+
 // Called from the hardware buttons. Persisting here is what makes the physical
 // control authoritative: the server sends a volume in every auth frame, and a
 // character switch forces a reconnect, so without this a button press would be
@@ -1517,6 +1532,12 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             }
         }
 
+        // The volume was changed in the web app while connected: apply it now
+        // rather than on the next RESPONSE.COMPLETE, which also carries it.
+        if (strcmp((char*)type.c_str(), "volume") == 0 && doc.containsKey("volume_control")) {
+            applyRemoteVolume(doc["volume_control"].as<int>());
+        }
+
         // oai messages
         if (strcmp((char*)type.c_str(), "server") == 0) {
             String msg = doc["msg"];
@@ -1525,10 +1546,12 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             if (strcmp((char*)msg.c_str(), "RESPONSE.COMPLETE") == 0 || strcmp((char*)msg.c_str(), "RESPONSE.ERROR") == 0) {
                 Serial.println("Received RESPONSE.COMPLETE or RESPONSE.ERROR, starting listening again");
 
-                // Check if volume_control is included in the message
+                // The server adds this when the volume was changed in the web
+                // app mid-session (device_volume.py). It is the only route
+                // firmware without the "volume" message has, and there it set
+                // the plain stream alone.
                 if (doc.containsKey("volume_control")) {
-                    int newVolume = doc["volume_control"].as<int>();
-                    volume.setVolume(newVolume / 100.0f);
+                    applyRemoteVolume(doc["volume_control"].as<int>());
                 }
 
                 if (!pttOwnsMic()) {

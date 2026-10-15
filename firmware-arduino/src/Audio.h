@@ -46,6 +46,7 @@ void applyVolume(int volumePercent);
 // Returns false when the level was already at its limit and nothing changed,
 // so the caller can acknowledge the press rather than appearing dead.
 bool nudgeVolume(int delta);
+void applyRemoteVolume(int volumePercent);
 bool hasLocalVolumeOverride();
 void loadStoredVolume();
 extern const int CHANNELS;         // Mono

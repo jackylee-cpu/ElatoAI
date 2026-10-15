@@ -327,6 +327,57 @@ export const deviceWifiAction = async (
 };
 
 /**
+ * Save a board's volume and bring it to that level now if it is connected.
+ *
+ * devices.volume is what the board gets in its auth frame, but only on
+ * connect, and a board stays connected until it sleeps -- so the voice server
+ * also passes the level to a live session (server/fastapi/device_volume.py).
+ * The save is what matters; reaching a live board is best effort. The update
+ * runs as the signed-in user, whose RLS grant covers volume on their own
+ * boards, and the mac comes back from that same write.
+ */
+export const setDeviceVolumeAction = async (deviceId: string, volume: number) => {
+    if (!Number.isInteger(volume) || volume < 0 || volume > 100) {
+        return false;
+    }
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return false;
+    }
+    const { data: device, error } = await supabase
+        .from("devices")
+        .update({ volume })
+        .eq("device_id", deviceId)
+        .eq("user_id", user.id)
+        .select("mac_address")
+        .maybeSingle();
+    if (error || !device) {
+        return false;
+    }
+
+    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    if (internalUrl && internalToken && device.mac_address) {
+        try {
+            await fetch(`${internalUrl}/internal/device_volume`, {
+                method: "POST",
+                cache: "no-store",
+                signal: AbortSignal.timeout(3000),
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Internal-Token": internalToken,
+                },
+                body: JSON.stringify({ mac: device.mac_address, volume }),
+            });
+        } catch {
+            // Saved; the board picks it up when it next connects.
+        }
+    }
+    return true;
+};
+
+/**
  * Close these boards' voice sessions; each reconnects about a second later and
  * re-reads everything about itself. Best effort, like every caller: true only
  * when the voice server confirmed every one.

@@ -6,9 +6,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import _ from "lodash";
 import { ChevronRight, Link2Off, Loader2, Volume2, Wifi } from "lucide-react";
-import { unbindDeviceAction } from "@/app/actions";
-import { updateDevice } from "@/db/devices";
-import { createClient } from "@/utils/supabase/client";
+import { setDeviceVolumeAction, unbindDeviceAction } from "@/app/actions";
 import { useToast } from "@/components/ui/use-toast";
 import * as SliderPrimitive from "@radix-ui/react-slider";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -69,7 +67,6 @@ export default function DeviceSettings({
     currentUser: IUser;
     device: SettingsDevice;
 }) {
-    const supabase = createClient();
     const router = useRouter();
     const { toast } = useToast();
     const [volume, setVolume] = useState([device.volume ?? 50]);
@@ -81,9 +78,9 @@ export default function DeviceSettings({
     // the last drag is never lost.
     const saveVolume = useMemo(
         () => _.debounce((value: number) => {
-            updateDevice(supabase, { volume: value }, device.device_id);
+            setDeviceVolumeAction(device.device_id, value);
         }, 1000),
-        [supabase, device.device_id],
+        [device.device_id],
     );
     useEffect(() => () => saveVolume.flush(), [saveVolume]);
 
@@ -179,12 +176,6 @@ export default function DeviceSettings({
                                 saveVolume(value);
                             }}
                         />
-                        {/* The voice server reads volume when a session starts,
-                            and dropping a live one just for this would cut the
-                            child off mid-sentence. */}
-                        <p className="mt-2 px-1 text-xs text-gray-400">
-                            Applies the next time AI Buddy connects.
-                        </p>
                     </div>
                 </section>
 
