@@ -7,6 +7,7 @@ import {
     newDeviceSecret,
     signDeviceToken,
 } from "@/lib/deviceAuth";
+import { deviceServerUrls } from "@/lib/deviceServerUrls";
 import { type OtaAnswer, parseFirmwareReport, recordReportAndDecide } from "@/lib/ota";
 
 const skipDeviceRegistration =
@@ -156,6 +157,12 @@ export async function GET() {
  * Either success also carries `device_secret` when one was just issued, which
  * the board must keep: it is never shown again.
  *
+ * And where to find the servers (lib/deviceServerUrls.ts), when this
+ * deployment sets them: `backend_url` on both, so an unclaimed board polling
+ * here moves too, and `voice_url` on a 200, the only answer that opens the
+ * voice websocket. Moving either server is then a config change, not a
+ * firmware release (P2-22).
+ *
  * With NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION=True (local development) an
  * unclaimed board gets a token anyway and runs as the default character.
  */
@@ -193,10 +200,12 @@ export async function POST(req: Request) {
             .eq("device_id", device.device_id);
 
         const secretField = issued ? { device_secret: issued } : {};
+        const { voiceUrl, backendUrl } = deviceServerUrls();
+        const backendField = backendUrl ? { backend_url: backendUrl } : {};
 
         if (!device.user_id && !skipDeviceRegistration) {
             return NextResponse.json(
-                { status: "unclaimed", user_code: device.user_code, ...secretField },
+                { status: "unclaimed", user_code: device.user_code, ...secretField, ...backendField },
                 { status: 202 },
             );
         }
@@ -218,6 +227,8 @@ export async function POST(req: Request) {
             expires_in: DEVICE_TOKEN_TTL_SECONDS,
             ...secretField,
             ...(ota ? { ota } : {}),
+            ...(voiceUrl ? { voice_url: voiceUrl } : {}),
+            ...backendField,
         });
     } catch (error) {
         return NextResponse.json(
