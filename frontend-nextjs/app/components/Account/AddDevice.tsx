@@ -13,23 +13,34 @@ type Unclaimed = { device_id: string; mac_address: string; user_code: string };
 const cardClass =
     "rounded-[24px] bg-white/90 shadow-[0_8px_24px_rgba(80,120,180,0.08)] backdrop-blur-sm";
 
-/** A toy shows up here a few seconds after it joins Wi-Fi. */
+/**
+ * In production a toy is added from the app, which finds it over Bluetooth and
+ * hands it a bind ticket (P0-11). With DEVICE_CLAIM_LIST=True (development) a
+ * toy shows up here a few seconds after it joins Wi-Fi, to claim from a list.
+ */
 export default function AddDevice({ hasDevices }: { hasDevices: boolean }) {
     const router = useRouter();
-    const [unclaimed, setUnclaimed] = useState<Unclaimed[]>([]);
+    // Null when the claim list is off, as it is in production.
+    const [unclaimed, setUnclaimed] = useState<Unclaimed[] | null>([]);
     const [error, setError] = useState("");
     const [busyId, setBusyId] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
+        let timer: ReturnType<typeof setInterval> | undefined;
         const load = async () => {
             const devices = await listUnclaimedDevices();
-            if (!cancelled) {
-                setUnclaimed(Array.isArray(devices) ? devices : []);
+            if (cancelled) return;
+            // With the list off the first answer is null and polling stops.
+            if (devices === null) {
+                clearInterval(timer);
+                setUnclaimed(null);
+                return;
             }
+            setUnclaimed(Array.isArray(devices) ? devices : []);
         };
         load();
-        const timer = setInterval(load, 5000);
+        timer = setInterval(load, 5000);
         return () => {
             cancelled = true;
             clearInterval(timer);
@@ -49,7 +60,7 @@ export default function AddDevice({ hasDevices }: { hasDevices: boolean }) {
             setError("Could not claim that device. Someone may have just taken it.");
             return;
         }
-        setUnclaimed((devices) => devices.filter((d) => d.device_id !== deviceId));
+        setUnclaimed((devices) => devices && devices.filter((d) => d.device_id !== deviceId));
         claimed();
     };
 
@@ -63,7 +74,13 @@ export default function AddDevice({ hasDevices }: { hasDevices: boolean }) {
                     This build skips device registration.
                 </p>
             )}
-            {unclaimed.length === 0 ? (
+            {unclaimed === null ? (
+                <div className={cn(cardClass, "px-5 py-4 text-sm text-gray-500")}>
+                    Add a new device from the AI Buddy app: it finds the device
+                    over Bluetooth, gives it your Wi-Fi and adds it to this
+                    account.
+                </div>
+            ) : unclaimed.length === 0 ? (
                 <div className={cn(cardClass, "px-5 py-4 text-sm text-gray-500")}>
                     <p className="font-medium text-gray-700">No new devices found yet.</p>
                     <p className="mt-1 text-xs leading-relaxed">

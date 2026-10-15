@@ -3,11 +3,13 @@ import { createServiceClient } from "@/utils/supabase/service";
 import {
     DEVICE_TOKEN_TTL_SECONDS,
     deviceSecretMatches,
+    hashBindTicket,
     hashDeviceSecret,
     newDeviceSecret,
     signDeviceToken,
 } from "@/lib/deviceAuth";
 import { deviceServerUrls } from "@/lib/deviceServerUrls";
+import { claimDeviceWithTicket } from "@/db/devices";
 import { type OtaAnswer, parseFirmwareReport, recordReportAndDecide } from "@/lib/ota";
 
 const skipDeviceRegistration =
@@ -139,14 +141,23 @@ export async function GET() {
 }
 
 /**
- * The board's only way in: POST { macAddress, deviceSecret?, firmware? }.
+ * The board's only way in: POST { macAddress, deviceSecret?, bindTicket?, firmware? }.
  *
  *   401  the board did not prove itself: a known device with a secret, and
  *        none or the wrong one presented
+ *   403  { error: "bind_ticket_invalid" }  -- the ticket is unknown, expired
+ *        or spent; the app has to ask for a new one
+ *   409  { error: "device_owned" }  -- another account owns this board; its
+ *        owner has to unbind it first
  *   202  { status: "unclaimed", user_code }  -- online, nobody owns it yet;
  *        the firmware polls this and needs to tell "not yours yet" apart from
  *        "the server is broken"
  *   200  { token, expires_in, ota? }  -- a device token for the voice websocket
+ *
+ * `bindTicket` is how a board gets an owner (P0-11): the app hands it one over
+ * Bluetooth (/api/device_bind_ticket), and the board claims itself for that
+ * account here, after its secret checked out. A board its ticket's account
+ * already owns -- given new WiFi, or asking twice -- just gets its token.
  *
  * `firmware` is what the board runs ({ board, version, failed_version? }).
  * With it, a 200 also carries `ota`: whether to install the current release
@@ -154,8 +165,9 @@ export async function GET() {
  * so a boot costs the board one TLS handshake, not two -- about 1.3s of CPU
  * each on the C3.
  *
- * Either success also carries `device_secret` when one was just issued, which
- * the board must keep: it is never shown again.
+ * Every answer after the secret check -- 403 and 409 too -- carries
+ * `device_secret` when one was just issued, which the board must keep: it is
+ * never shown again.
  *
  * And where to find the servers (lib/deviceServerUrls.ts), when this
  * deployment sets them: `backend_url` on both, so an unclaimed board polling
@@ -174,6 +186,9 @@ export async function POST(req: Request) {
             : "";
         const presented = typeof body?.deviceSecret === "string" && body.deviceSecret
             ? body.deviceSecret
+            : null;
+        const bindTicket = typeof body?.bindTicket === "string" && body.bindTicket
+            ? body.bindTicket.trim()
             : null;
 
         if (!mac) {
@@ -203,7 +218,29 @@ export async function POST(req: Request) {
         const { voiceUrl, backendUrl } = deviceServerUrls();
         const backendField = backendUrl ? { backend_url: backendUrl } : {};
 
-        if (!device.user_id && !skipDeviceRegistration) {
+        let owned = !!device.user_id;
+        if (bindTicket) {
+            const claim = await claimDeviceWithTicket(
+                createServiceClient(),
+                device.device_id,
+                hashBindTicket(bindTicket),
+            );
+            if (claim === "ticket_invalid") {
+                return NextResponse.json(
+                    { error: "bind_ticket_invalid", ...secretField },
+                    { status: 403 },
+                );
+            }
+            if (claim === "device_owned") {
+                return NextResponse.json(
+                    { error: "device_owned", ...secretField },
+                    { status: 409 },
+                );
+            }
+            owned = true; // claimed, or already_yours
+        }
+
+        if (!owned && !skipDeviceRegistration) {
             return NextResponse.json(
                 { status: "unclaimed", user_code: device.user_code, ...secretField, ...backendField },
                 { status: 202 },
