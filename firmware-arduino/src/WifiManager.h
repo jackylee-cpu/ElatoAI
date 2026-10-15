@@ -144,6 +144,10 @@ class WIFIMANAGER {
     // the Wi-Fi task, so a scan or NVS write never stalls the audio socket.
     void serviceRemote();
 
+    // Move to saved network apId on a parent's request, going back to
+    // `previous` if it does not lead to our server. Wi-Fi task only.
+    void switchNetwork(uint8_t apId, const String &previous);
+
     // Write AP Settings into persistent storage. Called on each addAP;
     bool writeToNVS();
 

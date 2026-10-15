@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
+    ArrowRightLeft,
     CheckCircle2,
     Loader2,
     Lock,
@@ -16,7 +17,7 @@ import {
     WifiZero,
 } from "lucide-react";
 import { deviceWifiAction } from "@/app/actions";
-import type { DeviceWifiState } from "@/lib/deviceWifi";
+import type { DeviceWifiState, WifiSwitchResult } from "@/lib/deviceWifi";
 import { useToast } from "@/components/ui/use-toast";
 import {
     Dialog,
@@ -60,6 +61,25 @@ const ERRORS: Record<string, string> = {
 const errorText = (code?: string) =>
     (code && ERRORS[code]) || "Couldn't reach AI Buddy. Try again.";
 
+// A move takes up to 20s on the new Wi-Fi and 15s getting back, plus the
+// reconnect; past this the page stops waiting and says so.
+const SWITCH_WAIT_MS = 90_000;
+
+const switchFailure = (result: WifiSwitchResult) => {
+    const name = `"${result.ssid}"`;
+    const why =
+        result.error === "not_found"
+            ? `AI Buddy couldn't find ${name} nearby.`
+            : result.error === "auth"
+                ? `${name} didn't accept the saved password. Remove it and add it again.`
+                : result.error === "no_internet"
+                    ? `AI Buddy joined ${name} but couldn't reach the internet through it.`
+                    : `AI Buddy couldn't connect to ${name} in time.`;
+    return result.back
+        ? `${why} It's back on "${result.back}".`
+        : `${why} It's reconnecting to a saved Wi-Fi.`;
+};
+
 function SignalIcon({ rssi, className }: { rssi: number | null | undefined; className?: string }) {
     if (rssi == null) return <Wifi className={className} />;
     if (rssi >= -60) return <Wifi className={className} />;
@@ -74,6 +94,10 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
     const [refreshing, setRefreshing] = useState(false);
     const [adding, setAdding] = useState(false);
     const [removing, setRemoving] = useState<string | null>(null);
+    const [confirmSwitch, setConfirmSwitch] = useState<string | null>(null);
+    // A move in progress. `since` is the last result's timestamp when it
+    // started, so only a newer one ends it -- both on the voice server's clock.
+    const [switching, setSwitching] = useState<{ ssid: string; since: number } | null>(null);
     const [busy, setBusy] = useState(false);
     const busyRef = useRef(false);
 
@@ -111,6 +135,51 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
         } finally {
             setBusy(false);
             busyRef.current = false;
+        }
+    };
+
+    // The board reports how the move went once it is back online.
+    useEffect(() => {
+        const result = state?.last_switch;
+        if (!switching || !result || result.at <= switching.since || result.ssid !== switching.ssid) {
+            return;
+        }
+        setSwitching(null);
+        if (result.ok) {
+            toast({ description: `AI Buddy is now on "${result.ssid}".` });
+        } else {
+            toast({ description: switchFailure(result), variant: "destructive" });
+        }
+    }, [state?.last_switch, switching, toast]);
+
+    useEffect(() => {
+        if (!switching) return;
+        const timer = setTimeout(() => {
+            setSwitching(null);
+            toast({
+                description: `AI Buddy hasn't come back online yet. It may still be moving to "${switching.ssid}", or out of reach of every saved Wi-Fi.`,
+                variant: "destructive",
+            });
+        }, SWITCH_WAIT_MS);
+        return () => clearTimeout(timer);
+    }, [switching, toast]);
+
+    const startSwitch = async (ssid: string) => {
+        const since = state?.last_switch?.at ?? 0;
+        setBusy(true);
+        busyRef.current = true;
+        try {
+            const result = await deviceWifiAction(deviceId, "switch", ssid);
+            setState((prev) => (result.status || !prev ? result : { ...prev, online: result.online }));
+            if (result.ok && result.switching) {
+                setSwitching({ ssid, since });
+            } else {
+                toast({ description: errorText(result.error), variant: "destructive" });
+            }
+        } finally {
+            setBusy(false);
+            busyRef.current = false;
+            setConfirmSwitch(null);
         }
     };
 
@@ -160,16 +229,20 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
                             role="status"
                             className={cn(
                                 "flex items-start gap-2 rounded-[16px] px-4 py-3 text-sm",
-                                online ? "bg-[#FFF6D6] text-gray-800" : "bg-white/80 text-gray-600"
+                                online || switching ? "bg-[#FFF6D6] text-gray-800" : "bg-white/80 text-gray-600"
                             )}
                         >
-                            {online ? (
+                            {switching ? (
+                                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-[#E9B21F]" />
+                            ) : online ? (
                                 <Wifi className="mt-0.5 h-4 w-4 shrink-0 text-[#E9B21F]" />
                             ) : (
                                 <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
                             )}
                             <span>
-                                {online
+                                {switching
+                                    ? `Moving to "${switching.ssid}"… AI Buddy goes offline for up to half a minute, then this page updates.`
+                                    : online
                                     ? "AI Buddy is online."
                                     : "AI Buddy is asleep. Press its button to wake it, and this page will update. Changes can only be made while it is awake."}
                             </span>
@@ -227,8 +300,20 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
                                                     {!inUse && (
                                                         <button
                                                             type="button"
+                                                            aria-label={`Use ${network.ssid}`}
+                                                            disabled={!online || busy || !!switching}
+                                                            onClick={() => setConfirmSwitch(network.ssid)}
+                                                            className="flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-sm font-medium text-[#4C74F6] hover:bg-[#EEF3FF] disabled:opacity-40"
+                                                        >
+                                                            <ArrowRightLeft className="h-4 w-4" />
+                                                            Use
+                                                        </button>
+                                                    )}
+                                                    {!inUse && (
+                                                        <button
+                                                            type="button"
                                                             aria-label={`Remove ${network.ssid}`}
-                                                            disabled={!online || busy}
+                                                            disabled={!online || busy || !!switching}
                                                             onClick={() => setRemoving(network.ssid)}
                                                             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-[#F25C5C] disabled:opacity-40"
                                                         >
@@ -240,7 +325,7 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
                                         })}
                                         <button
                                             type="button"
-                                            disabled={!online || busy || full}
+                                            disabled={!online || busy || full || !!switching}
                                             onClick={() => setAdding(true)}
                                             className={cn(rowClass, "w-full text-left hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent")}
                                         >
@@ -249,8 +334,8 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
                                         </button>
                                     </div>
                                     <p className="mt-2 px-1 text-xs text-gray-400">
-                                        AI Buddy stays on its current Wi-Fi. When that one is out of
-                                        range, it joins the strongest saved Wi-Fi nearby.
+                                        AI Buddy stays on its current Wi-Fi unless you tap Use. When
+                                        that one is out of range, it joins the strongest saved Wi-Fi nearby.
                                     </p>
                                 </section>
                             </>
@@ -272,6 +357,28 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
                     if (ok) setAdding(false);
                 }}
             />
+
+            <Dialog open={confirmSwitch !== null} onOpenChange={(open) => !open && !busy && setConfirmSwitch(null)}>
+                <DialogContent className="max-w-[calc(100vw-2rem)] rounded-[24px] sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Use &quot;{confirmSwitch}&quot;?</DialogTitle>
+                        <DialogDescription>
+                            AI Buddy goes offline for a few seconds while it moves, and stops
+                            any chat in progress. If &quot;{confirmSwitch}&quot; doesn&apos;t work
+                            within 20 seconds, it goes back to
+                            {current ? ` "${current.ssid}"` : " its current Wi-Fi"}.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter className="gap-2">
+                        <Button variant="outline" disabled={busy} onClick={() => setConfirmSwitch(null)}>
+                            Cancel
+                        </Button>
+                        <Button disabled={busy} onClick={() => startSwitch(confirmSwitch!)}>
+                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Switch"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={removing !== null} onOpenChange={(open) => !open && !busy && setRemoving(null)}>
                 <DialogContent className="max-w-[calc(100vw-2rem)] rounded-[24px] sm:max-w-md">

@@ -125,6 +125,74 @@ async def test_disconnect_fails_waiters_at_once():
     assert result["error"] == "offline" and result["online"] is False
 
 
+async def test_switch_is_answered_before_the_board_moves():
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    task = board_replies(socket, ok=True, switching=True, **STATUS)
+    result = await device_wifi.request(MAC, "switch", ssid="Phone")
+    await task
+    assert socket.sent[0]["op"] == "switch" and socket.sent[0]["ssid"] == "Phone"
+    assert "password" not in socket.sent[0]
+    assert result["ok"] is True and result["switching"] is True
+    assert result["last_switch"] is None
+
+
+async def test_switch_refused_by_the_board_is_not_switching():
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    task = board_replies(socket, ok=False, error="current", **STATUS)
+    result = await device_wifi.request(MAC, "switch", ssid="Home")
+    await task
+    assert result["ok"] is False and result["error"] == "current"
+    assert "switching" not in result
+
+
+def test_switch_result_arrives_with_the_next_report_and_outlives_it():
+    device_wifi.handle_device_message(MAC, {
+        "type": "wifi_status",
+        **STATUS,
+        "last_switch": {"ssid": "Phone", "ok": False, "error": "not_found", "back": "Home", "junk": 1},
+    })
+    first = device_wifi.snapshot(MAC)["last_switch"]
+    assert {k: v for k, v in first.items() if k != "at"} == {
+        "ssid": "Phone", "ok": False, "error": "not_found", "back": "Home",
+    }
+    assert first["at"] >= device_wifi.snapshot(MAC)["status_at"] - 1
+
+    # A later report without one leaves it alone: the page may not have looked yet.
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    assert device_wifi.snapshot(MAC)["last_switch"] == first
+
+    device_wifi.handle_device_message(MAC, {
+        "type": "wifi_status", **STATUS, "last_switch": {"ssid": "Phone", "ok": True, "error": "x"},
+    })
+    second = device_wifi.snapshot(MAC)["last_switch"]
+    assert second["ok"] is True and "error" not in second and "back" not in second
+
+
+def test_malformed_switch_result_is_dropped():
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS, "last_switch": "yes"})
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS, "last_switch": {"ok": True}})
+    assert device_wifi.snapshot(MAC)["last_switch"] is None
+
+
+def test_endpoint_relays_switch_without_a_password(client, monkeypatch):
+    seen = {}
+
+    async def fake_request(mac, op, **fields):
+        seen.update(mac=mac, op=op, fields=fields)
+        return {"ok": True, "switching": True}
+
+    monkeypatch.setattr(device_wifi, "request", fake_request)
+    response = client.post(
+        "/internal/device_wifi",
+        json={"mac": MAC.lower(), "op": "switch", "ssid": "Phone", "password": "ignored-pass"},
+        headers={"x-internal-token": "t0ken"},
+    )
+    assert response.status_code == 200 and response.json()["switching"] is True
+    assert seen == {"mac": MAC, "op": "switch", "fields": {"ssid": "Phone"}}
+
+
 def test_unprompted_status_is_cached_and_cleaned():
     device_wifi.handle_device_message(
         MAC.lower(),
@@ -174,6 +242,8 @@ def test_endpoint_requires_internal_token(client):
         {"mac": MAC, "op": "add", "ssid": "x" * 33},
         {"mac": MAC, "op": "add", "ssid": "Home", "password": "short"},
         {"mac": MAC, "op": "delete"},
+        {"mac": MAC, "op": "switch"},
+        {"mac": MAC, "op": "switch", "ssid": "x" * 33},
     ],
 )
 def test_endpoint_validates(client, body):
@@ -227,7 +297,8 @@ def test_presence_lists_known_boards_with_online_and_since():
 
     device_wifi.unregister(MAC, socket)
     assert device_wifi.presence()[MAC] == {
-        "online": False, "status": None, "status_at": None, "connected_at": None
+        "online": False, "status": None, "status_at": None, "last_switch": None,
+        "connected_at": None,
     }
 
 

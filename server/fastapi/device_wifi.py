@@ -9,6 +9,11 @@ over the board's live /ws/esp32 socket:
 The board also sends {"type":"wifi_status"} unprompted after each "auth", so
 the page can show the last known list while the board sleeps.
 
+A "switch" is answered before the board moves -- moving takes its socket down
+-- so how it ended comes later, as "last_switch" on the report the board sends
+once it is back. That is kept apart from the list, stamped with when it
+arrived, so the page can tell a fresh result from an old one.
+
 Passwords pass through and are never kept: not in the status cache, not in a
 log line, not in an exception message. Only network names are cached, in
 memory, and only so an offline board's page is not empty.
@@ -43,6 +48,8 @@ class _Board:
     pending: dict[str, asyncio.Future] = field(default_factory=dict)
     # When the board's current run of sockets began; None while it has none.
     connected_at: float | None = None
+    # How the last Wi-Fi switch ended, with "at": when the board reported it.
+    last_switch: dict[str, Any] | None = None
 
 
 _boards: dict[str, _Board] = {}
@@ -74,6 +81,18 @@ def _clean_status(message: dict[str, Any]) -> dict[str, Any]:
     ][:16]
     status["max"] = message.get("max") if isinstance(message.get("max"), int) else None
     return status
+
+
+def _clean_switch(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not isinstance(value.get("ssid"), str):
+        return None
+    result: dict[str, Any] = {"ssid": value["ssid"][:32], "ok": bool(value.get("ok"))}
+    if not result["ok"]:
+        error = value.get("error")
+        result["error"] = error if isinstance(error, str) and len(error) <= 32 else "failed"
+        if isinstance(value.get("back"), str) and value["back"]:
+            result["back"] = value["back"][:32]
+    return result
 
 
 def _clean_networks(message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -127,6 +146,12 @@ def handle_device_message(mac: str | None, message: dict[str, Any]) -> bool:
     if any(name in message for name in _STATUS_FIELDS):
         board.status = _clean_status(message)
         board.status_at = time.time()
+    switch = _clean_switch(message.get("last_switch"))
+    if switch is not None:
+        board.last_switch = {**switch, "at": time.time()}
+        logger.info(
+            "Wi-Fi switch on {}: {}", key, "ok" if switch["ok"] else switch["error"]
+        )
 
     if msg_type == "wifi_result":
         future = board.pending.pop(str(message.get("id", "")), None)
@@ -142,6 +167,7 @@ def snapshot(mac: str | None) -> dict[str, Any]:
         "online": bool(board and board.sockets),
         "status": board.status if board else None,
         "status_at": board.status_at if board else None,
+        "last_switch": board.last_switch if board else None,
     }
 
 
@@ -201,5 +227,7 @@ async def request(mac: str | None, op: str, **fields: Any) -> dict[str, Any]:
         result["error"] = error if isinstance(error, str) and len(error) <= 32 else "failed"
     if op == "scan":
         result["networks"] = _clean_networks(reply)
+    if op == "switch" and ok:
+        result["switching"] = True
     logger.info("Wi-Fi {} on {}: {}", op, key, "ok" if ok else result["error"])
     return result
