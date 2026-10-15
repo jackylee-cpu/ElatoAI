@@ -106,10 +106,13 @@ static bool fetchDeviceToken() {
 
     // 202 means the backend knows this board but no account has claimed it yet.
     // That is a normal state during onboarding, not an error -- keep quiet and
-    // let the caller retry.
+    // let the caller retry. Whatever token is left from before an unbind is
+    // worthless now; dropping it also makes loop() poll faster.
     if (httpCode == 202) {
         Serial.printf("[AUTH] Registered, waiting to be claimed (code %s)\n",
                       (const char *)(doc["user_code"] | "?"));
+        deviceUnclaimed = true;
+        authTokenGlobal = "";
         return false;
     }
 
@@ -122,6 +125,7 @@ static bool fetchDeviceToken() {
     authTokenGlobal = token;
     authTokenExpiresAtMs = millis() + expiresIn * 1000UL;
     authTokenRejected = false;
+    deviceUnclaimed = false;
     otaTakeAnswer(doc["ota"]);
     Serial.printf("[AUTH] Device token valid for %us\n", (unsigned)expiresIn);
     return true;
@@ -146,11 +150,13 @@ void startSessionIfReady() {
   bool ok;
   if (websocketStarted) {
     // The socket retries on its own every second. Hold it off until the new
-    // token is in its headers, which also keeps its TLS out of the way.
+    // token is in its headers, which also keeps its TLS out of the way. A
+    // socket paused on a refused token resumes only with the new one.
     xSemaphoreTake(wsMutex, portMAX_DELAY);
     ok = isDeviceRegistered();
     if (ok) {
       webSocket.setExtraHeaders(websocketExtraHeaders().c_str());
+      websocketPaused = false;
     }
     xSemaphoreGive(wsMutex);
   } else {

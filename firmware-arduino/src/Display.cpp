@@ -21,7 +21,7 @@ static const char *stateLabel(DeviceState state) {
     switch (state) {
     case SETUP: return "SETUP";
     case SOFT_AP: return "WIFI SETUP";
-    case IDLE: return "READY";
+    case IDLE: return deviceUnclaimed ? "NOT PAIRED" : "READY";
     case LISTENING: return "LISTENING";
     case PROCESSING: return "THINKING";
     case SPEAKING: return "SPEAKING";
@@ -203,6 +203,7 @@ void displayTask(void *parameter) {
     DeviceState lastState = (DeviceState)-1;
     int lastBars = -2;
     bool lastWs = false;
+    bool lastUnclaimed = false;
     bool lastBattery = false, lastCharging = false;
     int lastPercent = -1;
 
@@ -217,17 +218,19 @@ void displayTask(void *parameter) {
         DeviceState state = deviceState;
         int bars = wifiBars(WiFi.status() == WL_CONNECTED);
         bool wsUp = webSocket.isConnected();
+        bool unclaimed = deviceUnclaimed;
         bool battery = batteryPresent();
         int percent = batteryPercent();
         bool charging = batteryCharging();
 
         if (state != lastState || bars != lastBars ||
-            wsUp != lastWs || battery != lastBattery || percent != lastPercent ||
+            wsUp != lastWs || unclaimed != lastUnclaimed || battery != lastBattery || percent != lastPercent ||
             charging != lastCharging) {
             draw(state, bars, wsUp, battery, percent, charging);
             lastState = state;
             lastBars = bars;
             lastWs = wsUp;
+            lastUnclaimed = unclaimed;
             lastBattery = battery;
             lastPercent = percent;
             lastCharging = charging;

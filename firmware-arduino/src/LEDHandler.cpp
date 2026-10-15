@@ -367,6 +367,16 @@ void ledTask(void *parameter)
         switch (deviceState)
         {
         case IDLE:
+            if (deviceUnclaimed) {
+                // Nobody owns this board yet, so it cannot talk: a slow
+                // magenta blink, next to the steady magenta of WiFi setup.
+                if ((currentTime / 600) % 2) {
+                    setStaticColor(StaticColor::MAGENTA);
+                } else {
+                    turnOnLED();  // common anode: all HIGH is off
+                }
+                break;
+            }
             // No session for a while (ServerReach.cpp): a slow blink, so it
             // never reads as the steady colours of a working toy. Cyan while
             // it is getting back on (OTA's colour, also "the network"),

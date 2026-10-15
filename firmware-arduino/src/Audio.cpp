@@ -1444,9 +1444,12 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     case WStype_DISCONNECTED:
         Serial.printf("[WSc] Disconnected!\n");
         if (wsOpen && !wsAuthed) {
-            // startSessionIfReady() on the wifi task fetches a new one.
-            Serial.println("[WSc] Closed before auth: device token refused");
+            // Retrying with the same token gets the same answer -- once a
+            // second, for as long as the board has no owner. Stop here until
+            // startSessionIfReady() on the wifi task has a new one.
+            Serial.println("[WSc] Closed before auth: device token refused, pausing");
             authTokenRejected = true;
+            websocketPaused = true;
         }
         wsOpen = false;
         // enterSleep()'s own disconnect lands here. Going back to IDLE would
@@ -1689,6 +1692,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 }
 
 bool websocketStarted = false;
+volatile bool websocketPaused = false;
 
 // The server takes the device's identity from the token alone; the MAC rides
 // along only so a refused connection says in the server log who it claimed to
@@ -2050,7 +2054,10 @@ void networkTask(void *parameter) {
             transitionToIdle();
         }
 
-        webSocket.loop();
+        // Paused, the library never gets the chance to reconnect.
+        if (!websocketPaused) {
+            webSocket.loop();
+        }
         reportPower();
         xSemaphoreGive(wsMutex);
 

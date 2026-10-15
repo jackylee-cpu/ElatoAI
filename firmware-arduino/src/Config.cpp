@@ -55,6 +55,7 @@ const uint16_t backend_port = 3000;
 String authTokenGlobal;
 uint32_t authTokenExpiresAtMs = 0;
 volatile bool authTokenRejected = false;
+volatile bool deviceUnclaimed = false;
 
 void beginBackendRequest(HTTPClient &http, WiFiClientSecure &client, const String &path) {
 #if defined(DEV_MODE) || defined(LOCAL_BACKEND_HOST)
