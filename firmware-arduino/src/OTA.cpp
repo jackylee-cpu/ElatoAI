@@ -152,7 +152,22 @@ static const esp_partition_t *usableOtherSlot() {
     return other;
 }
 
+// What this image is, for the admin console's firmware upload (P2-20): it
+// reads the board and version from here instead of asking for them, and only
+// takes a release build. A build pointed at a LAN machine, or the speaker
+// self-test, is a dev build -- the same ones tools/release_firmware.py refuses.
+// Printed at boot, which also keeps the linker from dropping it.
+#if defined(DEV_MODE) || defined(LOCAL_WS_HOST) || defined(LOCAL_BACKEND_HOST) || defined(AUDIO_SELFTEST)
+#define OTA_BUILD_KIND "dev"
+#else
+#define OTA_BUILD_KIND "release"
+#endif
+static const char BUILD_INFO[] =
+    "aibuddy-build;kind=" OTA_BUILD_KIND ";board=" BOARD_ID ";version=" FIRMWARE_VERSION ";";
+
 void otaBootCheck() {
+    Serial.printf("[OTA] %s\n", BUILD_INFO);
+
     esp_ota_img_states_t state;
     const esp_partition_t *running = esp_ota_get_running_partition();
     onProbation = esp_ota_get_state_partition(running, &state) == ESP_OK &&

@@ -11,9 +11,9 @@ import AccountsTab from "./AccountsTab";
 import AuditTab from "./AuditTab";
 import UsageTab from "./UsageTab";
 import DevicesTab from "./DevicesTab";
+import OtaTab from "./OtaTab";
 import OverviewPreview from "./preview/OverviewPreview";
 import SupportPreview from "./preview/SupportPreview";
-import OtaPreview from "./preview/OtaPreview";
 import FactoryPreview from "./preview/FactoryPreview";
 import PlannedPage from "./preview/PlannedPage";
 import { PreviewBanner } from "./preview/PreviewKit";
@@ -36,6 +36,7 @@ interface AdminDashboardProps {
     audit: IAdminAuditEntry[];
     devices: IAdminDevice[];
     presence: PresenceMap;
+    firmwareReleases: IAdminFirmwareRelease[];
     usage: React.ComponentProps<typeof UsageTab>;
 }
 
@@ -56,6 +57,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     audit,
     devices,
     presence,
+    firmwareReleases,
     usage,
 }) => {
     // Content admins see characters and IPs only. Hiding the rest is for
@@ -77,9 +79,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
     }, [pages]);
 
+    // What the Devices page searches for when another page sends you there.
+    const [deviceQuery, setDeviceQuery] = useState("");
+
     const open = (id: AdminPageId) => {
         setCurrent(id);
+        setDeviceQuery("");
         window.history.replaceState(null, "", `#${id}`);
+    };
+
+    const openDevice = (mac: string) => {
+        open("devices");
+        setDeviceQuery(mac);
     };
 
     const page = pages.find((entry) => entry.id === current) ?? pages[0];
@@ -105,7 +116,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
             case "usage":
                 return <UsageTab {...usage} />;
             case "devices":
-                return <DevicesTab devices={devices} presence={presence} usage={usage} ips={ips} />;
+                return (
+                    <DevicesTab
+                        devices={devices}
+                        presence={presence}
+                        usage={usage}
+                        ips={ips}
+                        initialQuery={deviceQuery}
+                    />
+                );
+            case "ota":
+                return <OtaTab releases={firmwareReleases} devices={devices} onOpenDevice={openDevice} />;
             case "characters":
                 return (
                     <CharactersTab
@@ -135,8 +156,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 return <OverviewPreview onOpen={open} />;
             case "support":
                 return <SupportPreview />;
-            case "ota":
-                return <OtaPreview />;
             case "factory":
                 return <FactoryPreview />;
             default:
