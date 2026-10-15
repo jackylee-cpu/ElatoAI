@@ -12,6 +12,7 @@
 #if BOARD_MIC_DOWNSAMPLE_3_2
 #include "Downsample.h"
 #endif
+#include "MicAdpcm.h"
 #include "ServerReach.h"
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -1147,7 +1148,8 @@ static volatile int32_t micLevelDc = 0;
 // send time approaches its own length is backing up on the device -- memory
 // or wifi -- and its end_of_speech queues behind the backlog. Diagnostic only.
 static volatile uint32_t micSendFrames = 0;
-static volatile uint32_t micSendBytes = 0;
+static volatile uint32_t micSendBytes = 0;    // on the wire, after ADPCM
+static volatile uint32_t micSendSamples = 0;  // 16kHz samples those carried
 static volatile uint64_t micSendUs = 0;
 static volatile uint32_t micSendMaxUs = 0;
 static volatile uint32_t micSendMinHeap = UINT32_MAX;
@@ -1185,13 +1187,28 @@ static void resetMicLevel() {
     micVoicedMs = 0;
     micSendFrames = 0;
     micSendBytes = 0;
+    micSendSamples = 0;
     micSendUs = 0;
     micSendMaxUs = 0;
     micSendMinHeap = UINT32_MAX;
 }
 
-// micTask -> wsStream.write() -> sendMicFrame()
-static void sendMicFrame(const uint8_t *data, size_t length) {
+// IMA ADPCM on the uplink (P2-24, MicAdpcm.h): raw 16kHz PCM is 256 kbps,
+// which a phone hotspot could not drain -- the send queue grew until TLS had
+// no heap left (2026-10-13). The server learns it from X-Mic-Codec. Build with
+// -DMIC_UPLINK_ADPCM=0 to send PCM as before.
+#ifndef MIC_UPLINK_ADPCM
+#define MIC_UPLINK_ADPCM 1
+#endif
+
+#if MIC_UPLINK_ADPCM
+// micTask only. Carries on across frames and presses; every block names the
+// state it starts from, so nothing has to reset it.
+static MicAdpcmState micAdpcm;
+static constexpr size_t kMicAdpcmMaxSamples = 512;
+#endif
+
+static void sendMicBytes(const uint8_t *data, size_t length) {
     const int64_t t0 = esp_timer_get_time();
     xSemaphoreTake(wsMutex, portMAX_DELAY);
     webSocket.sendBIN(data, length);
@@ -1205,13 +1222,30 @@ static void sendMicFrame(const uint8_t *data, size_t length) {
     if (heap < micSendMinHeap) micSendMinHeap = heap;
 }
 
+// micTask -> wsStream.write() -> sendMicFrame(): 16-bit PCM at 16kHz.
+static void sendMicFrame(const uint8_t *data, size_t length) {
+    const size_t samples = length / sizeof(int16_t);
+    micSendSamples += samples;
+#if MIC_UPLINK_ADPCM
+    static uint8_t block[micAdpcmBlockBytes(kMicAdpcmMaxSamples)];
+    const int16_t *pcm = (const int16_t *)data;
+    for (size_t done = 0; done < samples;) {
+        const size_t n = samples - done < kMicAdpcmMaxSamples ? samples - done : kMicAdpcmMaxSamples;
+        sendMicBytes(block, micAdpcmEncodeBlock(micAdpcm, pcm + done, n, block));
+        done += n;
+    }
+#else
+    sendMicBytes(data, length);
+#endif
+}
+
 // networkTask, at the end of a press.
 static void logMicUplink(unsigned long held) {
     const uint32_t frames = micSendFrames;
     Serial.printf("PTT uplink | %u frames, %u B (%ums of 16kHz audio) in %lums held | "
                   "send total %ums, max %ums | min free heap %u\n",
                   (unsigned)frames, (unsigned)micSendBytes,
-                  (unsigned)(micSendBytes / 32), held,
+                  (unsigned)(micSendSamples / 16), held,
                   (unsigned)(micSendUs / 1000), (unsigned)(micSendMaxUs / 1000),
                   frames ? (unsigned)micSendMinHeap : 0u);
 }
@@ -1663,7 +1697,11 @@ String websocketExtraHeaders()
 {
     return "Authorization: Bearer " + authTokenGlobal + "\r\n" +
            "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
-           "X-Device-Mac: " + WiFi.macAddress();
+           "X-Device-Mac: " + WiFi.macAddress()
+#if MIC_UPLINK_ADPCM
+           + "\r\nX-Mic-Codec: ima-adpcm"
+#endif
+        ;
 }
 
 // wifiTask -> WIFIMANAGER::loop() -> WIFIMANAGER::tryConnect() -> connectCb() -> websocketSetup()

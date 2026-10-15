@@ -10,7 +10,6 @@ import av
 import numpy as np
 from fastapi import WebSocket
 from loguru import logger
-
 from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
@@ -29,6 +28,8 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+import mic_adpcm
+
 
 class RawPCMFrameSerializer(FrameSerializer):
     """Deserialize raw PCM and JSON control messages."""
@@ -38,10 +39,14 @@ class RawPCMFrameSerializer(FrameSerializer):
         input_sample_rate: int,
         input_channels: int = 1,
         on_control: Callable[[dict], bool] | None = None,
+        adpcm: bool = False,
     ):
         super().__init__()
         self._input_sample_rate = input_sample_rate
         self._input_channels = input_channels
+        # The board said X-Mic-Codec: ima-adpcm (mic_adpcm.py); otherwise the
+        # binary frames are 16-bit PCM as they always were.
+        self._adpcm = adpcm
         # Gets each JSON message first; True means it was handled outside the
         # voice pipeline (device Wi-Fi management) and must not enter it.
         self._on_control = on_control
@@ -55,6 +60,10 @@ class RawPCMFrameSerializer(FrameSerializer):
 
     async def deserialize(self, data: str | bytes) -> Frame | None:
         if isinstance(data, bytes):
+            if self._adpcm:
+                data = mic_adpcm.decode_block(data)
+                if not data:
+                    return None
             return InputAudioRawFrame(
                 audio=data,
                 sample_rate=self._input_sample_rate,
