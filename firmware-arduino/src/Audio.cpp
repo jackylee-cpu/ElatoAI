@@ -11,6 +11,7 @@
 #include "Battery.h"
 #if BOARD_MIC_DOWNSAMPLE_3_2
 #include "Downsample.h"
+#include "ServerReach.h"
 #endif
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -1024,7 +1025,13 @@ void audioStreamTask(void *parameter) {
     // brings the radio up, so the sound plays over the association instead of
     // delaying it.
 #ifndef SKIP_BOOT_CHIME
-    playBootChime();
+    // A restart to get back to the server (ServerReach.cpp) is not a boot
+    // anyone asked for; it should not announce itself.
+    if (serverReachSilentBoot()) {
+        Serial.println("Chime: boot skipped (recovery restart)");
+    } else {
+        playBootChime();
+    }
 #ifdef ASSET_PROMPT_TEST
     void playAssetPromptTest();
     playAssetPromptTest();
@@ -1395,6 +1402,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_CONNECTED:
         Serial.printf("[WSc] Connected to url: %s\n", payload);
+        serverReached();
         wsOpen = true;
         wsAuthed = false;
         // PROCESSING (red) only while a greeting is on its way. An automatic
@@ -1641,7 +1649,13 @@ void websocketSetup(const String& server_domain, int port, const String& path)
     const String host = LOCAL_WS_HOST;
     const int wsPort = LOCAL_WS_PORT;
     const String wsPath = LOCAL_WS_PATH;
+  #ifdef LOCAL_WS_TLS
+    // Test builds only (P2-25): wss to a LAN port that accepts and never
+    // answers, which is how a stalled hotspot handshake looks to the board.
+    const bool plaintext = false;
+  #else
     const bool plaintext = true;  // no certificate for a laptop on the LAN
+  #endif
 #else
     const String host = server_domain;
     const int wsPort = port;
@@ -1957,6 +1971,8 @@ void networkTask(void *parameter) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
+
+        serverReachPoll(webSocket.isConnected());
 
         xSemaphoreTake(wsMutex, portMAX_DELAY);
 

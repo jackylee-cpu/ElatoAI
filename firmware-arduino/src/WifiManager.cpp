@@ -7,6 +7,7 @@
 **/
 #include "WifiManager.h"
 #include "OTA.h"
+#include "ServerReach.h"
 #include "Audio.h"
 #include "AsyncJson.h"
 #include "ArduinoJson.h"
@@ -73,6 +74,13 @@ static bool fetchDeviceToken() {
     serializeJson(request, body);
 
     const int httpCode = http.POST(body);
+    // An answer that ends the attempt is our server talking: 202 (nobody owns
+    // this board, so no socket follows) and refusals alike. A 200 does not
+    // count -- the voice socket comes next and is what has to work. Counting
+    // it cleared the outage at every boot, and a board whose voice server was
+    // down restarted every three minutes (62:70, 2026-10-15). Negative codes
+    // are the connection itself failing.
+    serverReachTokenAnswer(httpCode > 0 && httpCode != HTTP_CODE_OK);
     if (httpCode != HTTP_CODE_OK && httpCode != 202) {
         // 401 is the one that needs a person: this board's secret is missing
         // or wrong, and it cannot get back in by retrying.
@@ -556,6 +564,16 @@ uint8_t WIFIMANAGER::getApEntry() {
  * @details regulary check if the connection is up&running, try to reconnect or create a fallback AP
  */
 void WIFIMANAGER::loop() {
+  // On Wi-Fi but nothing from our server for a while (ServerReach.cpp): leave
+  // and join again. Ahead of the interval check, so it happens on this pass.
+  if (serverReachTakeWifiReset()) {
+    logMessage("[WIFI] Reconnecting to reach the server again\n");
+    WiFi.disconnect(false, false);
+    lastWifiCheckMillis = millis();
+    tryConnect();
+    return;
+  }
+
   // While the device is online but still has no token it is polling to be
   // claimed and somebody is watching the web app, so check more often.
   const uint32_t checkInterval =
