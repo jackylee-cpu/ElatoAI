@@ -602,14 +602,16 @@ def create_app() -> FastAPI:
         board; this only trusts the internal token. op is "status" (ask the
         board, or return the last list if it is asleep), "peek" (the last list
         and whether it is online, without bothering the board -- what the page
-        polls), "add", "delete" or "scan". The password in an add is relayed
+        polls), "add", "delete", "scan" or "switch" (move to a saved network;
+        the answer only says it is moving, and how that ended arrives as
+        last_switch once the board is back). The password in an add is relayed
         and dropped -- never logged, never kept.
         """
         _require_internal_token(x_internal_token)
 
         mac = str(payload.get("mac", "")).strip().upper()
         op = payload.get("op")
-        if not mac or op not in ("status", "peek", "add", "delete", "scan"):
+        if not mac or op not in ("status", "peek", "add", "delete", "scan", "switch"):
             raise HTTPException(status_code=400, detail="mac and a valid op are required")
 
         if op == "peek":
@@ -624,8 +626,8 @@ def create_app() -> FastAPI:
         ssid = payload.get("ssid")
         if not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32:
             raise HTTPException(status_code=400, detail="ssid must be 1-32 bytes")
-        if op == "delete":
-            return await device_wifi.request(mac, "delete", ssid=ssid)
+        if op in ("delete", "switch"):
+            return await device_wifi.request(mac, op, ssid=ssid)
 
         password = payload.get("password", "")
         if not isinstance(password, str) or (

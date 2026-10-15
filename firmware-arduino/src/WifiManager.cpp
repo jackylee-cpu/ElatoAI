@@ -682,6 +682,33 @@ void WIFIMANAGER::loop() {
   }
 }
 
+// How long a failure reported right after WiFi.begin() is not trusted.
+static const uint32_t JOIN_STALE_MS = 6000;
+
+/**
+ * Join one network and wait for the outcome. The driver keeps the previous
+ * attempt's result until an event replaces it, and leaving a network we never
+ * reached raises no event: straight after begin(), WiFi.status() can still say
+ * "not found" about the last network. 62:70 (2026-10-15) took that as the
+ * answer for the network it was going back to and fell into the setup AP. So
+ * a failure only counts once this attempt has had JOIN_STALE_MS to produce
+ * its own; before that, only "connected" ends the wait.
+ */
+static wl_status_t joinFor(const String &ssid, const String &pass, uint32_t timeoutMs) {
+  WiFi.disconnect(false, false);
+  delay(100);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  const uint32_t start = millis();
+  wl_status_t status = WiFi.status();
+  while (millis() - start < timeoutMs) {
+    status = WiFi.status();
+    if (status == WL_CONNECTED) break;
+    if ((status == WL_NO_SSID_AVAIL || status == WL_CONNECT_FAILED) && millis() - start >= JOIN_STALE_MS) break;
+    delay(100);
+  }
+  return status;
+}
+
 /**
  * @brief Try to connect to one of the configured SSIDs (if available).
  * @details If more than 2 SSIDs configured, scan for available WIFIs and connect to the strongest
@@ -755,15 +782,8 @@ bool WIFIMANAGER::tryConnect() {
       + " with password " + (apList[choosenAp].apPass.length() > 0 ? "'***'" : "''") + "\n"
     );
 
-    WiFi.begin(apList[choosenAp].apName.c_str(), apList[choosenAp].apPass.c_str());
-    wl_status_t status = (wl_status_t)WiFi.waitForConnectResult(5000UL);
-
-    auto startTime = millis();
-    // wait for connection, fail, or timeout
-    while(status != WL_CONNECTED && status != WL_NO_SSID_AVAIL && status != WL_CONNECT_FAILED && (millis() - startTime) <= 10000) {
-        delay(10);
-        status = (wl_status_t)WiFi.waitForConnectResult(5000UL);
-    }
+    // Same 15s budget as before, without trusting a stale failure.
+    wl_status_t status = joinFor(apList[choosenAp].apName, apList[choosenAp].apPass, 15000);
     switch(status) {
       case WL_IDLE_STATUS:
         logMessage("[WIFI] Connecting failed (0): Idle\n");
@@ -1549,7 +1569,7 @@ void WIFIMANAGER::attachUI() {
 
 extern WIFIMANAGER WifiManager;
 
-enum WifiRemoteOp : uint8_t { WIFI_OP_NONE, WIFI_OP_STATUS, WIFI_OP_ADD, WIFI_OP_DELETE, WIFI_OP_SCAN };
+enum WifiRemoteOp : uint8_t { WIFI_OP_NONE, WIFI_OP_STATUS, WIFI_OP_ADD, WIFI_OP_DELETE, WIFI_OP_SCAN, WIFI_OP_SWITCH };
 
 static portMUX_TYPE remoteMux = portMUX_INITIALIZER_UNLOCKED;
 static WifiRemoteOp remoteOp = WIFI_OP_NONE;
@@ -1571,6 +1591,7 @@ bool wifiRemoteEnqueue(const char *op, const char *id, const char *ssid, const c
   else if (strcmp(op, "add") == 0) parsed = WIFI_OP_ADD;
   else if (strcmp(op, "delete") == 0) parsed = WIFI_OP_DELETE;
   else if (strcmp(op, "scan") == 0) parsed = WIFI_OP_SCAN;
+  else if (strcmp(op, "switch") == 0) parsed = WIFI_OP_SWITCH;
   if (parsed == WIFI_OP_NONE) return false;
 
   bool queued = false;
@@ -1588,6 +1609,82 @@ bool wifiRemoteEnqueue(const char *op, const char *id, const char *ssid, const c
     xTaskNotifyGive(WifiManager.WifiCheckTask);
   }
   return queued;
+}
+
+// How a parent's last "switch" ended. The socket drops while the board moves,
+// so the answer cannot go back on the request; it rides on the next report
+// instead (the one sent after every "auth"), once. Wi-Fi task only.
+static struct {
+  bool pending = false;
+  bool ok = false;
+  char ssid[33] = "";
+  char error[16] = "";
+  char back[33] = "";
+} lastSwitch;
+
+// The new network has this long to connect; the old one gets SWITCH_BACK_MS.
+static const uint32_t SWITCH_TIMEOUT_MS = 20000;
+static const uint32_t SWITCH_BACK_MS = 15000;
+
+// Joined is not enough: a hotspot with no data, or a network that blocks our
+// server, would strand the board out of the parent's reach. A plain TCP
+// connect to the backend proves DNS and a route without a TLS session, which
+// the C3 has no room for next to a reconnecting websocket.
+static bool backendReachable() {
+#if defined(DEV_MODE) || defined(LOCAL_BACKEND_HOST)
+  const uint16_t port = backend_port;
+#else
+  const uint16_t port = 443;
+#endif
+  WiFiClient probe;
+  const bool ok = probe.connect(backend_server, port, 5000);
+  probe.stop();
+  return ok;
+}
+
+
+void WIFIMANAGER::switchNetwork(uint8_t apId, const String &previous) {
+  const String target = apList[apId].apName;
+  logMessage(String("[WIFI] Switching to SSID '") + target + "' from the web app\n");
+  // The answer saying "switching" has to leave before the radio does.
+  delay(300);
+
+  const wl_status_t status = joinFor(target, apList[apId].apPass, SWITCH_TIMEOUT_MS);
+  const char *error = nullptr;
+  if (status == WL_NO_SSID_AVAIL) error = "not_found";
+  else if (status == WL_CONNECT_FAILED) error = "auth";
+  else if (status != WL_CONNECTED) error = "timeout";
+  else if (!backendReachable()) error = "no_internet";
+
+  lastSwitch.pending = true;
+  lastSwitch.ok = error == nullptr;
+  strlcpy(lastSwitch.ssid, target.c_str(), sizeof(lastSwitch.ssid));
+  strlcpy(lastSwitch.error, error ? error : "", sizeof(lastSwitch.error));
+  lastSwitch.back[0] = 0;
+
+  if (!error) {
+    if (!apList[apId].joined) {
+      apList[apId].joined = true;
+      writeToNVS();
+    }
+    logMessage(String("[WIFI] Switched to '") + target + "' with IP " + WiFi.localIP().toString() + "\n");
+    return;
+  }
+
+  logMessage(String("[WIFI] Switch to '") + target + "' failed (" + error + "), going back\n");
+  for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; i++) {
+    if (previous.isEmpty() || apList[i].apName != previous) continue;
+    if (joinFor(previous, apList[i].apPass, SWITCH_BACK_MS) == WL_CONNECTED) {
+      strlcpy(lastSwitch.back, previous.c_str(), sizeof(lastSwitch.back));
+      logMessage(String("[WIFI] Back on '") + previous + "'\n");
+      return;
+    }
+    break;
+  }
+  // Not even the old one: loop() takes over and picks the strongest saved
+  // network, as it would after any dropout.
+  logMessage("[WIFI] Could not go back either; reconnecting as usual\n");
+  WiFi.disconnect(false, false);
 }
 
 void WIFIMANAGER::serviceRemote() {
@@ -1615,6 +1712,7 @@ void WIFIMANAGER::serviceRemote() {
   if (id[0]) doc["id"] = id;
   bool ok = true;
   const char *error = nullptr;
+  int switchTo = -1;
 
   switch (op) {
     case WIFI_OP_ADD: {
@@ -1668,6 +1766,20 @@ void WIFIMANAGER::serviceRemote() {
       if (found < 0) { ok = false; error = "scan"; }
       break;
     }
+    case WIFI_OP_SWITCH:
+      for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; i++) {
+        if (!apList[i].apName.isEmpty() && apList[i].apName == ssid) switchTo = i;
+      }
+      if (switchTo < 0) {
+        ok = false; error = "unknown";
+      } else if (connected && current == ssid) {
+        ok = false; error = "current";
+        switchTo = -1;
+      } else {
+        // Done after the answer goes out (below): moving takes the socket down.
+        doc["switching"] = true;
+      }
+      break;
     case WIFI_OP_STATUS:
     default:
       break;
@@ -1696,10 +1808,24 @@ void WIFIMANAGER::serviceRemote() {
     entry["joined"] = apList[i].joined;
   }
   doc["max"] = WIFIMANAGER_MAX_APS;
+  const bool reportingSwitch = lastSwitch.pending;
+  if (reportingSwitch) {
+    JsonObject result = doc["last_switch"].to<JsonObject>();
+    result["ssid"] = lastSwitch.ssid;
+    result["ok"] = lastSwitch.ok;
+    if (!lastSwitch.ok) {
+      result["error"] = lastSwitch.error;
+      if (lastSwitch.back[0]) result["back"] = lastSwitch.back;
+    }
+  }
 
   String out;
   serializeJson(doc, out);
+  bool sent = false;
   xSemaphoreTake(wsMutex, portMAX_DELAY);
-  if (webSocket.isConnected()) webSocket.sendTXT(out);
+  if (webSocket.isConnected()) sent = webSocket.sendTXT(out);
   xSemaphoreGive(wsMutex);
+  if (sent && reportingSwitch) lastSwitch.pending = false;
+
+  if (switchTo >= 0) switchNetwork(switchTo, current);
 }
