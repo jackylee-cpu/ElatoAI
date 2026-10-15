@@ -14,6 +14,9 @@ dependencies = [
     # session_content.py reads content/*.yaml. pipecat pulls it in today, but
     # this module imports it directly.
     "pyyaml",
+    # mic_adpcm.py decodes the boards' ADPCM uplink with audioop, which left
+    # the standard library in 3.13. The image runs 3.11 and has it built in.
+    "audioop-lts; python_version >= '3.13'",
 ]
 
 # This is an application, not a library, but the README installs it with

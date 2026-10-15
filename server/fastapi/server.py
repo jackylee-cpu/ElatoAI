@@ -27,6 +27,7 @@ import app_settings  # noqa: E402
 import device_auth
 import device_power
 import device_wifi
+import mic_adpcm
 import session_content
 from bot import create_esp32_auth_message, run_bot_session
 from device_registry import fetch_device_personality, fetch_user_personality
@@ -256,7 +257,9 @@ def create_browser_transport(websocket: WebSocket) -> BrowserWebsocketTransport:
     )
 
 
-def create_esp32_transport(websocket: WebSocket, mac: str | None) -> Esp32WebsocketTransport:
+def create_esp32_transport(
+    websocket: WebSocket, mac: str | None, adpcm: bool = False
+) -> Esp32WebsocketTransport:
     return Esp32WebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
@@ -266,6 +269,7 @@ def create_esp32_transport(websocket: WebSocket, mac: str | None) -> Esp32Websoc
             audio_out_sample_rate=AUDIO_OUTPUT_SAMPLE_RATE,
             serializer=RawPCMFrameSerializer(
                 input_sample_rate=ESP32_INPUT_SAMPLE_RATE,
+                adpcm=adpcm,
                 on_control=lambda message: (
                     device_wifi.handle_device_message(mac, message)
                     or device_power.handle_device_message(mac, message)
@@ -410,11 +414,13 @@ def create_app() -> FastAPI:
             await websocket.close(code=4401, reason="invalid device token")
             return
         mac_address = device.mac
+        mic_is_adpcm = mic_adpcm.uses_adpcm(websocket.headers.get(mic_adpcm.CODEC_HEADER))
         logger.info(
-            "ESP32 websocket connected: device={} mac={} rssi={}",
+            "ESP32 websocket connected: device={} mac={} rssi={} mic={}",
             device.device_id,
             mac_address,
             websocket.headers.get("x-wifi-rssi", "unknown"),
+            "adpcm" if mic_is_adpcm else "pcm",
         )
         # The device has no query string to carry a character on, so resolve the
         # one assigned to it in Supabase. This fails open to the defaults.
@@ -437,7 +443,7 @@ def create_app() -> FastAPI:
         await websocket.send_text(
             json.dumps(create_esp32_auth_message(volume=personality.volume))
         )
-        transport = create_esp32_transport(websocket, mac_address)
+        transport = create_esp32_transport(websocket, mac_address, adpcm=mic_is_adpcm)
 
         # Memory is keyed by the account the device is claimed by, the device
         # itself and the character's IP: each board on an account remembers
