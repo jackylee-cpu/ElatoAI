@@ -71,6 +71,8 @@ interface DevicesTabProps {
     devices: IAdminDevice[];
     // Read when the page rendered; polled from here on.
     presence: PresenceMap;
+    // The last 30 days of crash reports, newest first.
+    crashes: IAdminDeviceCrash[];
     usage: {
         thisMonth: IUsageAggregate[];
         rates: IUsageRates;
@@ -129,7 +131,14 @@ function when(iso: string | null): string {
  * refuses them. Conversations, memories and the child's details are not read
  * here at all (Q7).
  */
-const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPresence, usage, ips, initialQuery = "" }) => {
+const DevicesTab: React.FC<DevicesTabProps> = ({
+    devices,
+    presence: initialPresence,
+    crashes,
+    usage,
+    ips,
+    initialQuery = "",
+}) => {
     const [presence, setPresence] = useState<PresenceMap>(initialPresence);
     const [now, setNow] = useState(() => Date.now());
     const [query, setQuery] = useState(initialQuery);
@@ -164,6 +173,15 @@ const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPrese
         const rows = usageByDevice(usage.thisMonth, usage.rates, llmPriceMap(usage.models));
         return new Map(rows.filter((row) => row.device_id).map((row) => [row.device_id as string, row]));
     }, [usage]);
+
+    const crashesByMac = useMemo(() => {
+        const byMac = new Map<string, IAdminDeviceCrash[]>();
+        for (const crash of crashes) {
+            const key = crash.mac_address.toUpperCase();
+            byMac.set(key, [...(byMac.get(key) ?? []), crash]);
+        }
+        return byMac;
+    }, [crashes]);
 
     const firmwares = useMemo(
         () =>
@@ -336,6 +354,7 @@ const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPrese
                         live={current.live}
                         state={current.state}
                         usage={usageByMac.get(current.device.device_id) ?? null}
+                        crashes={crashesByMac.get(macKey(current.device)) ?? []}
                         rates={usage.rates}
                         now={now}
                         ips={ips}
@@ -348,6 +367,58 @@ const DevicesTab: React.FC<DevicesTabProps> = ({ devices, presence: initialPrese
 
 type PendingAction = "reset" | "unbind" | "ip" | null;
 
+const CRASH_REASONS: Record<IAdminDeviceCrash["reason"], string> = {
+    panic: "Panic",
+    int_wdt: "Interrupt watchdog",
+    task_wdt: "Task watchdog",
+    wdt: "Watchdog",
+    brownout: "Brownout",
+};
+
+function uptime(seconds: number | null): string | null {
+    if (seconds == null) return null;
+    if (seconds < 120) return `${seconds} s`;
+    if (seconds < 7200) return `${Math.round(seconds / 60)} min`;
+    return `${(seconds / 3600).toFixed(1)} h`;
+}
+
+/**
+ * A board's recent crash reports. The addresses are for
+ * firmware-arduino/tools/decode_crash.py with that version's ELF.
+ */
+function CrashList({ crashes }: { crashes: IAdminDeviceCrash[] }) {
+    return (
+        <div className="flex flex-col gap-1.5 border-t border-gray-100 pt-3">
+            <p className="text-xs font-medium text-muted-foreground">Crash reports</p>
+            <ul className="flex flex-col gap-1.5">
+                {crashes.slice(0, 5).map((crash) => (
+                    <li key={`${crash.reported_at}-${crash.pc}`} className="rounded-xl bg-rose-50/70 px-3 py-2 text-xs">
+                        <div className="flex flex-wrap items-baseline gap-x-2">
+                            <span className="font-medium text-rose-800">{CRASH_REASONS[crash.reason]}</span>
+                            {crash.crash_count > 1 && <span className="text-rose-700">× {crash.crash_count}</span>}
+                            <span className="text-muted-foreground">
+                                {crash.firmware_version ?? "?"} · reported {when(crash.reported_at)}
+                                {crash.uptime_s != null && ` · after ${uptime(crash.uptime_s)}`}
+                            </span>
+                        </div>
+                        {(crash.pc || crash.task || crash.detail) && (
+                            <div className="mt-0.5 break-all font-mono text-[11px] text-gray-600">
+                                {[crash.task && `task ${crash.task}`, crash.pc && `pc ${crash.pc}`, crash.ra && `ra ${crash.ra}`]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                {crash.detail && <span className="font-sans"> · {crash.detail}</span>}
+                            </div>
+                        )}
+                    </li>
+                ))}
+            </ul>
+            {crashes.length > 5 && (
+                <p className="text-xs text-muted-foreground">and {crashes.length - 5} older reports</p>
+            )}
+        </div>
+    );
+}
+
 function ipName(ips: IIp[], ipKey: string): string {
     return ips.find((ip) => ip.ip_key === ipKey)?.name ?? ipKey;
 }
@@ -357,6 +428,7 @@ function DeviceDetail({
     live,
     state,
     usage,
+    crashes,
     rates,
     now,
     ips,
@@ -365,6 +437,7 @@ function DeviceDetail({
     live: DevicePresence | undefined;
     state: DeviceState;
     usage: DeviceUsage | null;
+    crashes: IAdminDeviceCrash[];
     rates: IUsageRates;
     now: number;
     ips: IIp[];
@@ -452,11 +525,20 @@ function DeviceDetail({
                             : "No turns"}
                     </dd>
 
+                    <dt className="text-muted-foreground">Crashes, 30 d</dt>
+                    <dd className={cn(crashes.length > 0 && "text-rose-700")}>
+                        {crashes.length > 0
+                            ? `${crashes.reduce((sum, crash) => sum + crash.crash_count, 0)}, last ${when(crashes[0].reported_at)}`
+                            : "None reported"}
+                    </dd>
+
                     <dt className="text-muted-foreground">Registered</dt>
                     <dd suppressHydrationWarning>
                         {when(device.created_at)} <span className="text-muted-foreground">({ago(device.created_at, now)})</span>
                     </dd>
                 </dl>
+
+                {crashes.length > 0 && <CrashList crashes={crashes} />}
 
                 <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-4">
                     <Button variant="outline" size="sm" className="rounded-full" onClick={() => setPending("ip")}>

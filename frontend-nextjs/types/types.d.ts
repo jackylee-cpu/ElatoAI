@@ -522,6 +522,25 @@ declare global {
         ip_key: string | null;
     }
 
+    /**
+     * One crash report from a board (device_crashes, admin_list_device_crashes()).
+     * crash_count is how many crashes since its previous report; the rest
+     * describe the last one. pc/ra are null for a brownout.
+     */
+    interface IAdminDeviceCrash {
+        device_id: string | null;
+        mac_address: string;
+        crash_count: number;
+        reason: "panic" | "int_wdt" | "task_wdt" | "wdt" | "brownout";
+        firmware_version: string | null;
+        pc: string | null;
+        ra: string | null;
+        uptime_s: number | null;
+        task: string | null;
+        detail: string | null;
+        reported_at: string;
+    }
+
     /** What one board did with one release it was offered (firmware_rollout_devices). */
     interface IAdminRolloutDevice {
         device_id: string;

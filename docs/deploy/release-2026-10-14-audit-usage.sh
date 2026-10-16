@@ -28,6 +28,9 @@
 #     admin_unbind_device; the Devices page is live, not a preview
 #   - admin_delete_account: Accounts can edit, disable and delete logins
 #   - R-41: devices.battery_* -- the app shows the toy's battery state
+#   - device_crashes + admin_list_device_crashes(): boards report crashes
+#     (panic, watchdogs, brownout) after "auth"; the admin Devices page lists
+#     the last 30 days. Super admins only; 1.1.0 and older never report
 #   - an IP is one physical toy: devices.ip_key keeps a board on its toy's
 #     characters, ips.default_personality_id says who the toy is, and
 #     admin_set_device_ip sets it from the Devices page. Every board starts
@@ -143,6 +146,7 @@ MIGRATIONS=(
     20261014210000_admin_firmware_upload.sql
     20261014220000_admin_firmware_rollout.sql
     20261016120000_device_wifi.sql
+    20261016170000_device_crashes.sql
 )
 # Each admin function is refused to anon and checks the role itself.
 ADMIN_FUNCTIONS=(
@@ -154,6 +158,7 @@ ADMIN_FUNCTIONS=(
     "admin_create_firmware_release(text,text,text,text,integer,text)"
     "admin_delete_firmware_release(uuid)"
     "admin_change_firmware_rollout(uuid,text,smallint,text[],text)"
+    "admin_list_device_crashes(integer)"
 )
 # Only the servers (service role) may call these: the web app's token and
 # bind-ticket routes, and the voice server recording a board's Wi-Fi.
@@ -273,7 +278,8 @@ if step 3; then
     # rolls back cleanly and the step can simply be run again.
     for m in "${MIGRATIONS[@]}"; do apply "$m"; done
     has_table admin_audit_log && has_column turn_metrics row_kind && has_column turn_metrics device_id \
-        && has_column devices battery_low && has_column devices ip_key && has_column ips default_personality_id \
+        && has_column devices battery_low && has_table device_crashes \
+        && has_column devices ip_key && has_column ips default_personality_id \
         || { echo "  objects still missing"; exit 1; }
     for f in "${ADMIN_FUNCTIONS[@]}"; do
         has_function "$f" || { echo "  function $f missing"; exit 1; }
@@ -341,7 +347,7 @@ fi
 
 if step 4; then
     say "4. Images $RELEASE (waits for CI)"
-    has_column turn_metrics row_kind && has_column devices ip_key \
+    has_column turn_metrics row_kind && has_column devices ip_key && has_table device_crashes \
         && has_table firmware_rollout_devices && has_table device_bind_tickets && has_table device_wifi \
         || { echo "  step 3 has not run -- the new voice server's metrics writes and board lookups would fail"; exit 1; }
     grep -qE '^DEVICE_CLAIM_LIST=' "$FRONTEND_DIR/.env.production" \
@@ -477,6 +483,15 @@ SQL
     [ "$(q "select has_table_privilege('anon', 'public.firmware_rollout_devices', 'SELECT')")" = "f" ] \
         && ok "anon cannot read firmware_rollout_devices" || bad "anon can read firmware_rollout_devices"
 
+    # -- crash reports --
+    [ "$(q "select relrowsecurity from pg_class where oid = 'public.device_crashes'::regclass")" = "t" ] \
+        && ok "device_crashes has row-level security" || bad "device_crashes has no row-level security"
+    for r in anon authenticated; do
+        [ "$(q "select has_table_privilege('$r', 'public.device_crashes', 'SELECT')")" = "f" ] \
+            && ok "$r cannot read device_crashes" || bad "$r can read device_crashes"
+    done
+    echo "  device_crashes rows: $(q "select count(*) from public.device_crashes") (0 until a board with the report crashes)"
+
     # -- R-37 device_wifi --
     [ "$(q "select relrowsecurity from pg_class where oid = 'public.device_wifi'::regclass")" = "t" ] \
         && ok "device_wifi has row-level security" || bad "device_wifi has no row-level security"
@@ -597,6 +612,8 @@ SQL
     in the IP's rules, then Devices -> Set toy IP. Pick a different character
     as the parent: the board still speaks as the toy's character
   - a parent's Me page shows the toy's battery (low / ok) after it connects
+  - Devices (super admin): a board's panel says "Crashes, 30 d: None
+    reported" until one crashes
   - Me -> Add a device (DEVICE_CLAIM_LIST=True): an unclaimed board online
     in the last ten minutes is listed and Add claims it (P0-11)
   - OTA releases page (super admin): the current release shows 100%, not

@@ -26,6 +26,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams  # noqa:
 import app_settings  # noqa: E402
 import device_auth
 import device_power
+import device_crash
 import device_volume
 import device_wifi
 import mic_adpcm
@@ -274,6 +275,7 @@ def create_esp32_transport(
                 on_control=lambda message: (
                     device_wifi.handle_device_message(mac, message)
                     or device_power.handle_device_message(mac, message)
+                    or device_crash.handle_device_message(websocket, mac, message)
                 ),
             ),
         ),
@@ -415,6 +417,8 @@ def create_app() -> FastAPI:
             await websocket.close(code=4401, reason="invalid device token")
             return
         mac_address = device.mac
+        # For rows written from the board's own messages (device_crash).
+        websocket.state.device_id = device.device_id
         mic_is_adpcm = mic_adpcm.uses_adpcm(websocket.headers.get(mic_adpcm.CODEC_HEADER))
         # Absent on 1.0.1 and earlier, which is what device_volume needs to know.
         websocket.state.firmware_version = websocket.headers.get(device_volume.FIRMWARE_HEADER)

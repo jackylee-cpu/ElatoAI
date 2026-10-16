@@ -8,7 +8,7 @@ import { createServiceClient } from "@/utils/supabase/service";
 import { requireAdmin, roleAllows } from "@/lib/admin";
 import { getAllIps, getAllModes, getAllStyles } from "@/db/sessionOptions";
 import { listAuditLog } from "@/db/auditLog";
-import { listDevicesForAdmin } from "@/db/adminDevices";
+import { listDeviceCrashesForAdmin, listDevicesForAdmin } from "@/db/adminDevices";
 import { listFirmwareReleasesForAdmin } from "@/db/firmwareReleases";
 import { fetchDevicePresence } from "@/lib/devicePresence";
 import { getUsageByDay, getUsageByDevice } from "@/db/usage";
@@ -55,6 +55,7 @@ export default async function AdminPage() {
         openRouterModels,
         devices,
         presence,
+        crashes,
     ] = await Promise.all([
             isSuper ? getVoiceStackSettings(supabase) : Promise.resolve({}),
             isSuper ? getRecentTurnMetrics(supabase) : Promise.resolve([]),
@@ -75,6 +76,7 @@ export default async function AdminPage() {
             isSuper ? listDevicesForAdmin(supabase) : Promise.resolve([]),
             // The voice server, not the database: only it knows who is connected.
             isSuper ? fetchDevicePresence() : Promise.resolve(null),
+            isSuper ? listDeviceCrashesForAdmin(supabase) : Promise.resolve([]),
         ]);
 
     // After the devices: the OTA page counts boards per stage from their MACs.
@@ -95,6 +97,7 @@ export default async function AdminPage() {
             audit={audit}
             devices={devices}
             presence={presence}
+            crashes={crashes}
             firmwareReleases={firmwareReleases}
             usage={{
                 thisMonth: usageThisMonth,

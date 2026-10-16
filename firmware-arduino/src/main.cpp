@@ -1,3 +1,4 @@
+#include "CrashReport.h"
 #include "AudioSelfTest.h"
 #include "Button.h"
 #include "Battery.h"
@@ -521,6 +522,7 @@ void setup() {
            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
            heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   Serial.printf("\n%s\n", bootBanner);
+  crashReportBegin();
   otaBootCheck();
 
 #ifdef AUDIO_SELFTEST
