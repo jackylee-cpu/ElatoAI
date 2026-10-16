@@ -2,26 +2,38 @@
 
 import { BatteryCharging, BatteryFull, BatteryLow, BatteryMedium, BatteryWarning } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { type DeviceBattery, hasBattery } from "@/lib/deviceBattery";
+import { batteryState, type DeviceBattery, hasBattery } from "@/lib/deviceBattery";
 
-function describe(device: DeviceBattery) {
+type Tone = "low" | "good" | "plain";
+
+function describe(device: DeviceBattery): { Icon: typeof BatteryFull; label: string; tone: Tone } {
     const percent = device.battery_percent;
-    if (device.battery_charging) {
-        return { Icon: BatteryCharging, label: percent !== null ? `Charging · ${percent}%` : "Charging", low: false };
+    switch (batteryState(device)) {
+        case "charging":
+            return { Icon: BatteryCharging, label: percent !== null ? `Charging · ${percent}%` : "Charging", tone: "good" };
+        case "low":
+            return {
+                Icon: percent !== null ? BatteryLow : BatteryWarning,
+                label: percent !== null ? `${percent}% · Please charge` : "Low · Please charge",
+                tone: "low",
+            };
+        case "full":
+            return { Icon: BatteryFull, label: "Full", tone: "good" };
+        case "ok":
+            if (percent !== null) {
+                return { Icon: percent >= 60 ? BatteryFull : BatteryMedium, label: `${percent}%`, tone: "plain" };
+            }
+            // Spotpear: not low is all it can say.
+            return { Icon: BatteryFull, label: "OK", tone: "plain" };
     }
-    if (device.battery_low) {
-        return {
-            Icon: percent !== null ? BatteryLow : BatteryWarning,
-            label: percent !== null ? `${percent}% · Please charge` : "Low · Please charge",
-            low: true,
-        };
-    }
-    if (percent !== null) {
-        return { Icon: percent >= 60 ? BatteryFull : BatteryMedium, label: `${percent}%`, low: false };
-    }
-    // Spotpear: not low is all it can say.
-    return { Icon: BatteryFull, label: "OK", low: false };
 }
+
+const iconTone: Record<Tone, string> = { low: "text-red-500", good: "text-green-600", plain: "text-gray-500" };
+const labelTone: Record<Tone, string> = {
+    low: "font-medium text-red-600",
+    good: "font-medium text-green-700",
+    plain: "text-gray-500",
+};
 
 /** The row on the device's settings page. Renders nothing for a board that never reported. */
 export function BatteryRow({
@@ -35,15 +47,15 @@ export function BatteryRow({
     className?: string;
 }) {
     if (!hasBattery(device)) return null;
-    const { Icon, label, low } = describe(device);
+    const { Icon, label, tone } = describe(device);
     return (
         <div className={className}>
             <span className="flex items-center gap-3">
-                <Icon className={cn("h-5 w-5", low ? "text-red-500" : "text-gray-500")} />
+                <Icon className={cn("h-5 w-5", iconTone[tone])} />
                 Battery
             </span>
             <span className="flex min-w-0 flex-col items-end">
-                <span className={cn("text-sm", low ? "font-medium text-red-600" : "text-gray-500")}>
+                <span className={cn("text-sm", labelTone[tone])}>
                     {label}
                 </span>
                 {/* The board reports only while awake, so this is the last
@@ -56,7 +68,7 @@ export function BatteryRow({
 
 /** A small pill for the device list, shown only when the battery needs attention. */
 export function LowBatteryBadge({ device }: { device: DeviceBattery }) {
-    if (!hasBattery(device) || !device.battery_low || device.battery_charging) return null;
+    if (!hasBattery(device) || batteryState(device) !== "low") return null;
     return (
         <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-600">
             <BatteryWarning className="h-3.5 w-3.5" aria-hidden="true" />

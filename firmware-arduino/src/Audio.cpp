@@ -1439,6 +1439,7 @@ static bool powerSent = false;
 static bool powerSentLow = false;
 static int powerSentPercent = -1;
 static bool powerSentCharging = false;
+static bool powerSentFull = false;
 static unsigned long powerSentAt = 0;
 
 // WEBSOCKET EVENTS
@@ -1978,9 +1979,16 @@ static void processPushToTalk() {
 
 // The battery state the app shows (R-41): sent once per session after "auth",
 // then again whenever it changes, so the server's copy is never older than the
-// last time the board was awake. Boards that can measure the cell send a
-// percentage; the Spotpear board can only say "nearly empty" (SupplyMonitor).
-// Boards with neither send nothing, and the app shows no battery.
+// last time the board was awake. Each field goes out only when the board can
+// sense it, and the server stores a missing one as "unknown":
+//
+//   low       always. The Spotpear board can say only this (SupplyMonitor).
+//   percent   boards that measure the cell.
+//   charging  the charger's own output, on boards wired to read it.
+//   full      the cell is charged: the charger has finished, or reads as near
+//             100% without charging.
+//
+// Boards with no sense at all send nothing, and the app shows no battery.
 // Runs on networkTask with wsMutex held.
 
 // A percentage that drifts by a point or two is not news; a sample every few
@@ -1988,6 +1996,8 @@ static void processPushToTalk() {
 constexpr int kPowerPercentStep = 5;
 constexpr unsigned long kPowerMinGapMs = 60UL * 1000;
 constexpr int kPowerLowPercent = 15;
+// A cell the charger has finished with rests a little under the table's 100%.
+constexpr int kPowerFullPercent = 95;
 
 static void reportPower() {
     if (!wsAuthed || !webSocket.isConnected()) return;
@@ -1996,19 +2006,26 @@ static void reportPower() {
     const int percent = batteryPercent();
     const bool charging = batteryCharging();
     const bool low = !charging && percent <= kPowerLowPercent;
+    const bool full = !charging && percent >= kPowerFullPercent;
 #elif BOARD_LOW_BATTERY_VIA_VDD
+    // On USB the regulator holds VDD at 3.3V whether the cell is charging,
+    // full or absent, and the charger's CHRG pin reaches only an LED, so
+    // charging and full are unknowable here (BOARDS.md).
     const int percent = -1;
     const bool charging = false;
+    const bool full = false;
     const bool low = supplyLow();
 #else
     // No battery sense of any kind: nothing to report.
     const int percent = -1;
     const bool charging = false;
+    const bool full = false;
     const bool low = false;
     return;
 #endif
     if (powerSent) {
-        const bool flipped = low != powerSentLow || charging != powerSentCharging;
+        const bool flipped =
+            low != powerSentLow || charging != powerSentCharging || full != powerSentFull;
         const bool moved = percent >= 0 && abs(percent - powerSentPercent) >= kPowerPercentStep;
         if (!flipped && !(moved && millis() - powerSentAt >= kPowerMinGapMs)) return;
     }
@@ -2019,6 +2036,7 @@ static void reportPower() {
     if (percent >= 0) {
         doc["percent"] = percent;
         doc["charging"] = charging;
+        doc["full"] = full;
     }
     String out;
     serializeJson(doc, out);
@@ -2029,6 +2047,7 @@ static void reportPower() {
     powerSentLow = low;
     powerSentPercent = percent;
     powerSentCharging = charging;
+    powerSentFull = full;
     powerSentAt = millis();
 }
 

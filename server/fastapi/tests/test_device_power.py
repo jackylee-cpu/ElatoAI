@@ -16,14 +16,39 @@ MAC = "AA:BB:CC:DD:EE:FF"
 def test_low_only_from_a_board_without_battery_sense():
     row = device_power.clean({"type": "power", "low": True})
     assert row["battery_low"] is True
+    # Not "not charging": the Spotpear board cannot tell, so unknown.
     assert row["battery_percent"] is None
     assert row["battery_charging"] is None
+    assert row["battery_full"] is None
     assert row["battery_at"]
 
 
 def test_percent_and_charging_from_a_board_with_battery_sense():
     row = device_power.clean({"type": "power", "low": False, "percent": 72, "charging": True})
     assert (row["battery_low"], row["battery_percent"], row["battery_charging"]) == (False, 72, True)
+    # Firmware up to 1.1.0 sends no "full".
+    assert row["battery_full"] is None
+
+
+def test_full_from_a_board_that_senses_it():
+    row = device_power.clean(
+        {"type": "power", "low": False, "percent": 98, "charging": False, "full": True}
+    )
+    assert (row["battery_charging"], row["battery_full"]) == (False, True)
+
+
+def test_charging_and_full_without_a_percentage():
+    # A board with only the charger's outputs wired (no cell divider).
+    row = device_power.clean({"type": "power", "low": False, "charging": True, "full": False})
+    assert row["battery_percent"] is None
+    assert (row["battery_charging"], row["battery_full"]) == (True, False)
+
+
+@pytest.mark.parametrize("value", [1, "true", None, 0])
+def test_non_bool_charging_and_full_are_unknown(value):
+    row = device_power.clean({"type": "power", "low": False, "charging": value, "full": value})
+    assert row["battery_charging"] is None
+    assert row["battery_full"] is None
 
 
 @pytest.mark.parametrize(
@@ -42,12 +67,19 @@ def test_malformed_low_is_dropped(message):
 def test_bad_percent_is_left_out(percent):
     row = device_power.clean({"type": "power", "low": False, "percent": percent, "charging": True})
     assert row["battery_percent"] is None
-    assert row["battery_charging"] is None
+    # The rest of the report still counts.
+    assert row["battery_charging"] is True
 
 
 def test_only_known_columns_are_written():
     row = device_power.clean({"type": "power", "low": False, "user_id": "someone-else", "mac_address": "x"})
-    assert set(row) == {"battery_low", "battery_percent", "battery_charging", "battery_at"}
+    assert set(row) == {
+        "battery_low",
+        "battery_percent",
+        "battery_charging",
+        "battery_full",
+        "battery_at",
+    }
 
 
 def test_other_messages_pass_through():
