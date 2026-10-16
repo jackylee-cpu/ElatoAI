@@ -14,7 +14,7 @@ import {
 import { clearDeviceMemory } from "@/db/memories";
 import { getSimpleUserById } from "@/db/users";
 import type { DeviceWifiState, WifiOp } from "@/lib/deviceWifi";
-import { relayDeviceWifi, wifiFailure } from "@/lib/deviceWifiRelay";
+import { readRecordedWifi, relayDeviceWifi, wifiFailure, withRecorded } from "@/lib/deviceWifiRelay";
 
 export async function deleteUserApiKey(userId: string) {
     const supabase = createClient();
@@ -282,7 +282,13 @@ export const deviceWifiAction = async (
     }
 
     // The server waits up to 20s for the board; a scan takes a few.
-    return relayDeviceWifi(device.mac_address, { op, ssid, password, fresh }, 25_000);
+    const result = await relayDeviceWifi(device.mac_address, { op, ssid, password, fresh }, 25_000);
+    // After a restart the voice server has nothing for a board that has not
+    // reconnected since; the recorded list stands in.
+    if ((op === "status" || op === "peek") && !result.status) {
+        return withRecorded(result, await readRecordedWifi(supabase, deviceId));
+    }
+    return result;
 };
 
 /**

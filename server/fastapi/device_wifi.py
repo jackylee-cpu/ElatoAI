@@ -15,21 +15,34 @@ once it is back. That is kept apart from the list, stamped with when it
 arrived, so the page can tell a fresh result from an old one.
 
 Passwords pass through and are never kept: not in the status cache, not in a
-log line, not in an exception message. Only network names are cached, in
-memory, and only so an offline board's page is not empty.
+log line, not in an exception message. Only network names are kept: in memory,
+and in the board's device_wifi row (record_device_wifi(), migration
+20261016120000), which the page reads directly so that a sleeping board's list
+survives a restart of this server.
+
+Firmware older than R-37 (cloud 1.0.1) neither reports nor answers. A board
+that has been connected for REPORT_GRACE_S without reporting is taken to be
+one, and requests to it fail at once as "unsupported" rather than after
+REQUEST_TIMEOUT_S.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+import aiohttp
 from fastapi import WebSocket
 from loguru import logger
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+WRITE_TIMEOUT_S = 5.0
 
 # How long a board gets to answer. A scan blocks the board's Wi-Fi task for a
 # few seconds and it may be mid-turn, so leave room.
@@ -41,6 +54,10 @@ REQUEST_TIMEOUT_S = 20.0
 # current; only the signal strength ages. A mid-turn board can take seconds to
 # answer, which a page opening should not wait for. "fresh" asks it anyway.
 STATUS_MAX_AGE_S = 60.0
+
+# R-37 firmware reports within a second or two of "auth"; its Wi-Fi task can be
+# busy with a reconnect for longer, so allow plenty before calling it old.
+REPORT_GRACE_S = 20.0
 
 # What a board reports, and the only fields copied out of its messages. Keeps a
 # misbehaving board from parking arbitrary data here.
@@ -57,9 +74,16 @@ class _Board:
     connected_at: float | None = None
     # How the last Wi-Fi switch ended, with "at": when the board reported it.
     last_switch: dict[str, Any] | None = None
+    # The last status written to the database, so an unchanged report is not
+    # written again.
+    recorded: dict[str, Any] | None = None
 
 
 _boards: dict[str, _Board] = {}
+# Holds the write tasks until they finish; the loop keeps only weak references.
+_tasks: set[asyncio.Task] = set()
+# One lock per board, so reports land in the order the board sent them.
+_locks: dict[str, asyncio.Lock] = {}
 
 
 def _key(mac: str | None) -> str:
@@ -153,6 +177,7 @@ def handle_device_message(mac: str | None, message: dict[str, Any]) -> bool:
     if any(name in message for name in _STATUS_FIELDS):
         board.status = _clean_status(message)
         board.status_at = time.time()
+        _record_later(key, board)
     switch = _clean_switch(message.get("last_switch"))
     if switch is not None:
         board.last_switch = {**switch, "at": time.time()}
@@ -167,6 +192,19 @@ def handle_device_message(mac: str | None, message: dict[str, Any]) -> bool:
     return True
 
 
+def _reports_wifi(board: _Board | None) -> bool | None:
+    """True when the board reported over its current connection, False when it
+    has been connected REPORT_GRACE_S without, None when it cannot be told yet
+    (asleep, or only just connected)."""
+    if board is None or not board.sockets or board.connected_at is None:
+        return None
+    if board.status_at is not None and board.status_at >= board.connected_at:
+        return True
+    if time.time() - board.connected_at >= REPORT_GRACE_S:
+        return False
+    return None
+
+
 def snapshot(mac: str | None) -> dict[str, Any]:
     """What the page shows: online or not, and the last list the board sent."""
     board = _boards.get(_key(mac))
@@ -175,7 +213,70 @@ def snapshot(mac: str | None) -> dict[str, Any]:
         "status": board.status if board else None,
         "status_at": board.status_at if board else None,
         "last_switch": board.last_switch if board else None,
+        "reports_wifi": _reports_wifi(board),
     }
+
+
+async def _record(mac: str, status: dict[str, Any]) -> bool:
+    """Write a report to the board's device_wifi row. True when Supabase took
+    it. Fails open: a lost write only means an older list on a sleeping
+    board's page."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        logger.debug("Supabase not configured, not recording Wi-Fi for {}", mac)
+        return False
+    current = status.get("current") or {}
+    args = {
+        "p_mac": mac,
+        # The table holds 1-32 bytes; "" would fail the whole write.
+        "p_current_ssid": current.get("ssid") or None,
+        "p_current_rssi": current.get("rssi"),
+        "p_saved": status.get("saved") or [],
+        "p_max_saved": status.get("max"),
+    }
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+    url = f"{SUPABASE_URL}/rest/v1/rpc/record_device_wifi"
+    try:
+        timeout = aiohttp.ClientTimeout(total=WRITE_TIMEOUT_S)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=args, headers=headers) as response:
+                if response.status != 200:
+                    body = (await response.text())[:200]
+                    logger.warning("Wi-Fi for {} not recorded: HTTP {} {}", mac, response.status, body)
+                    return False
+                if await response.json() is not True:
+                    logger.warning("Wi-Fi for {} not recorded: no board with that MAC", mac)
+                    return False
+    except Exception as exc:  # noqa: BLE001 - fail open on any transport error
+        logger.warning("Wi-Fi for {} not recorded: {}", mac, type(exc).__name__)
+        return False
+    return True
+
+
+async def _record_in_order(mac: str, board: _Board, status: dict[str, Any]) -> None:
+    async with _locks.setdefault(mac, asyncio.Lock()):
+        if status == board.recorded:
+            return
+        if await _record(mac, status):
+            board.recorded = status
+
+
+def _record_later(mac: str, board: _Board) -> None:
+    """Write the board's report in the background, if it changed: the socket
+    loop never waits on Supabase."""
+    status = board.status
+    if status is None or status == board.recorded:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # called outside a loop (tests); nothing to write with
+        return
+    task = loop.create_task(_record_in_order(mac, board, status))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
 
 
 def status_is_fresh(mac: str | None) -> bool:
@@ -213,6 +314,8 @@ async def request(mac: str | None, op: str, **fields: Any) -> dict[str, Any]:
     board = _boards.get(key)
     if board is None or not board.sockets:
         return {**snapshot(key), "ok": False, "error": "offline"}
+    if _reports_wifi(board) is False:
+        return {**snapshot(key), "ok": False, "error": "unsupported"}
 
     request_id = uuid.uuid4().hex[:12]
     future: asyncio.Future = asyncio.get_running_loop().create_future()

@@ -3,7 +3,7 @@ import { Metadata } from "next";
 import DeviceWifi from "@/app/components/Account/DeviceWifi";
 import { getUserDevice } from "@/db/devices";
 import { getOpenGraphMetadata } from "@/lib/utils";
-import { relayDeviceWifi } from "@/lib/deviceWifiRelay";
+import { readRecordedWifi, relayDeviceWifi, withRecorded } from "@/lib/deviceWifiRelay";
 import { createClient } from "@/utils/supabase/server";
 
 export const metadata: Metadata = {
@@ -33,18 +33,24 @@ export default async function DeviceWifiPage({
         notFound();
     }
 
-    // The voice server's last report from the board, so the page opens with
-    // the list on it; the page then checks with the board in the background.
-    // A peek never reaches the board, so it is only a local round trip; if the
-    // voice server is slow, the page opens without it rather than waiting.
-    const initial = device.mac_address
-        ? await relayDeviceWifi(device.mac_address, { op: "peek" }, 1500)
-        : null;
+    // The page opens with the board's last list on it and checks with the
+    // board in the background. Whether it is online comes from the voice
+    // server's memory (a peek never reaches the board, so it is only a local
+    // round trip; if that is slow the page opens without it); the list comes
+    // from there too, or else from the recorded row a sleeping board leaves.
+    const [peek, recorded] = await Promise.all([
+        device.mac_address
+            ? relayDeviceWifi(device.mac_address, { op: "peek" }, 1500)
+            : null,
+        readRecordedWifi(supabase, device.device_id),
+    ]);
+    const initial = peek ? withRecorded(peek, recorded) : null;
 
     return (
         <DeviceWifi
             deviceId={device.device_id}
-            initial={initial?.ok ? initial : null}
+            initial={initial && (initial.ok || initial.status) ? initial : null}
+            firmwareVersion={device.firmware_version}
         />
     );
 }

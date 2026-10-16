@@ -342,6 +342,7 @@ def test_presence_lists_known_boards_with_online_and_since():
     device_wifi.unregister(MAC, socket)
     assert device_wifi.presence()[MAC] == {
         "online": False, "status": None, "status_at": None, "last_switch": None,
+        "reports_wifi": None,
         "connected_at": None,
     }
 
@@ -365,3 +366,108 @@ def test_presence_endpoint_requires_token_and_returns_boards(client):
     assert response.status_code == 200
     assert body["ok"] is True
     assert body["devices"][MAC]["online"] is True
+
+
+async def test_old_firmware_is_refused_at_once_instead_of_timing_out():
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    assert device_wifi.snapshot(MAC)["reports_wifi"] is None  # just connected
+    device_wifi._boards[MAC].connected_at -= device_wifi.REPORT_GRACE_S + 1
+
+    result = await device_wifi.request(MAC, "status")
+    assert result["ok"] is False and result["error"] == "unsupported"
+    assert result["reports_wifi"] is False
+    assert socket.sent == []
+
+
+def test_a_report_on_this_connection_means_the_firmware_reports():
+    device_wifi.register(MAC, FakeSocket())
+    device_wifi._boards[MAC].connected_at -= device_wifi.REPORT_GRACE_S + 1
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    assert device_wifi.snapshot(MAC)["reports_wifi"] is True
+
+
+def test_an_asleep_board_cannot_be_judged():
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    assert device_wifi.snapshot(MAC)["reports_wifi"] is None
+
+
+async def test_reports_are_recorded_once_per_change(monkeypatch):
+    written: list[dict] = []
+
+    async def record(mac, status):
+        written.append(status)
+        return True
+
+    monkeypatch.setattr(device_wifi, "_record", record)
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    await asyncio.gather(*device_wifi._tasks)
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    await asyncio.gather(*device_wifi._tasks)
+    moved = {**STATUS, "current": {"ssid": "Phone", "rssi": -60}}
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **moved})
+    await asyncio.gather(*device_wifi._tasks)
+
+    assert [w["current"]["ssid"] for w in written] == ["Home", "Phone"]
+    assert all("password" not in json.dumps(w) for w in written)
+
+
+async def test_a_failed_write_is_tried_again_with_the_next_report(monkeypatch):
+    results = [False, True]
+    calls: list[str] = []
+
+    async def record(mac, status):
+        calls.append(mac)
+        return results.pop(0)
+
+    monkeypatch.setattr(device_wifi, "_record", record)
+    for _ in range(2):
+        device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+        await asyncio.gather(*device_wifi._tasks)
+    assert calls == [MAC, MAC]
+
+
+async def test_record_sends_names_to_the_rpc_and_reads_its_answer(monkeypatch):
+    sent: dict = {}
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def json(self):
+            return True
+
+        async def text(self):
+            return "true"
+
+    class Session:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def post(self, url, json, headers):
+            sent.update(url=url, json=json)
+            return Response()
+
+    monkeypatch.setattr(device_wifi, "SUPABASE_URL", "http://db")
+    monkeypatch.setattr(device_wifi, "SUPABASE_SERVICE_ROLE_KEY", "k")
+    monkeypatch.setattr(device_wifi.aiohttp, "ClientSession", Session)
+    assert await device_wifi._record(MAC, device_wifi._clean_status(STATUS)) is True
+    assert sent["url"] == "http://db/rest/v1/rpc/record_device_wifi"
+    assert sent["json"] == {
+        "p_mac": MAC,
+        "p_current_ssid": "Home",
+        "p_current_rssi": -48,
+        "p_saved": STATUS["saved"],
+        "p_max_saved": 8,
+    }

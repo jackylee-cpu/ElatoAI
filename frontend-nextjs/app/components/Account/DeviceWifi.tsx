@@ -17,6 +17,7 @@ import {
     WifiZero,
 } from "lucide-react";
 import { deviceWifiAction } from "@/app/actions";
+import { firmwareLacksWifi, mergeWifiState } from "@/lib/deviceWifi";
 import type { DeviceWifiState, WifiSwitchResult } from "@/lib/deviceWifi";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -48,6 +49,7 @@ const POLL_MS = 5000;
 
 const ERRORS: Record<string, string> = {
     offline: "AI Buddy is asleep. Wake it up and try again.",
+    unsupported: "AI Buddy needs a software update before its Wi-Fi can be changed here.",
     timeout: "AI Buddy didn't answer. Try again.",
     busy: "AI Buddy is busy with another change. Try again in a moment.",
     full: "AI Buddy can remember up to 8 Wi-Fi networks. Remove one first.",
@@ -91,10 +93,13 @@ function SignalIcon({ rssi, className }: { rssi: number | null | undefined; clas
 export default function DeviceWifi({
     deviceId,
     initial,
+    firmwareVersion,
 }: {
     deviceId: string;
     /** The voice server's last report, rendered with the page; null if it had none. */
     initial: DeviceWifiState | null;
+    /** What the board last told the OTA check; null if it never has. */
+    firmwareVersion: string | null;
 }) {
     const { toast } = useToast();
     const [state, setState] = useState<DeviceWifiState | null>(initial);
@@ -114,7 +119,7 @@ export default function DeviceWifi({
         const next = await deviceWifiAction(deviceId, op, undefined, undefined, fresh);
         // A status that failed for a passing reason keeps the last good list
         // on screen rather than blanking it.
-        setState((prev) => (next.status || !prev ? next : { ...prev, online: next.online }));
+        setState((prev) => mergeWifiState(prev, next));
         return next;
     }, [deviceId]);
 
@@ -147,7 +152,7 @@ export default function DeviceWifi({
         busyRef.current = true;
         try {
             const result = await work();
-            setState((prev) => (result.status || !prev ? result : { ...prev, online: result.online }));
+            setState((prev) => mergeWifiState(prev, result));
             if (result.ok) {
                 toast({ description: success });
             } else {
@@ -192,7 +197,7 @@ export default function DeviceWifi({
         busyRef.current = true;
         try {
             const result = await deviceWifiAction(deviceId, "switch", ssid);
-            setState((prev) => (result.status || !prev ? result : { ...prev, online: result.online }));
+            setState((prev) => mergeWifiState(prev, result));
             if (result.ok && result.switching) {
                 setSwitching({ ssid, since });
             } else {
@@ -211,6 +216,12 @@ export default function DeviceWifi({
     const max = status?.max ?? 8;
     const online = !!state?.online;
     const full = saved.length >= max;
+    // Firmware from before R-37 neither reports nor takes changes. Online, it
+    // shows by staying silent; asleep, by the version it gave the OTA check --
+    // unless it has reported since.
+    const outdated =
+        state?.reports_wifi === false ||
+        (state?.reports_wifi !== true && !status && firmwareLacksWifi(firmwareVersion));
 
     return (
         <div className="relative z-10 mx-auto flex h-full w-full max-w-lg flex-col px-4 pt-[max(0.75rem,env(safe-area-inset-top))] md:max-w-xl md:px-8 md:pt-8">
@@ -266,10 +277,29 @@ export default function DeviceWifi({
                             </span>
                         </div>
 
+                        {outdated && (
+                            <div
+                                role="alert"
+                                className="flex items-start gap-2 rounded-[16px] bg-[#FFECEC] px-4 py-3 text-sm text-gray-800"
+                            >
+                                <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-[#F25C5C]" />
+                                <span>
+                                    Please update AI Buddy&apos;s software first. This version
+                                    can&apos;t share or change its Wi-Fi from the app. AI Buddy
+                                    checks for an update each time it starts up, so turn it off
+                                    and on again.
+                                </span>
+                            </div>
+                        )}
+
                         {!status ? (
-                            <p className="px-1 text-sm text-gray-500">
-                                AI Buddy hasn&apos;t reported its Wi-Fi yet. It does each time it wakes up.
-                            </p>
+                            !outdated && (
+                                <p className="px-1 text-sm text-gray-500">
+                                    AI Buddy hasn&apos;t shared its Wi-Fi yet. It does each time it
+                                    wakes up. If this stays empty while it is awake, it needs a
+                                    software update.
+                                </p>
+                            )
                         ) : (
                             <>
                                 <section>
@@ -319,7 +349,7 @@ export default function DeviceWifi({
                                                         <button
                                                             type="button"
                                                             aria-label={`Use ${network.ssid}`}
-                                                            disabled={!online || busy || !!switching}
+                                                            disabled={!online || outdated || busy || !!switching}
                                                             onClick={() => setConfirmSwitch(network.ssid)}
                                                             className="flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-sm font-medium text-[#4C74F6] hover:bg-[#EEF3FF] disabled:opacity-40"
                                                         >
@@ -331,7 +361,7 @@ export default function DeviceWifi({
                                                         <button
                                                             type="button"
                                                             aria-label={`Remove ${network.ssid}`}
-                                                            disabled={!online || busy || !!switching}
+                                                            disabled={!online || outdated || busy || !!switching}
                                                             onClick={() => setRemoving(network.ssid)}
                                                             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-[#F25C5C] disabled:opacity-40"
                                                         >
@@ -343,7 +373,7 @@ export default function DeviceWifi({
                                         })}
                                         <button
                                             type="button"
-                                            disabled={!online || busy || full || !!switching}
+                                            disabled={!online || outdated || busy || full || !!switching}
                                             onClick={() => setAdding(true)}
                                             className={cn(rowClass, "w-full text-left hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent")}
                                         >
