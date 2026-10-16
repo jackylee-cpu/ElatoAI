@@ -1584,8 +1584,8 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             }
         }
 
-        // The volume was changed in the web app while connected: apply it now
-        // rather than on the next RESPONSE.COMPLETE, which also carries it.
+        // The volume was changed in the web app while connected
+        // (server/fastapi/device_volume.py).
         if (strcmp((char*)type.c_str(), "volume") == 0 && doc.containsKey("volume_control")) {
             applyRemoteVolume(doc["volume_control"].as<int>());
         }
@@ -1598,10 +1598,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             if (strcmp((char*)msg.c_str(), "RESPONSE.COMPLETE") == 0 || strcmp((char*)msg.c_str(), "RESPONSE.ERROR") == 0) {
                 Serial.println("Received RESPONSE.COMPLETE or RESPONSE.ERROR, starting listening again");
 
-                // The server adds this when the volume was changed in the web
-                // app mid-session (device_volume.py). It is the only route
-                // firmware without the "volume" message has, and there it set
-                // the plain stream alone.
+                // The server no longer sends this: it arrived after the answer
+                // had played and could undo a newer level (device_volume.py).
+                // Kept so an older server still works.
                 if (doc.containsKey("volume_control")) {
                     applyRemoteVolume(doc["volume_control"].as<int>());
                 }
@@ -1696,11 +1695,14 @@ volatile bool websocketPaused = false;
 
 // The server takes the device's identity from the token alone; the MAC rides
 // along only so a refused connection says in the server log who it claimed to
-// be.
+// be. X-Firmware-Version tells the server this board handles the "volume"
+// message; 1.0.1 sends none and gets its level in a second auth frame instead
+// (server/fastapi/device_volume.py).
 String websocketExtraHeaders()
 {
     return "Authorization: Bearer " + authTokenGlobal + "\r\n" +
            "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
+           "X-Firmware-Version: " FIRMWARE_VERSION "\r\n" +
            "X-Device-Mac: " + WiFi.macAddress()
 #if MIC_UPLINK_ADPCM
            + "\r\nX-Mic-Codec: ima-adpcm"

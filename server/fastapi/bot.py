@@ -12,7 +12,7 @@ import asyncio
 import os
 import time
 import uuid
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from app_settings import fetch_voice_settings
 from models.stt.finalize import STTFinalizeFrame
@@ -425,10 +425,8 @@ class RealtimeOutputControlProcessor(FrameProcessor):
         self,
         transcript_state: TranscriptSessionState | None = None,
         mute_stt_while_speaking: bool = True,
-        take_volume_update: Callable[[], int | None] | None = None,
     ):
         super().__init__()
-        self._take_volume_update = take_volume_update
         self._response_started = False
         self._completed_for_turn = False
         self._bot_turn_active = False
@@ -457,12 +455,6 @@ class RealtimeOutputControlProcessor(FrameProcessor):
         message = {"type": "server", "msg": "RESPONSE.COMPLETE"}
         if bot_item_id:
             message["item_id"] = bot_item_id
-        # A volume changed in the web app mid-session (device_volume.py). Every
-        # shipped firmware applies volume_control from this frame.
-        if self._take_volume_update is not None:
-            volume = self._take_volume_update()
-            if volume is not None:
-                message["volume_control"] = volume
         # An interruption flushes the output transport queue, so the completion
         # has to go out urgently or the client never learns the turn ended.
         frame_cls = OutputTransportMessageUrgentFrame if urgent else OutputTransportMessageFrame
@@ -616,7 +608,6 @@ async def run_bot_session(
     ip=None,
     mode_key: str | None = None,
     style_key: str | None = None,
-    take_volume_update: Callable[[], int | None] | None = None,
 ):
     voice_route = CURRENT_VOICE_ROUTE
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
@@ -697,7 +688,6 @@ async def run_bot_session(
                 # catch the first word. The ESP32 is half-duplex and still needs
                 # the mute to clear its end_of_speech latch.
                 mute_stt_while_speaking=transport_kind == "esp32",
-                take_volume_update=take_volume_update,
             )
         )
     processors.append(transport.output())
