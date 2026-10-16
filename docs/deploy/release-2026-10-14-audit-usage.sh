@@ -56,6 +56,12 @@
 #     says so (X-Mic-Codec); boards that do not say so are PCM, as before.
 #   - firmware for R-36, R-37 (switch Wi-Fi), P2-24 and P2-25 is not part of
 #     this script: it goes out by OTA from the OTA page afterwards.
+#   - P2-20: the OTA page uploads a ~1.6MB image to the web app, and nginx
+#     refuses any body over its 1MB default with 413. Only the /supabase-api/
+#     locations were raised (16m, 2026-10-09). Step 3c adds
+#     $NGINX_CONF_DIR/00-upload-limit.conf, which sets 16m for the whole http
+#     block, checks it with nginx -t and reloads; a location that sets its own
+#     limit still wins, so 3c and step 5 send a real 2MB POST.
 #
 # Before running, on the dev Mac:
 #   1. the release commit is pushed:   git push mygithub dev:main
@@ -85,7 +91,8 @@
 # what we want; nothing needs dropping. The old web app reads only is_current
 # from firmware_releases, so it offers the current release to every board, as
 # it did. Step 3 backs up .env.production before adding to it; the old image
-# ignores the added variables.
+# ignores the added variables. Step 3c's limit is harmless to the old code;
+# to undo it, delete 00-upload-limit.conf and `docker exec nginx nginx -s reload`.
 set -euo pipefail
 
 RELEASE="${RELEASE:?set RELEASE to the short sha pushed to mygithub/main}"
@@ -95,6 +102,8 @@ DB="${DB:-supabase-db}"
 FASTAPI_DIR="$REPO/server/fastapi"
 FRONTEND_DIR="$REPO/frontend-nextjs"
 SITE="${SITE:-https://elatoai.hkqft.com}"
+NGINX="${NGINX:-nginx}"                          # the host nginx container
+NGINX_CONF_DIR="${NGINX_CONF_DIR:-$HOME/nginx/conf.d}"
 BACKUP_DIR="${BACKUP_DIR:-$HOME/backups}"
 STEP="${STEP:-0}"
 LAST="${LAST:-5}"
@@ -162,6 +171,13 @@ runs_release() {   # runs_release <container id> <image name>
     [ -n "$1" ] && [ "$(docker inspect -f '{{.Image}}' "$1")" = \
         "$(docker image inspect -f '{{.Id}}' "ghcr.io/jackylee-cpu/aibuddy/$2:$RELEASE" 2>/dev/null)" ]
 }
+# A 2MB POST to the OTA page's upload route, signed out: the web app refuses
+# it (401/403), but only nginx answers 413, so anything else means the body
+# got through.
+upload_status() {
+    head -c 2097152 /dev/zero | curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H 'Content-Type: application/octet-stream' --data-binary @- "$SITE/api/admin/firmware" || true
+}
 web_is_new() {
     runs_release "$(frontend_container)" frontend \
         && [ "$(curl -s -o /dev/null -w '%{http_code}' "$SITE/login")" = "200" ]
@@ -174,6 +190,8 @@ if step 0; then
         [ -f "$f" ] || { echo "missing $f -- set REPO=..."; exit 1; }
     done
     docker ps --format '{{.Names}}' | grep -qx "$DB" || { echo "no container $DB -- set DB=..."; exit 1; }
+    docker ps --format '{{.Names}}' | grep -qx "$NGINX" || { echo "no container $NGINX -- set NGINX=..."; exit 1; }
+    [ -d "$NGINX_CONF_DIR" ] || { echo "no $NGINX_CONF_DIR -- set NGINX_CONF_DIR=..."; exit 1; }
     docker network inspect aibuddy-internal >/dev/null 2>&1 \
         || { echo "network aibuddy-internal missing -- wrong host?"; exit 1; }
     for d in "$FASTAPI_DIR" "$FRONTEND_DIR"; do
@@ -274,6 +292,32 @@ if step 3; then
         "P2-22: sent to boards with their token. Today's firmware ignores it."
     [ ! -f "$envf.bak-$STAMP" ] || echo "  backup: $envf.bak-$STAMP"
     unset envf host
+
+    say "3c. nginx upload limit (P2-20: firmware images are ~1.6MB)"
+    conf="$NGINX_CONF_DIR/00-upload-limit.conf"
+    want="# P2-20, release 2026-10-14: the admin OTA page uploads firmware images
+# (~1.6MB) to the web app. nginx's default is 1m. http-level, so a location
+# that sets its own client_max_body_size keeps it.
+client_max_body_size 16m;"
+    if [ -f "$conf" ] && [ "$(cat "$conf")" = "$want" ]; then
+        echo "  $conf already in place"
+    else
+        printf '%s\n' "$want" > "$conf" || { echo "  cannot write $conf"; exit 1; }
+        # A file nginx reads outside the http block must not stay behind.
+        if ! out="$(docker exec "$NGINX" nginx -t 2>&1)"; then
+            rm -f "$conf"; echo "  nginx -t failed with $conf; removed it:"
+            echo "$out"; exit 1
+        fi
+        docker exec "$NGINX" nginx -s reload
+        sleep 2
+        echo "  added $conf and reloaded nginx"
+    fi
+    c="$(upload_status)"
+    [ "$c" != "413" ] && [ "$c" != "000" ] \
+        || { echo "  2MB POST to $SITE/api/admin/firmware still -> $c: either nginx does not read $NGINX_CONF_DIR"
+             echo "  (set NGINX_CONF_DIR=...) or a server/location block sets a lower client_max_body_size"; exit 1; }
+    echo "  2MB POST to /api/admin/firmware -> $c (not 413)"
+    unset conf want c out
 fi
 
 if step 4; then
@@ -424,6 +468,9 @@ SQL
     fi
     [ "$(q "select count(*) from storage.buckets where id = 'firmware' and not public")" = "1" ] \
         && ok "private firmware bucket exists (OTA page uploads go there)" || bad "no private 'firmware' storage bucket"
+    c="$(upload_status)"
+    [ "$c" != "413" ] && [ "$c" != "000" ] && ok "2MB POST to /api/admin/firmware -> $c (nginx lets firmware uploads through)" \
+        || bad "2MB POST to /api/admin/firmware -> $c (step 3c)"
     c="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$SITE/api/device_bind_ticket" || true)"
     [ "$c" = "401" ] && ok "signed out POST /api/device_bind_ticket -> 401" || bad "signed out POST /api/device_bind_ticket -> $c"
     for v in DEVICE_CLAIM_LIST DEVICE_VOICE_URL DEVICE_BACKEND_URL; do
