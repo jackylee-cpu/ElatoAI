@@ -424,7 +424,7 @@ def create_app() -> FastAPI:
             mac_address,
             websocket.headers.get("x-wifi-rssi", "unknown"),
             "adpcm" if mic_is_adpcm else "pcm",
-            websocket.state.firmware_version or "<=1.0.1",
+            websocket.state.firmware_version or "none (1.0.1 or older)",
         )
         # The device has no query string to carry a character on, so resolve the
         # one assigned to it in Supabase. This fails open to the defaults.
@@ -500,9 +500,6 @@ def create_app() -> FastAPI:
                 ip=personality.ip,
                 mode_key=personality.mode_key,
                 style_key=personality.style_key,
-                take_volume_update=(
-                    (lambda: device_volume.take(session_key)) if session_key else None
-                ),
             )
         finally:
             # Draining pending writes and summarising the last stretch hang off
@@ -520,8 +517,6 @@ def create_app() -> FastAPI:
                     _esp32_sessions[session_key].discard(websocket)
                     if not _esp32_sessions[session_key]:
                         del _esp32_sessions[session_key]
-                        # The next connect's auth frame carries it anyway.
-                        device_volume.take(session_key)
 
     @app.post("/internal/device_refresh")
     async def device_refresh(
@@ -582,7 +577,6 @@ def create_app() -> FastAPI:
         if not sockets:
             return {"ok": True, "sent": 0}
 
-        device_volume.set_pending(mac, volume)
         sent = 0
         for socket in sockets:
             firmware = getattr(getattr(socket, "state", None), "firmware_version", None)
@@ -600,7 +594,7 @@ def create_app() -> FastAPI:
                 "Device volume for {} set to {} (firmware {}): sent {}",
                 mac,
                 volume,
-                firmware or "<=1.0.1",
+                firmware or "none (1.0.1 or older)",
                 "+".join(frame["type"] for frame in frames),
             )
         return {"ok": True, "sent": sent}

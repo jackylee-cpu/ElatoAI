@@ -12,33 +12,24 @@ and the level reaches the board at once:
   other effect that matters on a live session (pitch is re-applied, OTA and
   reset are false, the OTA "server reached" mark is idempotent). Only when the
   pitch factor is 1.0, though: any other value re-runs pitchShift.begin() on the
-  network task while the audio task may be inside it.
+  network task while the audio task may be inside it. As on every reconnect, a
+  level set with the board's buttons wins over it there.
 
-volume_control also goes on the session's next RESPONSE.COMPLETE, which every
-shipped firmware applies. That used to be the only route to 1.0.1 boards, and it
-arrives after the whole of the next answer has played -- so the answer after
-that was the first one at the new level. It stays as the fallback for a re-auth
-that 1.0.1 ignores (a level set with the board's buttons wins there) or one that
-could not be sent.
+Measured on 62:70 running 1.0.1, 2026-10-16: applied 52ms after the request,
+mid-answer.
 
-State is in-process, like the session registry it sits next to.
+This used to go out as volume_control on the session's next RESPONSE.COMPLETE,
+which every shipped firmware applies, and that was the only route to 1.0.1.
+It is gone, not kept as a fallback: the value is picked when the TTS finishes
+but reaches the board only after the answer has played, so the whole next
+answer was at the old level -- and a change made in that window was undone by
+the older value arriving after it. A pending value also outlived its session
+when a rebooted board reconnected before the old socket was cleaned up.
 """
 
 from __future__ import annotations
 
 FIRMWARE_HEADER = "x-firmware-version"
-
-# Uppercased MAC -> the level still to go out on that board's next
-# RESPONSE.COMPLETE. Taken, not read: each change goes out once.
-_pending: dict[str, int] = {}
-
-
-def set_pending(mac: str, volume: int) -> None:
-    _pending[mac] = volume
-
-
-def take(mac: str) -> int | None:
-    return _pending.pop(mac, None)
 
 
 def live_frame(volume: int) -> dict:

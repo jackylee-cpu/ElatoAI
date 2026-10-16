@@ -1584,8 +1584,8 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             }
         }
 
-        // The volume was changed in the web app while connected: apply it now
-        // rather than on the next RESPONSE.COMPLETE, which also carries it.
+        // The volume was changed in the web app while connected
+        // (server/fastapi/device_volume.py).
         if (strcmp((char*)type.c_str(), "volume") == 0 && doc.containsKey("volume_control")) {
             applyRemoteVolume(doc["volume_control"].as<int>());
         }
@@ -1598,10 +1598,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             if (strcmp((char*)msg.c_str(), "RESPONSE.COMPLETE") == 0 || strcmp((char*)msg.c_str(), "RESPONSE.ERROR") == 0) {
                 Serial.println("Received RESPONSE.COMPLETE or RESPONSE.ERROR, starting listening again");
 
-                // The server adds this when the volume was changed in the web
-                // app mid-session (device_volume.py). It is the only route
-                // firmware without the "volume" message has, and there it set
-                // the plain stream alone.
+                // The server no longer sends this: it arrived after the answer
+                // had played and could undo a newer level (device_volume.py).
+                // Kept so an older server still works.
                 if (doc.containsKey("volume_control")) {
                     applyRemoteVolume(doc["volume_control"].as<int>());
                 }

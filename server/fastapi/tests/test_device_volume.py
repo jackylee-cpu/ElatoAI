@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import device_volume  # noqa: E402
 from bot import RealtimeOutputControlProcessor  # noqa: E402
 
 MAC = "AA:BB:CC:DD:EE:FF"
@@ -25,13 +24,6 @@ class FakeSocket:
         if self.fail:
             raise RuntimeError("socket closed")
         self.sent.append(json.loads(text))
-
-
-@pytest.fixture(autouse=True)
-def clean_pending():
-    device_volume._pending.clear()
-    yield
-    device_volume._pending.clear()
 
 
 @pytest.fixture
@@ -73,13 +65,12 @@ def test_validates(client, body):
     assert post(client, body).status_code == 400
 
 
-def test_offline_board_is_a_success_and_leaves_nothing_pending(client):
+def test_offline_board_is_a_success(client):
     response = post(client, {"mac": MAC, "volume": 30})
     assert response.json() == {"ok": True, "sent": 0}
-    assert device_volume.take(MAC) is None
 
 
-def test_connected_board_gets_the_level_now_and_on_the_next_answer(client, server_module):
+def test_connected_board_gets_the_level_now(client, server_module):
     socket = FakeSocket(firmware_version="1.0.2")
     server_module._esp32_sessions[MAC].add(socket)
 
@@ -87,7 +78,6 @@ def test_connected_board_gets_the_level_now_and_on_the_next_answer(client, serve
 
     assert response.json() == {"ok": True, "sent": 1}
     assert socket.sent == [{"type": "volume", "volume_control": 30}]
-    assert device_volume.take(MAC) == 30
 
 
 def test_firmware_1_0_1_also_gets_a_reauth_it_applies_at_once(client, server_module, monkeypatch):
@@ -110,7 +100,6 @@ def test_firmware_1_0_1_also_gets_a_reauth_it_applies_at_once(client, server_mod
             "is_reset": False,
         },
     ]
-    assert device_volume.take(MAC) == 30
 
 
 def test_no_reauth_when_it_would_restart_the_pitch_shifter(client, server_module, monkeypatch):
@@ -121,7 +110,6 @@ def test_no_reauth_when_it_would_restart_the_pitch_shifter(client, server_module
     post(client, {"mac": MAC, "volume": 30})
 
     assert socket.sent == [{"type": "volume", "volume_control": 30}]
-    assert device_volume.take(MAC) == 30
 
 
 def test_a_dead_socket_does_not_fail_the_request(client, server_module):
@@ -131,27 +119,16 @@ def test_a_dead_socket_does_not_fail_the_request(client, server_module):
     assert response.json()["sent"] == 0
 
 
-async def finish(processor) -> dict:
+async def test_response_complete_carries_no_volume():
+    # It used to, and arrived after the answer had played: a level changed in
+    # the meantime was undone by the older one (device_volume.py).
     pushed = []
 
     async def capture(frame, direction=None):
         pushed.append(frame)
 
+    processor = RealtimeOutputControlProcessor(mute_stt_while_speaking=False)
     processor.push_frame = capture
-    processor._completed_for_turn = False
     await processor._finish_response("test")
-    return pushed[-1].message
 
-
-async def test_response_complete_carries_a_pending_volume_once():
-    device_volume.set_pending(MAC, 40)
-    processor = RealtimeOutputControlProcessor(
-        mute_stt_while_speaking=False,
-        take_volume_update=lambda: device_volume.take(MAC),
-    )
-
-    first = await finish(processor)
-    second = await finish(processor)
-
-    assert first == {"type": "server", "msg": "RESPONSE.COMPLETE", "volume_control": 40}
-    assert second == {"type": "server", "msg": "RESPONSE.COMPLETE"}
+    assert pushed[-1].message == {"type": "server", "msg": "RESPONSE.COMPLETE"}
