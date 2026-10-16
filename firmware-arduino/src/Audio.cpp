@@ -1111,6 +1111,12 @@ void audioStreamTask(void *parameter) {
                     playAssetSound(prompt);
                 }
             }
+            // 「系統更新中，請稍候。」 as an OTA install starts (OTA.cpp). No
+            // websocket is open yet, so nothing else can be playing.
+            if (deviceState == OTA && otaTakeUpdatePrompt()) {
+                playOtaUpdatePrompt();
+                otaUpdatePromptDone();
+            }
             // Always read: BufferPrint writes with portMAX_DELAY, so a producer
             // that filled the ring stays blocked until something drains it.
             drainAudioBuffer();

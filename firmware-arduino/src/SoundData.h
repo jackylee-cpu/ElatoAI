@@ -23,4 +23,9 @@ extern const int16_t kLowBatterySoundPcm[];
 extern const unsigned kLowBatterySoundFrames;
 extern const int kLowBatterySoundRate;
 
+// Spoken when an OTA install starts: 「系統更新中，請稍候。」
+extern const int16_t kOtaUpdateSoundPcm[];
+extern const unsigned kOtaUpdateSoundFrames;
+extern const int kOtaUpdateSoundRate;
+
 #endif

@@ -26,6 +26,10 @@ void playSleepChime();
 // length of the sound and off again.
 void playLowBatteryReminder();
 
+// 「系統更新中，請稍候。」, about 2.3s, as an OTA install starts (OTA.cpp asks
+// for it; see otaTakeUpdatePrompt()). Same rules as the low-battery reminder.
+void playOtaUpdatePrompt();
+
 // A sound from the assets partition by name (P2-12), e.g. "wifi_ok". Same
 // rules as the low-battery reminder: audioStreamTask only, nothing else
 // playing. False, and silent, when the board has no such sound.

@@ -38,6 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULTS = {
     "boot": ("assets/boot-sound.wav", 16000),
     "low_battery": ("assets/low-battery.wav", 16000),
+    "ota_update": ("assets/ota-update.wav", 16000),
     "wifi_setup": ("assets/wifi/wifi_setup.wav", 16000),
     "wifi_phone": ("assets/wifi/wifi_phone.wav", 16000),
     "wifi_try": ("assets/wifi/wifi_try.wav", 16000),

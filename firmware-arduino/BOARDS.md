@@ -455,9 +455,12 @@ factory image freezes for good -- OTA can replace the app, never the table:
 
 The assets pack is per brand and is not part of the app upload: flash it with
 `esptool.py write_flash 0x810000`. A missing or corrupt pack is reported at
-boot (`Assets: none (...)`) and the board falls back to its built-in boot and
-low-battery sounds; the Wi-Fi prompts exist only in the pack. Do not embed
-sounds in the app instead: on 2026-10-14 seven prompts pushed the image to
+boot (`Assets: none (...)`) and the board falls back to its built-in boot,
+low-battery and OTA-update sounds; the Wi-Fi prompts exist only in the pack.
+The update prompt (「系統更新中，請稍候。」, 73KB) is built in on purpose: the
+boards already in the field have the old table and no pack, and it is the
+running image, not the new one, that speaks it. Do not embed further sounds in
+the app: on 2026-10-14 seven prompts pushed the image to
 2,147,728 bytes on the old 2MB slot and the board boot-looped silently, while
 pio still printed "Flash 99%" and SUCCESS. `release_firmware.py` now refuses
 an image larger than the build's app slot.

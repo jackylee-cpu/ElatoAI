@@ -11,10 +11,11 @@ embedding the source as-is.
     python3 tools/wav_to_sound.py boot  assets/boot-sound.wav
     python3 tools/wav_to_sound.py sleep assets/sleep-sound.wav
     python3 tools/wav_to_sound.py lowbattery assets/low-battery.wav
+    python3 tools/wav_to_sound.py otaupdate assets/ota-update.wav
 
-Writes src/BootSoundData.cpp / src/SleepSoundData.cpp / src/LowBatterySoundData.cpp. Re-run whenever a source
-WAV changes; the generated files are committed, so a normal build needs neither
-Python nor the WAVs.
+Writes src/BootSoundData.cpp / src/SleepSoundData.cpp / src/LowBatterySoundData.cpp /
+src/OtaUpdateSoundData.cpp. Re-run whenever a source WAV changes; the generated
+files are committed, so a normal build needs neither Python nor the WAVs.
 """
 
 import argparse
@@ -34,6 +35,7 @@ SOUNDS = {
     "sleep": dict(rate=24000, symbol="kSleepSound", out="SleepSoundData.cpp"),
     # Speech: 16 kHz keeps it intelligible at a third less flash than 24 kHz.
     "lowbattery": dict(rate=16000, symbol="kLowBatterySound", out="LowBatterySoundData.cpp"),
+    "otaupdate": dict(rate=16000, symbol="kOtaUpdateSound", out="OtaUpdateSoundData.cpp"),
 }
 
 # Where to cut the reverb tail, relative to the loudest sample. The tail decays

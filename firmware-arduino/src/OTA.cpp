@@ -370,6 +370,36 @@ void otaTakeAnswer(JsonVariantConst ota) {
     }
 }
 
+// The spoken "updating" prompt. Only audioStreamTask may play through the
+// output port, so the install asks for it here and waits for that task.
+static volatile bool updatePromptWanted = false;
+static volatile bool updatePromptDone = false;
+// The boot chime (~2.8s) can still be playing when the token answer arrives,
+// and the prompt queues behind it. Past this the download starts regardless:
+// a board that cannot speak must still update.
+static const uint32_t OTA_PROMPT_WAIT_MS = 7000;
+
+bool otaTakeUpdatePrompt() {
+    if (!updatePromptWanted) return false;
+    updatePromptWanted = false;
+    return true;
+}
+
+void otaUpdatePromptDone() { updatePromptDone = true; }
+
+static void speakUpdatePrompt() {
+    updatePromptDone = false;
+    updatePromptWanted = true;
+    const uint32_t start = millis();
+    while (!updatePromptDone && millis() - start < OTA_PROMPT_WAIT_MS) {
+        delay(20);
+    }
+    if (!updatePromptDone) {
+        updatePromptWanted = false;
+        Serial.println("[OTA] Update prompt not played in time, installing anyway");
+    }
+}
+
 void otaCheckAndUpdate() {
     if (!offer.offered) {
         Serial.println(checkedThisBoot ? "[OTA] Up to date" : "[OTA] No update answer this boot");
@@ -389,6 +419,9 @@ void otaCheckAndUpdate() {
     Serial.printf("[OTA] Installing %s (%u bytes)\n", offer.version.c_str(), (unsigned)offer.size);
     const DeviceState before = deviceState;
     deviceState = OTA;
+    // Before the download, not over it: the C3 is single-core, and the TLS
+    // handshake and the flash writes are what the install must not starve.
+    speakUpdatePrompt();
     if (!installImage(offer.path, offer.size, offer.sha256)) {
         deviceState = before;
         return;

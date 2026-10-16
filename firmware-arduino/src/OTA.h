@@ -30,6 +30,13 @@ bool otaCheckedThisBoot();
 // or the install failed; a successful install restarts the board.
 void otaCheckAndUpdate();
 
+// audioStreamTask only, from its idle branch: true once when an install has
+// asked for the spoken "updating" prompt. Call otaUpdatePromptDone() after
+// playing it; the install waits for that (up to a few seconds) before it
+// starts the download.
+bool otaTakeUpdatePrompt();
+void otaUpdatePromptDone();
+
 // Whether this image is still on probation (not yet confirmed).
 bool otaOnProbation();
 

@@ -206,6 +206,16 @@ void playLowBatteryReminder() {
     boardSetSpeakerAmp(false);
 }
 
+void playOtaUpdatePrompt() {
+    AssetSound s = pickSound("ota_update", kOtaUpdateSoundPcm, kOtaUpdateSoundFrames,
+                             kOtaUpdateSoundRate);
+    Serial.printf("Chime: OTA update (%s), %u frames @ %d Hz -> %u Hz on the open port\n",
+                  s.name ? "assets" : "built-in", s.frames, s.rate, (unsigned)SAMPLE_RATE);
+    boardSetSpeakerAmp(true);
+    playResampledOnOpenPort(s.pcm, s.frames, s.rate);
+    boardSetSpeakerAmp(false);
+}
+
 void playSleepChime() {
     Serial.printf("Chime: sleep, %u frames @ %d Hz\n", kSleepSoundFrames, kSleepSoundRate);
     playSample(kSleepSoundPcm, kSleepSoundFrames, kSleepSoundRate);
