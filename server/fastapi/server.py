@@ -416,12 +416,15 @@ def create_app() -> FastAPI:
             return
         mac_address = device.mac
         mic_is_adpcm = mic_adpcm.uses_adpcm(websocket.headers.get(mic_adpcm.CODEC_HEADER))
+        # Absent on 1.0.1 and earlier, which is what device_volume needs to know.
+        websocket.state.firmware_version = websocket.headers.get(device_volume.FIRMWARE_HEADER)
         logger.info(
-            "ESP32 websocket connected: device={} mac={} rssi={} mic={}",
+            "ESP32 websocket connected: device={} mac={} rssi={} mic={} firmware={}",
             device.device_id,
             mac_address,
             websocket.headers.get("x-wifi-rssi", "unknown"),
             "adpcm" if mic_is_adpcm else "pcm",
+            websocket.state.firmware_version or "<=1.0.1",
         )
         # The device has no query string to carry a character on, so resolve the
         # one assigned to it in Supabase. This fails open to the defaults.
@@ -582,13 +585,24 @@ def create_app() -> FastAPI:
         device_volume.set_pending(mac, volume)
         sent = 0
         for socket in sockets:
+            firmware = getattr(getattr(socket, "state", None), "firmware_version", None)
+            frames = device_volume.live_frames(
+                volume, firmware, create_esp32_auth_message(volume=volume)
+            )
             try:
-                await socket.send_text(json.dumps(device_volume.live_frame(volume)))
+                for frame in frames:
+                    await socket.send_text(json.dumps(frame))
                 sent += 1
             except Exception as exc:  # noqa: BLE001 - a dying socket is fine
                 logger.warning("Failed to send volume to {}: {}", mac, exc)
-
-        logger.info("Device volume for {} set to {} on {} session(s)", mac, volume, sent)
+                continue
+            logger.info(
+                "Device volume for {} set to {} (firmware {}): sent {}",
+                mac,
+                volume,
+                firmware or "<=1.0.1",
+                "+".join(frame["type"] for frame in frames),
+            )
         return {"ok": True, "sent": sent}
 
     @app.post("/internal/device_wifi")

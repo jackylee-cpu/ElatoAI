@@ -1696,11 +1696,14 @@ volatile bool websocketPaused = false;
 
 // The server takes the device's identity from the token alone; the MAC rides
 // along only so a refused connection says in the server log who it claimed to
-// be.
+// be. X-Firmware-Version tells the server this board handles the "volume"
+// message; 1.0.1 sends none and gets its level in a second auth frame instead
+// (server/fastapi/device_volume.py).
 String websocketExtraHeaders()
 {
     return "Authorization: Bearer " + authTokenGlobal + "\r\n" +
            "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
+           "X-Firmware-Version: " FIRMWARE_VERSION "\r\n" +
            "X-Device-Mac: " + WiFi.macAddress()
 #if MIC_UPLINK_ADPCM
            + "\r\nX-Mic-Codec: ima-adpcm"

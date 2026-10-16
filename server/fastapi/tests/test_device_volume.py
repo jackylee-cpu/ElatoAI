@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,9 +16,10 @@ MAC = "AA:BB:CC:DD:EE:FF"
 
 
 class FakeSocket:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, firmware_version=None):
         self.sent: list[dict] = []
         self.fail = fail
+        self.state = SimpleNamespace(firmware_version=firmware_version)
 
     async def send_text(self, text):
         if self.fail:
@@ -78,12 +80,46 @@ def test_offline_board_is_a_success_and_leaves_nothing_pending(client):
 
 
 def test_connected_board_gets_the_level_now_and_on_the_next_answer(client, server_module):
-    socket = FakeSocket()
+    socket = FakeSocket(firmware_version="1.0.2")
     server_module._esp32_sessions[MAC].add(socket)
 
     response = post(client, {"mac": MAC.lower(), "volume": 30})
 
     assert response.json() == {"ok": True, "sent": 1}
+    assert socket.sent == [{"type": "volume", "volume_control": 30}]
+    assert device_volume.take(MAC) == 30
+
+
+def test_firmware_1_0_1_also_gets_a_reauth_it_applies_at_once(client, server_module, monkeypatch):
+    # 1.0.1 sends no X-Firmware-Version and ignores {"type": "volume"}; without
+    # the auth frame it heard the level only after the next answer had played.
+    monkeypatch.delenv("ESP32_DEFAULT_PITCH_FACTOR", raising=False)
+    socket = FakeSocket()
+    server_module._esp32_sessions[MAC].add(socket)
+
+    response = post(client, {"mac": MAC, "volume": 30})
+
+    assert response.json() == {"ok": True, "sent": 1}
+    assert socket.sent == [
+        {"type": "volume", "volume_control": 30},
+        {
+            "type": "auth",
+            "volume_control": 30,
+            "pitch_factor": 1.0,
+            "is_ota": False,
+            "is_reset": False,
+        },
+    ]
+    assert device_volume.take(MAC) == 30
+
+
+def test_no_reauth_when_it_would_restart_the_pitch_shifter(client, server_module, monkeypatch):
+    monkeypatch.setenv("ESP32_DEFAULT_PITCH_FACTOR", "1.2")
+    socket = FakeSocket()
+    server_module._esp32_sessions[MAC].add(socket)
+
+    post(client, {"mac": MAC, "volume": 30})
+
     assert socket.sent == [{"type": "volume", "volume_control": 30}]
     assert device_volume.take(MAC) == 30
 
