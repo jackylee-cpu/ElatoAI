@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { updateUser } from "@/db/users";
 import { refreshDeviceSession } from "@/app/actions";
@@ -47,6 +48,7 @@ const Playground: React.FC<PlaygroundProps> = ({
     isAdmin = false,
 }) => {
     const supabase = createClient();
+    const router = useRouter();
 
     const [personalityIdState, setPersonalityIdState] = useState<string>(
         currentUser.personality!.personality_id ?? defaultPersonalityId
@@ -107,7 +109,7 @@ const Playground: React.FC<PlaygroundProps> = ({
             supabase,
             { personality_id: fallback.personality_id },
             currentUser.user_id
-        );
+        ).then(() => router.refresh());
         // Once, for what the page loaded with.
     }, []);
 
@@ -122,6 +124,9 @@ const Playground: React.FC<PlaygroundProps> = ({
             },
             currentUser.user_id
         );
+        // The tabs are prefetched for 5 minutes (PlaygroundBottomNav); without
+        // this, Me and a return to this page would show the old character.
+        router.refresh();
         // The device reads its character when a session starts, so drop the
         // current one -- it reconnects about a second later as the new
         // character. Best effort: if this fails the change still lands the next

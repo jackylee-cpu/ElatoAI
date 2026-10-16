@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { updateUser } from "@/db/users";
 import { useToast } from "@/components/ui/use-toast";
@@ -54,6 +55,7 @@ export default function MyInfoForm({
     allRegions,
 }: MyInfoFormProps) {
     const supabase = createClient();
+    const router = useRouter();
     const { toast } = useToast();
     const [name, setName] = useState(selectedUser.supervisee_name ?? "");
     const [age, setAge] = useState(
@@ -102,6 +104,9 @@ export default function MyInfoForm({
         );
         toast({ description: "Your preferences have been saved!" });
         setSaving(false);
+        // Drop the prefetched tabs (PlaygroundBottomNav) so they show the
+        // new details.
+        router.refresh();
     };
 
     return (

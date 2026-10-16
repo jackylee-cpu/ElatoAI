@@ -59,8 +59,13 @@ function NavItem({
     active?: boolean;
 }) {
     return (
+        // A full prefetch puts the tab's data in the router cache for 5
+        // minutes, so switching tabs paints at once instead of waiting on the
+        // server (auth + queries). Anything a tab shows that the user can
+        // change elsewhere must call router.refresh() after saving.
         <Link
             href={href}
+            prefetch
             className="flex min-w-0 flex-col items-center gap-1"
         >
             <Icon className="h-7 w-7" />

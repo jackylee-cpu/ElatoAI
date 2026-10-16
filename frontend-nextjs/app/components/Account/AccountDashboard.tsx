@@ -38,6 +38,7 @@ export default function AccountDashboard({
             <header className="relative mb-3 flex h-14 shrink-0 items-center justify-center md:h-16">
                 <Link
                     href="/home"
+                    prefetch
                     aria-label="Back to playground"
                     className="absolute left-0 top-1/2 -translate-y-1/2 transition-transform hover:scale-105 active:scale-95"
                 >

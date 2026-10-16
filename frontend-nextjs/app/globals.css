@@ -91,6 +91,30 @@
     }
 }
 
+/* nextjs-toploader starts its bar on every link click, so a page switch served
+   from the router cache in ~20ms still flashed it for ~400ms. Keep it invisible
+   for the first 300ms: only a navigation that is really waiting shows it.
+   NProgress fades the bar out on #nprogress, so this delay sits on .bar.
+   #nprogress gets an inline style only once the navigation is done (its
+   ~400ms fade-out); pausing there keeps a fast one's bar at opacity 0 instead
+   of letting the delay run out mid-fade. */
+#nprogress .bar {
+    animation: nprogress-delay 150ms ease-out 300ms both;
+}
+
+#nprogress[style] .bar {
+    animation-play-state: paused;
+}
+
+@keyframes nprogress-delay {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
 .text-stroke-black {
     -webkit-text-stroke-color: black;
   }
