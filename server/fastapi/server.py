@@ -26,6 +26,7 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams  # noqa:
 import app_settings  # noqa: E402
 import device_auth
 import device_power
+import device_connection
 import device_volume
 import device_wifi
 import mic_adpcm
@@ -274,6 +275,7 @@ def create_esp32_transport(
                 on_control=lambda message: (
                     device_wifi.handle_device_message(mac, message)
                     or device_power.handle_device_message(mac, message)
+                    or device_connection.handle_device_message(websocket, message)
                 ),
             ),
         ),
@@ -319,6 +321,13 @@ def create_app() -> FastAPI:
         # the web app lists modes and styles from their tables, so they are
         # brought in line with the YAML here. Fails open with a warning.
         await session_content.sync_catalog()
+
+    @app.on_event("startup")
+    async def close_stale_connections():
+        # Sessions a crash or restart of this process left "connected".
+        # Awaited, not spawned: uvicorn accepts no socket until startup is
+        # done, so this cannot close a session that has already begun.
+        await device_connection.close_stale_sessions()
 
     @app.on_event("startup")
     async def validate_provider_configuration():
@@ -478,6 +487,10 @@ def create_app() -> FastAPI:
             async with _sessions_lock:
                 _esp32_sessions[session_key].add(websocket)
             device_wifi.register(session_key, websocket)
+        # What the app shows as online / asleep / probably flat (device_connection).
+        device_connection.connected(
+            session_key, websocket, websocket.headers.get(device_connection.CAPS_HEADER)
+        )
         try:
             await run_bot_session(
                 transport,
@@ -511,6 +524,7 @@ def create_app() -> FastAPI:
                     await memory_session.release(memory)
                 except Exception as exc:  # noqa: BLE001 - teardown must not raise
                     logger.warning("Could not persist memory for {}: {}", mac_address, exc)
+            device_connection.disconnected(session_key, websocket)
             if session_key:
                 device_wifi.unregister(session_key, websocket)
                 async with _sessions_lock:

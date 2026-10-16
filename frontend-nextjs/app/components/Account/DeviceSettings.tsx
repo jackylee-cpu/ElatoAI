@@ -24,6 +24,8 @@ import MemorySection from "../Settings/MemorySection";
 import { cn } from "@/lib/utils";
 import type { DeviceBattery } from "@/lib/deviceBattery";
 import { BatteryRow } from "./BatteryStatus";
+import type { DeviceConnection } from "@/lib/deviceConnection";
+import { ConnectionStatus } from "./ConnectionStatus";
 import type { DeviceToy } from "@/db/devices";
 
 type SettingsDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code" | "volume"> & {
@@ -31,7 +33,7 @@ type SettingsDevice = Pick<IDevice, "device_id" | "mac_address" | "user_code" | 
     last_seen_at: string | null;
     firmware_version: string | null;
     firmware_reported_at: string | null;
-} & DeviceBattery & DeviceToy;
+} & DeviceBattery & DeviceConnection & DeviceToy;
 
 const cardClass =
     "rounded-[24px] bg-white/90 shadow-[0_8px_24px_rgba(80,120,180,0.08)] backdrop-blur-sm";
@@ -156,6 +158,7 @@ export default function DeviceSettings({
                     </div>
                     <p className="mt-1 text-xl font-semibold text-gray-900">{device.toy?.name || "AI Buddy"}</p>
                     <p className="text-sm text-gray-500">SN: {device.user_code}</p>
+                    <ConnectionStatus device={device} ago={formatAgo} mounted={mounted} />
                 </div>
 
                 {/* Nothing at all for a board that has never reported: no

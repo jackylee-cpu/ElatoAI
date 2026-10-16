@@ -5,6 +5,7 @@
 Preferences preferences;
 bool factory_reset_status = false;
 volatile bool sleepRequested = false;
+const char *volatile sleepReason = "sleep_idle";
 
 /**
  * Server configuration

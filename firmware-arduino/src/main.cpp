@@ -75,8 +75,10 @@ void enterSleep() {
   i2s_stop(I2S_PORT_IN);
   i2s_stop(I2S_PORT_OUT);
 
-  // Properly disconnect WebSocket and wait for it to complete
+  // Properly disconnect WebSocket and wait for it to complete. The "bye" first,
+  // so the app shows the toy as asleep rather than lost.
   if (webSocket.isConnected()) {
+    sayBye(sleepReason);
     webSocket.disconnect();
     // Give some time for the disconnect to process
   }
@@ -193,6 +195,7 @@ static void checkIdleTimeout() {
     return;
   }
   Serial.printf("Idle for %lus, going to sleep\n", IDLE_SLEEP_MS / 1000);
+  sleepReason = "sleep_idle";
   sleepRequested = true;
 }
 
@@ -246,6 +249,7 @@ static void onTouchTapCb(void *button_handle, void *usr_data) {
 
 static void onTouchLongPressCb(void *button_handle, void *usr_data) {
   Serial.println("Touch held, going to sleep");
+  sleepReason = "sleep_button";
   sleepRequested = true;
 }
 
@@ -425,6 +429,7 @@ void touchTask(void *parameter) {
     // Check for long press while touched
     if (touched && isTouched) {
       if (currentTime - pressStartTime >= LONG_PRESS_DURATION) {
+        sleepReason = "sleep_button";
         sleepRequested =
             true; // Only enter sleep after 500ms of continuous touch
       }

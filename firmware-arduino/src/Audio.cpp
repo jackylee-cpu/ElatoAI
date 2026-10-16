@@ -1441,6 +1441,26 @@ static int powerSentPercent = -1;
 static bool powerSentCharging = false;
 static unsigned long powerSentAt = 0;
 
+void sayBye(const char *reason) {
+    if (!webSocket.isConnected()) return;
+    JsonDocument doc;
+    doc["type"] = "bye";
+    doc["reason"] = reason;
+    String out;
+    serializeJson(doc, out);
+    webSocket.sendTXT(out);
+    Serial.printf("[WSc] bye: %s\n", reason);
+}
+
+// A restart the server asked for ("Update now", factory reset). No disconnect
+// here: this runs inside the library's own event callback. The pause gives
+// the "bye" time to leave before the radio goes down with the chip.
+static void restartWithBye() {
+    sayBye("restart");
+    delay(200);
+    ESP.restart();
+}
+
 // WEBSOCKET EVENTS
 // networkTask -> webSocket.loop() -> webSocketEvent()
 void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
@@ -1577,7 +1597,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             if (is_ota) {
                 if (otaCheckedThisBoot()) {
                     Serial.println("OTA requested, restarting to check for an update");
-                    ESP.restart();
+                    restartWithBye();
                 } else {
                     Serial.println("OTA requested, but this boot could not reach the update check");
                 }
@@ -1586,7 +1606,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             if (is_reset) {
                 Serial.println("Factory reset received");
                 // setFactoryResetStatusInNVS(true);
-                ESP.restart();
+                restartWithBye();
             }
         }
 
@@ -1651,6 +1671,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                 }
             } else if (strcmp((char*)msg.c_str(), "SESSION.END") == 0) {
                 Serial.println("Received SESSION.END, going to sleep");
+                sleepReason = "sleep_session_end";
                 sleepRequested = true;
             }
         }
@@ -1703,12 +1724,15 @@ volatile bool websocketPaused = false;
 // along only so a refused connection says in the server log who it claimed to
 // be. X-Firmware-Version tells the server this board handles the "volume"
 // message; 1.0.1 sends none and gets its level in a second auth frame instead
-// (server/fastapi/device_volume.py).
+// (server/fastapi/device_volume.py). X-Device-Caps lists what else this
+// firmware does that older ones did not: "bye" means a close with no "bye"
+// before it was a lost connection, not a sleep (server/fastapi/device_connection.py).
 String websocketExtraHeaders()
 {
     return "Authorization: Bearer " + authTokenGlobal + "\r\n" +
            "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
            "X-Firmware-Version: " FIRMWARE_VERSION "\r\n" +
+           "X-Device-Caps: bye\r\n" +
            "X-Device-Mac: " + WiFi.macAddress()
 #if MIC_UPLINK_ADPCM
            + "\r\nX-Mic-Codec: ima-adpcm"
