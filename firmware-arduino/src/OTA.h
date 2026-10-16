@@ -7,7 +7,7 @@
 // here and refuses to publish a version that is already out. The #ifndef is
 // for test builds only (release_firmware.py publish --dev --version).
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "1.0.1"
+#define FIRMWARE_VERSION "1.1.0"
 #endif
 
 // Once at boot, before WiFi: is this image on probation, and did the last one
