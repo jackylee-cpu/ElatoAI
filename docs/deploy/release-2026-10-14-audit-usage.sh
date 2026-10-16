@@ -6,7 +6,14 @@
 # Takes production from 8db9d9c to this release. Probed 2026-10-14 from the
 # public API: production had none of the migrations below. Extended 2026-10-15
 # with five more (bind tickets, four for OTA rollouts) and the web app's new
-# env vars. Schema changes, all in step 3:
+# env vars. Extended 2026-10-16 with device_wifi (R-37) and the fixes since
+# 63f3b06, which UAT runs; every step is re-runnable, so the same command
+# takes UAT forward. Schema changes, all in step 3:
+#   - R-37: device_wifi holds each board's saved Wi-Fi names (never
+#     passwords), written by the voice server through record_device_wifi()
+#     (service role only); parents read only their own boards' rows, and a
+#     board that changes owner loses its row. The Wi-Fi page reads it, so a
+#     sleeping board's list survives a voice server restart
 #   - P0-11: device_bind_tickets, issue_device_bind_ticket and
 #     claim_device_with_ticket (service role only). A board is claimed with a
 #     one-time ticket its owner's app hands it over Bluetooth
@@ -29,9 +36,16 @@
 #   - Characters and IPs get a row menu: Edit, and Delete (hide) or Show
 #   - login page offers email only (Apple, Google, Facebook removed)
 #   - R-37: the web app relays Wi-Fi status/scan/add/delete to a board's live
-#     socket. Boards on firmware 1.0.1 do not answer yet; for them the page
-#     says the toy "hasn't reported its Wi-Fi yet" until a firmware with R-37
-#     reaches them by OTA. Harmless, but expect it.
+#     socket. Boards on firmware 1.0.1 neither report nor answer; the page now
+#     asks for a software update for them (by version, or after 20s online
+#     with no report) and refuses changes at once instead of after 20s, until
+#     a firmware with R-37 reaches them by OTA. Expect it on every cloud board.
+#   - the Wi-Fi page opens with the list already on it (4dafe61), and the
+#     voice server answers "status" from the board's last report when it is
+#     under a minute old
+#   - volume: a change in the app reaches a 1.0.1 board at once (the voice
+#     server resends it in an "auth" frame), not two answers later, and an
+#     answer's end no longer puts back an older level (4120bb0, 67e9d7d)
 #   - the parent Settings screen becomes a Me section
 #   - the upstream Elato storefront (checkout route, product schema) is gone
 #   - the admin console moves to a grouped sidebar; Overview, Support,
@@ -114,7 +128,7 @@ MARK_FILE="$BACKUP_DIR/release-2026-10-14-voice-started-at"
 # In this order: 140000 and 150000 write to the audit log from 120000,
 # 170500 replaces the admin_list_devices() that 140000 creates, and 190000
 # replaces 120000's audit_admin_change() and audits firmware_releases.
-# 20261012170000 stands alone (devices and users only).
+# 20261012170000 and 20261016120000 stand alone (devices and users only).
 MIGRATIONS=(
     20261012170000_device_bind_tickets.sql
     20261014120000_admin_audit_log.sql
@@ -128,6 +142,7 @@ MIGRATIONS=(
     20261014200000_firmware_rollout_autopause.sql
     20261014210000_admin_firmware_upload.sql
     20261014220000_admin_firmware_rollout.sql
+    20261016120000_device_wifi.sql
 )
 # Each admin function is refused to anon and checks the role itself.
 ADMIN_FUNCTIONS=(
@@ -140,14 +155,15 @@ ADMIN_FUNCTIONS=(
     "admin_delete_firmware_release(uuid)"
     "admin_change_firmware_rollout(uuid,text,smallint,text[],text)"
 )
-# Only the web app's server (service role) may call these: boards' token
-# route and the bind-ticket route.
+# Only the servers (service role) may call these: the web app's token and
+# bind-ticket routes, and the voice server recording a board's Wi-Fi.
 SERVICE_FUNCTIONS=(
     "issue_device_bind_ticket(uuid,text,integer,integer)"
     "claim_device_with_ticket(uuid,text)"
     "ota_note_offer(uuid,uuid)"
     "ota_note_report(uuid,text,text,text)"
     "ota_maybe_pause(uuid)"
+    "record_device_wifi(text,text,smallint,jsonb,smallint)"
 )
 AUDITED_TABLES=(app_settings personalities ips ip_modes ip_styles admin_roles firmware_releases)
 
@@ -267,6 +283,9 @@ if step 3; then
     has_table device_bind_tickets && has_table firmware_rollout_devices \
         && has_column firmware_releases rollout_percent && has_column firmware_releases stage_changed_at \
         || { echo "  bind-ticket or rollout objects missing"; exit 1; }
+    has_table device_wifi \
+        && [ "$(q "select count(*) from pg_trigger where tgrelid='public.devices'::regclass and tgname='devices_forget_wifi_on_owner_change'")" = "1" ] \
+        || { echo "  device_wifi or its owner-change trigger missing"; exit 1; }
     for f in "${SERVICE_FUNCTIONS[@]}"; do
         has_function "$f" || { echo "  function $f missing"; exit 1; }
     done
@@ -323,7 +342,7 @@ fi
 if step 4; then
     say "4. Images $RELEASE (waits for CI)"
     has_column turn_metrics row_kind && has_column devices ip_key \
-        && has_table firmware_rollout_devices && has_table device_bind_tickets \
+        && has_table firmware_rollout_devices && has_table device_bind_tickets && has_table device_wifi \
         || { echo "  step 3 has not run -- the new voice server's metrics writes and board lookups would fail"; exit 1; }
     grep -qE '^DEVICE_CLAIM_LIST=' "$FRONTEND_DIR/.env.production" \
         || { echo "  DEVICE_CLAIM_LIST is not in .env.production -- run step 3 (3b) first"; exit 1; }
@@ -457,6 +476,36 @@ SQL
     done
     [ "$(q "select has_table_privilege('anon', 'public.firmware_rollout_devices', 'SELECT')")" = "f" ] \
         && ok "anon cannot read firmware_rollout_devices" || bad "anon can read firmware_rollout_devices"
+
+    # -- R-37 device_wifi --
+    [ "$(q "select relrowsecurity from pg_class where oid = 'public.device_wifi'::regclass")" = "t" ] \
+        && ok "device_wifi has row-level security" || bad "device_wifi has no row-level security"
+    [ "$(q "select has_table_privilege('anon', 'public.device_wifi', 'SELECT')")" = "f" ] \
+        && ok "anon cannot read device_wifi" || bad "anon can read device_wifi"
+    for p in INSERT UPDATE DELETE; do
+        [ "$(q "select has_table_privilege('authenticated', 'public.device_wifi', '$p')")" = "f" ] \
+            && ok "a parent cannot $p device_wifi" || bad "a parent can $p device_wifi"
+    done
+    # A parent sees only their own boards' rows: none for an account that
+    # owns nothing, whatever the table holds.
+    out="$(docker exec -i "$DB" psql -X -q -At -U postgres -d postgres 2>&1 <<'SQL' || true
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000000","role":"authenticated"}', true);
+SELECT count(*) FROM public.device_wifi;
+ROLLBACK;
+SQL
+)"
+    echo "$out" | grep -qx "0" && ok "a parent with no boards reads no device_wifi rows" || bad "device_wifi for a parent with no boards: $out"
+    # A MAC no board has records nothing and says so (rolled back anyway).
+    out="$(docker exec -i "$DB" psql -X -q -At -U postgres -d postgres 2>&1 <<'SQL' || true
+BEGIN;
+SELECT public.record_device_wifi('00:00:00:00:00:00', 'release-check', NULL, '[]'::jsonb, 8::smallint);
+ROLLBACK;
+SQL
+)"
+    echo "$out" | grep -qx "f" && ok "record_device_wifi ignores an unknown MAC" || bad "record_device_wifi for an unknown MAC: $out"
+    echo "  device_wifi rows: $(q "select count(*) from public.device_wifi") (0 until an R-37 board connects; 1.0.1 boards never write one)"
     # The current release must still reach every board, as before this release.
     cur="$(q "select string_agg(board || ' ' || version || ' ' || rollout_percent || '%' || case when paused_at is null then '' else ' PAUSED' end, ', ') from public.firmware_releases where is_current")"
     if [ -z "$cur" ]; then
@@ -536,6 +585,8 @@ SQL
     name with STT, LLM and TTS amounts; no "could not reach OpenRouter" banner
   - Devices: every board is listed, the one you talked to shows Online with
     its Wi-Fi; its IP reads "Not locked"
+  - volume: on a 1.0.1 board, change the volume in the app while it is
+    answering -> the same answer gets louder or quieter, not the one after
   - Accounts: create a throwaway account, edit its email, disable it (it can
     no longer sign in), then delete it with a reason -> Audit log has
     account.create / account.update / account.delete records
@@ -555,8 +606,10 @@ SQL
     firmware later from this page: whitelist one board first
   - /admin as a content admin: only Characters and IPs
   - a parent: /login offers email only (no Apple, Google, Facebook); Me shows
-    their board(s); a board on
-    1.0.1 says it "hasn't reported its Wi-Fi yet" (expected until R-37 firmware)
+    their board(s); the Wi-Fi page of a board on 1.0.1 asks to update its
+    software and its buttons are off (expected until R-37 firmware). Once an
+    R-37 board has connected, its Wi-Fi page lists its networks even while
+    it sleeps
   - the rates are starting guesses (Azure US\$1/audio hour, MiniMax US\$60/M
     chars). Check them against the first bills on the Usage page (P2-09 test)
 EOF
