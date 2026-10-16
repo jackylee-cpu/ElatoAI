@@ -14,6 +14,7 @@ import {
 import { clearDeviceMemory } from "@/db/memories";
 import { getSimpleUserById } from "@/db/users";
 import type { DeviceWifiState, WifiOp } from "@/lib/deviceWifi";
+import { relayDeviceWifi, wifiFailure } from "@/lib/deviceWifiRelay";
 
 export async function deleteUserApiKey(userId: string) {
     const supabase = createClient();
@@ -262,19 +263,13 @@ export const deviceWifiAction = async (
     op: WifiOp,
     ssid?: string,
     password?: string,
+    // "status" only: ask the board even if it reported a moment ago.
+    fresh?: boolean,
 ): Promise<DeviceWifiState> => {
-    const failed = (error: string): DeviceWifiState => ({
-        online: false,
-        status: null,
-        status_at: null,
-        ok: false,
-        error,
-    });
-
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-        return failed("forbidden");
+        return wifiFailure("forbidden");
     }
     const { data: device } = await supabase
         .from("devices")
@@ -283,38 +278,11 @@ export const deviceWifiAction = async (
         .eq("user_id", user.id)
         .maybeSingle();
     if (!device?.mac_address) {
-        return failed("forbidden");
+        return wifiFailure("forbidden");
     }
 
-    const internalUrl = process.env.VOICE_SERVER_INTERNAL_URL;
-    const internalToken = process.env.INTERNAL_API_TOKEN;
-    if (!internalUrl || !internalToken) {
-        return failed("unavailable");
-    }
-
-    try {
-        const response = await fetch(`${internalUrl}/internal/device_wifi`, {
-            method: "POST",
-            cache: "no-store",
-            // The server waits up to 20s for the board; a scan takes a few.
-            signal: AbortSignal.timeout(25_000),
-            headers: {
-                "Content-Type": "application/json",
-                "X-Internal-Token": internalToken,
-            },
-            body: JSON.stringify({ mac: device.mac_address, op, ssid, password }),
-        });
-        if (response.status === 400) {
-            return failed("invalid");
-        }
-        if (!response.ok) {
-            return failed("unavailable");
-        }
-        return (await response.json()) as DeviceWifiState;
-    } catch {
-        // Deliberately not logged: the error can carry the request body.
-        return failed("unavailable");
-    }
+    // The server waits up to 20s for the board; a scan takes a few.
+    return relayDeviceWifi(device.mac_address, { op, ssid, password, fresh }, 25_000);
 };
 
 /**

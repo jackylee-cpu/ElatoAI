@@ -35,6 +35,13 @@ from loguru import logger
 # few seconds and it may be mid-turn, so leave room.
 REQUEST_TIMEOUT_S = 20.0
 
+# A "status" is answered from the board's last report, without asking it, when
+# that report came over the board's current connection and is this recent. The
+# board reports on every connect and after every change, so the list is already
+# current; only the signal strength ages. A mid-turn board can take seconds to
+# answer, which a page opening should not wait for. "fresh" asks it anyway.
+STATUS_MAX_AGE_S = 60.0
+
 # What a board reports, and the only fields copied out of its messages. Keeps a
 # misbehaving board from parking arbitrary data here.
 _STATUS_FIELDS = ("current", "saved", "max")
@@ -169,6 +176,18 @@ def snapshot(mac: str | None) -> dict[str, Any]:
         "status_at": board.status_at if board else None,
         "last_switch": board.last_switch if board else None,
     }
+
+
+def status_is_fresh(mac: str | None) -> bool:
+    """The board is online and its last report needs no second asking."""
+    board = _boards.get(_key(mac))
+    if board is None or not board.sockets or board.status_at is None:
+        return False
+    return (
+        board.connected_at is not None
+        and board.status_at >= board.connected_at
+        and time.time() - board.status_at < STATUS_MAX_AGE_S
+    )
 
 
 def presence() -> dict[str, dict[str, Any]]:

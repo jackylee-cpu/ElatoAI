@@ -282,6 +282,50 @@ def test_endpoint_peek_never_contacts_the_board(client):
     assert socket.sent == []
 
 
+def post_status(client, **extra):
+    return client.post(
+        "/internal/device_wifi",
+        json={"mac": MAC, "op": "status", **extra},
+        headers={"x-internal-token": "t0ken"},
+    )
+
+
+def test_endpoint_status_answers_from_a_recent_report_without_the_board(client):
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    body = post_status(client).json()
+    assert body["ok"] is True and body["online"] is True and body["status"] == STATUS
+    assert socket.sent == []
+
+
+def test_endpoint_status_asks_the_board_when_the_report_is_old_or_fresh_is_asked(
+    client, monkeypatch
+):
+    socket = FakeSocket()
+    device_wifi.register(MAC, socket)
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+
+    async def ask(mac, op, **fields):
+        return {**device_wifi.snapshot(mac), "ok": True, "asked": op}
+
+    monkeypatch.setattr(device_wifi, "request", ask)
+    assert post_status(client, fresh=True).json()["asked"] == "status"
+
+    board = device_wifi._boards[MAC]
+    board.status_at -= device_wifi.STATUS_MAX_AGE_S + 1
+    assert post_status(client).json()["asked"] == "status"
+
+
+def test_a_report_from_an_earlier_connection_is_not_fresh():
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    device_wifi._boards[MAC].status_at -= 5
+    device_wifi.register(MAC, FakeSocket())
+    assert device_wifi.status_is_fresh(MAC) is False
+    device_wifi.handle_device_message(MAC, {"type": "wifi_status", **STATUS})
+    assert device_wifi.status_is_fresh(MAC) is True
+
+
 def test_presence_lists_known_boards_with_online_and_since():
     other = "11:22:33:44:55:66"
     socket = FakeSocket()

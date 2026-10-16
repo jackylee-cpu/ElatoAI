@@ -599,8 +599,9 @@ def create_app() -> FastAPI:
         """Read or change a board's saved Wi-Fi networks (R-37).
 
         The web app has already checked that the signed-in parent owns this
-        board; this only trusts the internal token. op is "status" (ask the
-        board, or return the last list if it is asleep), "peek" (the last list
+        board; this only trusts the internal token. op is "status" (the last
+        list if the board is asleep or reported it recently, else ask it;
+        "fresh": true always asks an online board), "peek" (the last list
         and whether it is online, without bothering the board -- what the page
         polls), "add", "delete", "scan" or "switch" (move to a saved network;
         the answer only says it is moving, and how that ended arrives as
@@ -617,7 +618,9 @@ def create_app() -> FastAPI:
         if op == "peek":
             return {**device_wifi.snapshot(mac), "ok": True}
         if op == "status":
-            if not device_wifi.snapshot(mac)["online"]:
+            if not device_wifi.snapshot(mac)["online"] or (
+                payload.get("fresh") is not True and device_wifi.status_is_fresh(mac)
+            ):
                 return {**device_wifi.snapshot(mac), "ok": True}
             return await device_wifi.request(mac, "status")
         if op == "scan":

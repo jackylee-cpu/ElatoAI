@@ -88,9 +88,16 @@ function SignalIcon({ rssi, className }: { rssi: number | null | undefined; clas
     return <WifiZero className={className} />;
 }
 
-export default function DeviceWifi({ deviceId }: { deviceId: string }) {
+export default function DeviceWifi({
+    deviceId,
+    initial,
+}: {
+    deviceId: string;
+    /** The voice server's last report, rendered with the page; null if it had none. */
+    initial: DeviceWifiState | null;
+}) {
     const { toast } = useToast();
-    const [state, setState] = useState<DeviceWifiState | null>(null);
+    const [state, setState] = useState<DeviceWifiState | null>(initial);
     const [refreshing, setRefreshing] = useState(false);
     const [adding, setAdding] = useState(false);
     const [removing, setRemoving] = useState<string | null>(null);
@@ -100,22 +107,37 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
     const [switching, setSwitching] = useState<{ ssid: string; since: number } | null>(null);
     const [busy, setBusy] = useState(false);
     const busyRef = useRef(false);
+    // A status check is under way; the poll waits rather than queue behind it.
+    const checkingRef = useRef(false);
 
-    const load = useCallback(async (op: "status" | "peek" = "status") => {
-        const next = await deviceWifiAction(deviceId, op);
+    const load = useCallback(async (op: "status" | "peek" = "status", fresh = false) => {
+        const next = await deviceWifiAction(deviceId, op, undefined, undefined, fresh);
         // A status that failed for a passing reason keeps the last good list
         // on screen rather than blanking it.
         setState((prev) => (next.status || !prev ? next : { ...prev, online: next.online }));
         return next;
     }, [deviceId]);
 
-    useEffect(() => {
-        load();
+    // The list the page opened with can be a little old; check with the board
+    // without hiding it.
+    const check = useCallback(async (fresh: boolean) => {
+        checkingRef.current = true;
+        setRefreshing(true);
+        try {
+            await load("status", fresh);
+        } finally {
+            checkingRef.current = false;
+            setRefreshing(false);
+        }
     }, [load]);
 
     useEffect(() => {
+        check(false);
+    }, [check]);
+
+    useEffect(() => {
         const timer = setInterval(() => {
-            if (!busyRef.current) load("peek");
+            if (!busyRef.current && !checkingRef.current) load("peek");
         }, POLL_MS);
         return () => clearInterval(timer);
     }, [load]);
@@ -207,11 +229,7 @@ export default function DeviceWifi({ deviceId }: { deviceId: string }) {
                     type="button"
                     aria-label="Refresh"
                     disabled={refreshing || busy}
-                    onClick={async () => {
-                        setRefreshing(true);
-                        await load();
-                        setRefreshing(false);
-                    }}
+                    onClick={() => check(true)}
                     className="absolute right-0 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/80 text-gray-500 shadow-sm transition-transform hover:scale-105 active:scale-95 disabled:opacity-60"
                 >
                     <RefreshCw className={cn("h-5 w-5", refreshing && "animate-spin")} />
