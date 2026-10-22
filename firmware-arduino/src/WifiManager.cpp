@@ -288,7 +288,7 @@ void WIFIMANAGER::startBackgroundTask(String softApName, String softApPass) {
 
   WiFi.setSleep(false);
   loadFromNVS();
-  tryConnect();
+  if (!tryConnect()) staLostMillis = millis();  // the setup grace counts from boot
 
   BaseType_t taskCreated = xTaskCreatePinnedToCore(
     wifiTask,
@@ -331,7 +331,9 @@ WIFIMANAGER::WIFIMANAGER(const char * ns) {
   WiFi.onEvent([&](WiFiEvent_t event, WiFiEventInfo_t info) {
     logMessage("[WIFI] onEvent() AP mode stopped!\n");
     softApRunning = false;
-    deviceState = IDLE;
+    // Only out of SOFT_AP: enterSleep() turns the radio off after setting
+    // SLEEP, and IDLE here would light the ring for the whole sleep.
+    if (deviceState == SOFT_AP) deviceState = IDLE;
 #if ESP_ARDUINO_VERSION_MAJOR >= 2
     }, ARDUINO_EVENT_WIFI_AP_STOP); // arduino-esp32 2.0.0 and later
 #else
@@ -390,6 +392,7 @@ void WIFIMANAGER::clearApList() {
     apList[i].apName = "";
     apList[i].apPass = "";
     apList[i].joined = false;
+    apList[i].failures = 0;
   }
 }
 
@@ -422,6 +425,7 @@ bool WIFIMANAGER::loadFromNVS() {
         }
       }
     }
+    lastSsid = preferences.isKey("lastAp") ? preferences.getString("lastAp", "") : String();
     preferences.end();
     return true;
   }
@@ -454,6 +458,7 @@ bool WIFIMANAGER::writeToNVS() {
     snprintf(tmpKey, sizeof(tmpKey), "apOk%d", i);
     preferences.putBool(tmpKey, apList[i].joined);
   }
+  if (lastSsid.length()) preferences.putString("lastAp", lastSsid);
 
   preferences.end();
   return true;
@@ -486,6 +491,7 @@ bool WIFIMANAGER::addWifi(String apName, String apPass, bool updateNVS) {
       logMessage(String("[WIFI] Updating the saved credentials for SSID '") + apName + "'.\n");
       apList[i].apPass = apPass;
       apList[i].joined = false;
+      apList[i].failures = 0;  // a new password gets tried at once
       if (updateNVS) return writeToNVS();
       else return true;
     }
@@ -497,6 +503,7 @@ bool WIFIMANAGER::addWifi(String apName, String apPass, bool updateNVS) {
       apList[i].apName = apName;
       apList[i].apPass = apPass;
       apList[i].joined = false;
+      apList[i].failures = 0;
       configuredSSIDs++;
       if (updateNVS) return writeToNVS();
       else return true;
@@ -520,6 +527,7 @@ bool WIFIMANAGER::delWifi(uint8_t apId) {
     apList[apId].apName.clear();
     apList[apId].apPass.clear();
     apList[apId].joined = false;
+    apList[apId].failures = 0;
     return writeToNVS();
   }
   return false;
@@ -549,6 +557,16 @@ bool WIFIMANAGER::delWifi(String apName) {
  */
 bool WIFIMANAGER::configAvailable() const {
     return configuredSSIDs != 0;
+}
+
+bool WIFIMANAGER::setupApOnlyLooking() const {
+  return softApRunning && apKeepsLooking && WiFi.softAPgetStationNum() == 0;
+}
+
+void WIFIMANAGER::backOffOutageLook() {
+  nextOutageLookMillis = millis() + outageLookMs;
+  logMessage(String("[WIFI] Next look for a saved Wi-Fi in ") + String(outageLookMs / 1000) + "s\n");
+  outageLookMs = min((uint32_t)(outageLookMs * 2), (uint32_t)OUTAGE_LOOK_MAX_MS);
 }
 
 /**
@@ -634,30 +652,34 @@ void WIFIMANAGER::loop() {
       (WiFi.status() == WL_CONNECTED && authTokenGlobal.isEmpty())
           ? 3000
           : intervalWifiCheckMillis;
-  if (millis() - lastWifiCheckMillis < checkInterval) return;
-  lastWifiCheckMillis = millis();
-
   // Credentials just came in from the setup portal. Connect now instead of
   // waiting out the SoftAP timeout -- tryConnect() and loop() both refuse to do
   // anything while the AP is up, which otherwise leaves the user staring at a
-  // dead page for two minutes.
+  // dead page for two minutes. Ahead of the interval check: the portal wakes
+  // this task, and the next pass was up to 10s away (62:70, 2026-10-22).
   if (connectRequested) {
     connectRequested = false;
+    lastWifiCheckMillis = millis();
     logMessage("[WIFI] New credentials saved, connecting now\n");
+    delay(500);  // the portal's "added" answer leaves before the AP does
     if (softApRunning) stopSoftAP();
     tryConnect();
     return;
   }
 
-  if(WiFi.waitForConnectResult() == WL_CONNECTED) {
+  if (millis() - lastWifiCheckMillis < checkInterval) return;
+  lastWifiCheckMillis = millis();
+
+  // A short wait lets a reconnect the driver already started finish. The
+  // default is 60s, and it waits for as long as the status reads idle or
+  // disconnected, which held this task for a minute after a router went off.
+  if(WiFi.waitForConnectResult(3000) == WL_CONNECTED) {
     // Check if we are connected to a well known SSID
     for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
       if (WiFi.SSID() == apList[i].apName) {
+        staLostMillis = 0;
         logMessage(String("[WIFI][STATUS] Connected to known SSID: '") + WiFi.SSID() + "' with IP " + WiFi.localIP().toString() + "\n");
-        if (!apList[i].joined) {
-          apList[i].joined = true;
-          writeToNVS();
-        }
+        noteJoined(i);
         startSessionIfReady();
         return;
       }
@@ -665,18 +687,67 @@ void WIFIMANAGER::loop() {
     // looks like we are connected to something else, strange!?
     logMessage("[WIFI] We are connected to an unknown SSID ignoring. Connected to: " + WiFi.SSID() + "\n");
   } else {
+    // A button press means someone wants the toy now: look straight away and
+    // start the backoff again.
+    if (lastActivityAt != seenActivityAt) {
+      seenActivityAt = lastActivityAt;
+      if (outageLookMs != OUTAGE_LOOK_MIN_MS) logMessage("[WIFI] Button pressed, looking for a saved Wi-Fi now\n");
+      outageLookMs = OUTAGE_LOOK_MIN_MS;
+      nextOutageLookMillis = 0;
+    }
+    // With nothing saved there is nothing to look for, and the setup AP must
+    // come back at once after its timeout.
+    const bool lookDue = !configAvailable() || (int64_t)(millis() - nextOutageLookMillis) >= 0;
+
     if (softApRunning) {
-      logMessage("[WIFI] Not trying to connect to a known SSID. SoftAP has " + String(WiFi.softAPgetStationNum()) + " clients connected!\n");
+      const uint8_t stations = WiFi.softAPgetStationNum();
+      if (!stations) apBusySinceMillis = millis();
+      else {
+        noteActivity();  // idle sleep counts from the phone leaving
+        seenActivityAt = lastActivityAt;  // ...and it is not a button press
+      }
+      if (apKeepsLooking && stations == 0) {
+        // Nobody is setting the toy up, so a scan and a join through the
+        // station side cost nobody anything. tryConnect() closes the AP once
+        // it is on a saved network.
+        if (!lookDue) return;
+        if (tryConnect()) return;
+        backOffOutageLook();
+      } else if (apKeepsLooking && millis() - apBusySinceMillis >= AP_BUSY_LOOK_MS) {
+        logMessage("[WIFI] A phone has been on the setup AP for " +
+                   String((uint32_t)((millis() - apBusySinceMillis) / 1000)) +
+                   "s, looking for a saved Wi-Fi anyway\n");
+        apBusySinceMillis = millis();
+        if (tryConnect(true)) return;
+      } else {
+        logMessage("[WIFI] Not trying to connect to a known SSID. SoftAP has " + String(WiFi.softAPgetStationNum()) + " clients connected!\n");
+      }
     } else {
+      if (!staLostMillis) staLostMillis = millis();
+      if (!lookDue) return;
       // let's try to connect to some WiFi in Range
       if (!tryConnect()) {
-        if (createFallbackAP) runSoftAP();
-        else logMessage("[WIFI] Auto creation of SoftAP is disabled, no starting AP!\n");
+        backOffOutageLook();
+        const uint64_t lostFor = millis() - staLostMillis;
+        if (!createFallbackAP) {
+          logMessage("[WIFI] Auto creation of SoftAP is disabled, no starting AP!\n");
+        } else if (configAvailable() && lostFor < AP_GRACE_MS) {
+          // As xiaozhi does: a router restarting or a moment out of range is
+          // not a reason to say "正在配網". Keep trying the saved networks
+          // first; setup opens only once none has answered for a minute.
+          logMessage(String("[WIFI] No saved Wi-Fi yet, Wi-Fi setup opens in ") +
+                     String((uint32_t)((AP_GRACE_MS - lostFor) / 1000)) + "s\n");
+        } else if (runSoftAP()) {
+          apKeepsLooking = configAvailable();
+        }
       }
     }
   }
 
-  if (softApRunning && millis() - startApTimeMillis > timeoutApMillis) {
+  // An AP that keeps looking stays up until a saved network takes the board
+  // or a parent sets one up: closing it only left a gap of ~15s in which a
+  // phone could not find it, and it was reopened at once (62:70, 2026-10-22).
+  if (softApRunning && !apKeepsLooking && millis() - startApTimeMillis > timeoutApMillis) {
     if (WiFi.softAPgetStationNum() > 0) {
       logMessage("[WIFI] SoftAP has " + String(WiFi.softAPgetStationNum()) + " clients connected!\n");
       startApTimeMillis = millis(); // reset timeout as someone is connected
@@ -700,10 +771,14 @@ static const uint32_t JOIN_STALE_MS = 6000;
  * a failure only counts once this attempt has had JOIN_STALE_MS to produce
  * its own; before that, only "connected" ends the wait.
  */
-static wl_status_t joinFor(const String &ssid, const String &pass, uint32_t timeoutMs) {
+static wl_status_t joinFor(const String &ssid, const String &pass, uint32_t timeoutMs,
+                           int32_t channel = 0) {
   WiFi.disconnect(false, false);
   delay(100);
-  WiFi.begin(ssid.c_str(), pass.c_str());
+  // A channel from the scan just done saves the driver a second walk over
+  // every channel before it joins (xiaozhi's StartConnect does the same).
+  // No BSSID, so a home with two access points on one name can still roam.
+  WiFi.begin(ssid.c_str(), pass.c_str(), channel);
   const uint32_t start = millis();
   wl_status_t status = WiFi.status();
   while (millis() - start < timeoutMs) {
@@ -715,31 +790,76 @@ static wl_status_t joinFor(const String &ssid, const String &pass, uint32_t time
   return status;
 }
 
+bool WIFIMANAGER::joinAllowed(uint8_t apId) const {
+  return apList[apId].failures == 0 || (int32_t)(millis() - apList[apId].retryAtMillis) >= 0;
+}
+
+void WIFIMANAGER::noteJoinFailed(uint8_t apId) {
+  if (apList[apId].failures < 255) apList[apId].failures++;
+  const uint8_t shift = apList[apId].failures > 6 ? 5 : apList[apId].failures - 1;
+  const uint32_t wait = min((uint32_t)JOIN_BACKOFF_MIN_MS << shift, (uint32_t)JOIN_BACKOFF_MAX_MS);
+  apList[apId].retryAtMillis = millis() + wait;
+  logMessage(String("[WIFI] '") + apList[apId].apName + "' failed " + String(apList[apId].failures) +
+             " time(s) in a row, next try in " + String(wait / 1000) + "s\n");
+}
+
+void WIFIMANAGER::noteJoined(uint8_t apId) {
+  apList[apId].failures = 0;
+  outageLookMs = OUTAGE_LOOK_MIN_MS;
+  nextOutageLookMillis = 0;
+  if (!apList[apId].joined) {
+    apList[apId].joined = true;
+    writeToNVS();
+  }
+  if (lastSsid != apList[apId].apName) {
+    lastSsid = apList[apId].apName;
+    // A single key, not writeToNVS(): this changes far more often than the list.
+    if (preferences.begin(NVS, false)) {
+      preferences.putString("lastAp", lastSsid);
+      preferences.end();
+    }
+  }
+}
+
 /**
  * @brief Try to connect to one of the configured SSIDs (if available).
  * @details If more than 2 SSIDs configured, scan for available WIFIs and connect to the strongest
  * @return true on success
  * @return false on error or no configuration
  */
-bool WIFIMANAGER::tryConnect() {
+bool WIFIMANAGER::tryConnect(bool evenWithPhone) {
   if (!configAvailable()) {
     logMessage("[WIFI] No SSIDs configured in NVS, unable to connect\n");
     if (createFallbackAP) runSoftAP();
     return false;
   }
 
-  if (softApRunning) {
+  // With the AP up, only while it keeps looking and nobody is on it, or when
+  // loop() decides a phone has been on it long enough (AP_BUSY_LOOK_MS): a
+  // scan or a join moves the radio off the AP's channel and drops a phone
+  // that is half way through setup.
+  if (softApRunning && (!apKeepsLooking || (WiFi.softAPgetStationNum() > 0 && !evenWithPhone))) {
     logMessage("[WIFI] Not trying to connect. SoftAP has " + String(WiFi.softAPgetStationNum()) + " clients connected!\n");
     return false;
   }
 
+  // Stops the driver's own reconnect loop, which otherwise keeps retrying the
+  // network that went away and makes this scan fail.
+  WiFi.disconnect(false, false);
+
   int choosenAp = INT_MIN;
-  if (configuredSSIDs == 1) {
+  int32_t choosenChannel = 0;
+  if (configuredSSIDs == 1 && !softApRunning) {
     // only one configured SSID, skip scanning and try to connect to this specific one.
     choosenAp = getApEntry();
+    if (!joinAllowed(choosenAp)) return false;  // noteJoinFailed() said when
   } else {
-    WiFi.mode(WIFI_STA);
-    int8_t scanResult = WiFi.scanNetworks(false, true);
+    // With the AP up the scan comes first even for one saved network, so the
+    // radio leaves the AP's channel for a join only when there is something
+    // to join, and the dwell per channel stays short.
+    if (!softApRunning) WiFi.mode(WIFI_STA);
+    int8_t scanResult = softApRunning ? WiFi.scanNetworks(false, true, false, 120)
+                                      : WiFi.scanNetworks(false, true);
     if(scanResult <= 0) {
       logMessage("[WIFI] Unable to find WIFI networks in range to this device!\n");
       return false;
@@ -750,6 +870,12 @@ bool WIFIMANAGER::tryConnect() {
     // is still the answer when it is the only saved one in range.
     int otherAp = INT_MIN;
     int otherRssi = INT_MIN;
+    int32_t otherChannel = 0;
+    // The network last joined, when it is in range (LAST_AP_MIN_RSSI).
+    int lastAp = INT_MIN;
+    int lastRssi = INT_MIN;
+    int32_t lastChannel = 0;
+    uint8_t heldBack = 0;  // in range but waiting out a backoff, one bit per slot
     for(int8_t x = 0; x < scanResult; ++x) {
       String ssid;
       uint8_t encryptionType;
@@ -759,17 +885,32 @@ bool WIFIMANAGER::tryConnect() {
       WiFi.getNetworkInfo(x, ssid, encryptionType, rssi, bssid, channel);
       for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
         if (apList[i].apName.length() == 0 || apList[i].apName != ssid) continue;
+#ifdef WIFI_TEST_SKIP_SSID
+        // Test builds only: play "this saved network is out of range" so a
+        // phone hotspot switched off and on can stand in for a router restart.
+        if (apList[i].apName == WIFI_TEST_SKIP_SSID) continue;
+#endif
+
+        if (encryptionType != WIFI_AUTH_OPEN && apList[i].apPass.length() == 0) continue;  // no password for it
+        if (!joinAllowed(i)) {
+          heldBack |= 1 << i;
+          continue;
+        }
 
         if (rssi > choosenRssi) {
-          if(encryptionType == WIFI_AUTH_OPEN || apList[i].apPass.length() > 0) { // open wifi or we do know a password
-            choosenAp = i;
-            choosenRssi = rssi;
-          }
+          choosenAp = i;
+          choosenRssi = rssi;
+          choosenChannel = channel;
         } // else lower wifi signal
-        if (rssi > otherRssi && apList[i].apName != avoidSsid &&
-            (encryptionType == WIFI_AUTH_OPEN || apList[i].apPass.length() > 0)) {
+        if (rssi > otherRssi && apList[i].apName != avoidSsid) {
           otherAp = i;
           otherRssi = rssi;
+          otherChannel = channel;
+        }
+        if (rssi > lastRssi && apList[i].apName == lastSsid && apList[i].apName != avoidSsid) {
+          lastAp = i;
+          lastRssi = rssi;
+          lastChannel = channel;
         }
       }
     }
@@ -777,6 +918,18 @@ bool WIFIMANAGER::tryConnect() {
     if (otherAp != INT_MIN && otherAp != choosenAp) {
       logMessage(String("[WIFI] Passing over '") + avoidSsid + "', which did not reach the server\n");
       choosenAp = otherAp;
+      choosenChannel = otherChannel;
+    }
+    if (lastAp != INT_MIN && lastAp != choosenAp && lastRssi >= LAST_AP_MIN_RSSI) {
+      logMessage(String("[WIFI] Staying with '") + lastSsid + "' (" + String(lastRssi) +
+                 " dBm), the last network joined, over a stronger one\n");
+      choosenAp = lastAp;
+      choosenChannel = lastChannel;
+    }
+    for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; i++) {
+      if (!(heldBack & (1 << i))) continue;
+      logMessage(String("[WIFI] '") + apList[i].apName + "' is in range but failed last time, next try in " +
+                 String((uint32_t)(apList[i].retryAtMillis - millis()) / 1000) + "s\n");
     }
   }
 
@@ -789,7 +942,7 @@ bool WIFIMANAGER::tryConnect() {
     );
 
     // Same 15s budget as before, without trusting a stale failure.
-    wl_status_t status = joinFor(apList[choosenAp].apName, apList[choosenAp].apPass, 15000);
+    wl_status_t status = joinFor(apList[choosenAp].apName, apList[choosenAp].apPass, 15000, choosenChannel);
     switch(status) {
       case WL_IDLE_STATUS:
         logMessage("[WIFI] Connecting failed (0): Idle\n");
@@ -802,14 +955,14 @@ bool WIFIMANAGER::tryConnect() {
         break;
       case WL_CONNECTED: // 3
         logMessage("[WIFI] Connection successful\n");
-        if (!apList[choosenAp].joined) {
-          apList[choosenAp].joined = true;
-          writeToNVS();
-        }
+        noteJoined(choosenAp);
         logMessage("[WIFI] SSID   : " + WiFi.SSID() + "\n");
         logMessage("[WIFI] IP     : " + WiFi.localIP().toString() + "\n");
-        connectCb();
+        // Closed first: the AP was up while this join was tried from it, and
+        // the session should not start in SOFT_AP.
+        if (softApRunning) logMessage("[WIFI] Back on a saved network, closing the setup AP\n");
         stopSoftAP();
+        connectCb();
         return true;
         break;
       case WL_CONNECT_FAILED:
@@ -828,6 +981,12 @@ bool WIFIMANAGER::tryConnect() {
         logMessage("[WIFI] Connecting failed (" + String(status) + "): Unknown status code\n");
         break;
     }
+    // "Not found" is the network gone, not the network refusing us.
+    if (status != WL_NO_SSID_AVAIL) noteJoinFailed(choosenAp);
+    // The driver retries a failed join on its own, hopping channels. With the
+    // AP up that would drop the next phone to join it, so it stops here and
+    // the next try comes from loop().
+    if (softApRunning) WiFi.disconnect(false, false);
   }
   return false;
 }
@@ -851,11 +1010,16 @@ bool WIFIMANAGER::runSoftAP(String apName, String apPass) {
 
   if (softApRunning) return true;
   startApTimeMillis = millis();
+  apKeepsLooking = false;  // the caller that wants it says so
 
   if (this->softApName == "") this->softApName = "ESP_" + String((uint32_t)ESP.getEfuseMac());
   logMessage("[WIFI] Starting configuration portal on AP SSID " + this->softApName + "\n");
 
-  WiFi.mode(WIFI_AP);
+  // The station side stays on, so loop() can still find a saved network
+  // while the AP is up (apKeepsLooking). Its own reconnect loop is stopped
+  // first: left running, it hops channels and drops phones joining the AP.
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_AP_STA);
   bool state = WiFi.softAP(this->softApName.c_str(), (this->softApPass.length() ? this->softApPass.c_str() : NULL));
   if (state) {
     IPAddress IP = WiFi.softAPIP();
@@ -994,6 +1158,7 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
     } else {
       connectRequested = true;
       resp->send(200, "application/json", "{\"message\":\"New network added\"}");
+      if (WifiCheckTask) xTaskNotifyGive(WifiCheckTask);
     }
   });
 
@@ -1669,10 +1834,7 @@ void WIFIMANAGER::switchNetwork(uint8_t apId, const String &previous) {
   lastSwitch.back[0] = 0;
 
   if (!error) {
-    if (!apList[apId].joined) {
-      apList[apId].joined = true;
-      writeToNVS();
-    }
+    noteJoined(apId);  // also the last network, so the parent's pick outlasts a restart
     logMessage(String("[WIFI] Switched to '") + target + "' with IP " + WiFi.localIP().toString() + "\n");
     return;
   }

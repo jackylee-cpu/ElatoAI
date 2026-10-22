@@ -186,7 +186,11 @@ static void checkIdleTimeout() {
   if (IDLE_SLEEP_SECONDS == 0) {
     return;
   }
-  if (deviceState != IDLE && deviceState != PROCESSING) {
+  // SOFT_AP counts too when the AP is up only to look for a saved network
+  // and no phone is on it: since that AP no longer times out, a long outage
+  // otherwise kept the toy awake, radio on, until the battery was flat.
+  if (deviceState != IDLE && deviceState != PROCESSING &&
+      !(deviceState == SOFT_AP && WifiManager.setupApOnlyLooking())) {
     return;
   }
   if (millis() - lastActivityAt < IDLE_SLEEP_MS) {

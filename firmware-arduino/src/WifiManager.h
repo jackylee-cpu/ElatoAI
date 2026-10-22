@@ -14,6 +14,51 @@
 #define WIFIMANAGER_MAX_APS 8   // Valid range is uint8_t
 #endif
 
+// How long saved networks are tried, at boot or after a drop, before the
+// setup AP opens. xiaozhi's CONNECT_TIMEOUT_SEC is the same minute.
+#ifndef AP_GRACE_MS
+#define AP_GRACE_MS 60000
+#endif
+
+// A saved network that is in range but will not take the board (a changed
+// password, a router still starting) is tried again after this long, doubling
+// with each failure up to the cap. Without it the setup AP followed the radio
+// to that network's channel every few seconds and a parent's phone could not
+// stay on it. RAM only, cleared by a success or a new password.
+#ifndef JOIN_BACKOFF_MIN_MS
+#define JOIN_BACKOFF_MIN_MS 15000
+#endif
+#ifndef JOIN_BACKOFF_MAX_MS
+#define JOIN_BACKOFF_MAX_MS 300000
+#endif
+
+// How often a board off every saved network looks for one again. The wait
+// doubles from MIN to MAX after each look that finds nothing to join, as
+// xiaozhi's scan timer does, and starts again at MIN on a join or a button
+// press. Without it a toy left on through a long outage kept its radio
+// scanning every ~13s until the battery was flat.
+#ifndef OUTAGE_LOOK_MIN_MS
+#define OUTAGE_LOOK_MIN_MS 10000
+#endif
+#ifndef OUTAGE_LOOK_MAX_MS
+#define OUTAGE_LOOK_MAX_MS 300000
+#endif
+
+// With a phone on the setup AP the board stops looking for saved networks, so
+// the phone is not dropped mid-setup -- but only for this long at a time: a
+// phone that rejoined the open AP on its own would otherwise keep the toy off
+// a network that came back.
+#ifndef AP_BUSY_LOOK_MS
+#define AP_BUSY_LOOK_MS 120000
+#endif
+
+// The network the board was last on wins over a stronger saved one as long as
+// its signal is at least this good (dBm), so a phone hotspot carried past the
+// toy does not pull it off the home Wi-Fi at the next connect.
+#ifndef LAST_AP_MIN_RSSI
+#define LAST_AP_MIN_RSSI -70
+#endif
+
 #ifndef ASYNC_WEBSERVER
   #define ASYNC_WEBSERVER true
 #endif
@@ -57,10 +102,13 @@ class WIFIMANAGER {
       String apName;                    // Name of the AP SSID
       String apPass;                    // Password if required to the AP
       bool joined = false;              // Connected successfully at least once (R-37)
+      uint8_t failures = 0;             // Joins failed in a row while in range (RAM only)
+      uint32_t retryAtMillis = 0;       // No new try before this, once failures > 0
     };
     apCredentials_t apList[WIFIMANAGER_MAX_APS];  // Stored AP list
 
     uint8_t configuredSSIDs = 0;        // Number of stored SSIDs in the NVS
+    String lastSsid;                    // The network last joined, kept in NVS as "lastAp"
 
     bool softApRunning = false;         // Due to lack of functions, we have to remember if the AP is already running...
     // A saved network that let the board on but not through to our server
@@ -70,6 +118,24 @@ class WIFIMANAGER {
     // Internet checks that failed in this outage (P2-25): the first moves to
     // another saved network, the next opens Wi-Fi setup.
     uint8_t noInternetRounds = 0;
+    // The SoftAP opened because no saved network could be joined (a router
+    // restarting, the toy carried out of range), not because one had no
+    // internet. While nobody is on the AP, loop() keeps trying the saved
+    // networks through the station side instead of waiting out the timeout.
+    bool apKeepsLooking = false;
+    // When the station side was found off every saved network; 0 while on
+    // one. Setup opens only after AP_GRACE_MS of that.
+    uint64_t staLostMillis = 0;
+    // Since when a phone has been on the setup AP without a look for a saved
+    // network (AP_BUSY_LOOK_MS).
+    uint64_t apBusySinceMillis = 0;
+    // OUTAGE_LOOK_MIN_MS backoff, and the button press it last reset on.
+    uint32_t outageLookMs = OUTAGE_LOOK_MIN_MS;
+    uint64_t nextOutageLookMillis = 0;
+    unsigned long seenActivityAt = 0;
+
+    // A failed look in an outage: the next one waits twice as long.
+    void backOffOutageLook();
     bool createFallbackAP = true;       // Create an AP for configuration if no other connection is available
 
     uint64_t lastWifiCheckMillis = 0;   // Time of last Wifi health check
@@ -85,6 +151,11 @@ class WIFIMANAGER {
 
     // Get id of the first non empty entry
     uint8_t getApEntry();
+
+    // Join backoff (JOIN_BACKOFF_MIN_MS) and the last network joined.
+    bool joinAllowed(uint8_t apId) const;
+    void noteJoinFailed(uint8_t apId);
+    void noteJoined(uint8_t apId);
     
     // Print a log message to Serial, can be overwritten
     virtual void logMessage(String msg);
@@ -124,10 +195,15 @@ class WIFIMANAGER {
     bool delWifi(String apName);
 
     // Try each known SSID and connect until none is left or one is connected.
-    bool tryConnect();
+    // evenWithPhone: look while a phone is on the setup AP (AP_BUSY_LOOK_MS).
+    bool tryConnect(bool evenWithPhone = false);
 
     // Check if a SSID is stored in the config
     bool configAvailable() const;
+
+    // The setup AP is up only to look for a saved network and nobody is on it,
+    // so idle sleep may take the toy (main.cpp checkIdleTimeout()).
+    bool setupApOnlyLooking() const;
 
     // Preconfigure the SoftAP
     void configueSoftAp(String apName = "", String apPass = "");
