@@ -1,5 +1,5 @@
 -- Why a board rolled back, and auto-pause counting only the rollbacks that
--- point at the build.
+-- point at the build, and never pausing on one board alone.
 --
 -- On 2026-10-16 prod's 1.1.0 auto-paused at the whitelist stage because its one
 -- board (AIBuddy-16C0) reported it as failed. The board's flash showed why: its
@@ -26,6 +26,14 @@
 -- none, and a crash must still stop a rollout. The admin OTA page lists the
 -- power losses apart.
 --
+-- And it pauses only once at least 2 counted rollbacks exist AND they are over
+-- 5% of the boards offered. The boards in the field today (1.0.1, and prod's
+-- 1.1.0) report no reason, so without the minimum one flat toy at the
+-- whitelist stage would still pause the next rollout, exactly as 16C0 did:
+-- 1 of 1 is 100%. 1 of 1 no longer pauses, 2 of 2 does, and 2 of 50 (4%) does
+-- not. A single rollback that matters is still on the OTA page for a super
+-- admin to pause by hand.
+--
 -- Re-runnable: IF NOT EXISTS, DROP ... IF EXISTS, CREATE OR REPLACE.
 
 ALTER TABLE public.firmware_rollout_devices
@@ -46,13 +54,15 @@ ALTER TABLE public.firmware_rollout_devices
                OR (failed_reset ~ '^[a-z_]{1,16}$' AND failed_at IS NOT NULL));
 
 -- As in 20261014200000, but a board that lost its installs to power does not
--- count towards the 5%.
+-- count, and it takes at least min_failures (2) counted rollbacks besides the
+-- 5%.
 CREATE OR REPLACE FUNCTION public.ota_maybe_pause(p_release_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
 SET search_path = ''
 AS $$
 DECLARE
+    min_failures CONSTANT integer := 2;
     offered integer;
     failed  integer;
 BEGIN
@@ -74,7 +84,7 @@ BEGIN
       FROM public.firmware_rollout_devices AS r
      WHERE r.release_id = p_release_id;
 
-    IF failed * 100 <= offered * 5 THEN
+    IF failed < min_failures OR failed * 100 <= offered * 5 THEN
         RETURN false;
     END IF;
 

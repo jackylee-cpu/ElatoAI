@@ -42,8 +42,9 @@ import { cn } from "@/lib/utils";
  * A release goes: uploaded as a draft -> made current at the whitelist stage ->
  * widened to 10%, 50%, 100%. A board is offered the current release when it is
  * on the whitelist or its MAC hashes into the stage's share (lib/otaRollout.ts);
- * the counts beside each stage are worked out with that same hash. More than 5%
- * of the offered boards rolling back pauses it on its own (P2-19).
+ * the counts beside each stage are worked out with that same hash. At least 2
+ * rollbacks that are also more than 5% of the offered boards pause it on its
+ * own (P2-19, 20261022120000); installs lost to power do not count.
  */
 
 const STAGES = [0, 10, 50, 100] as const;
@@ -481,7 +482,7 @@ function ReleaseDetail({
                             onClick={() =>
                                 setPending({
                                     title: `Resume ${release.version}`,
-                                    body: `It is offered again at ${STAGE_LABELS[stage]}. If another toy rolls back and more than 5% have, the server pauses it again.`,
+                                    body: `It is offered again at ${STAGE_LABELS[stage]}. If another toy rolls back, and at least 2 have and they are more than 5%, the server pauses it again. A single rollback never pauses it on its own.`,
                                     confirm: "Resume",
                                     run: change({ action: "resume" }),
                                     done: `${release.version} resumed`,
