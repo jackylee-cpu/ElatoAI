@@ -1,6 +1,6 @@
 """Build the native app shell interface document (xlsx) for the app colleague.
 
-Usage: python3 docs/app-shell/build_xlsx.py "docs/原生App殼接口文檔_v0.1.xlsx"
+Usage: python3 docs/app-shell/build_xlsx.py "docs/原生App殼接口文檔_v0.2.xlsx"
 Edit the content here and rebuild; bump VERSION and add a 變更記錄 row for each release.
 """
 import sys
@@ -9,8 +9,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 
 OUT = sys.argv[1]
-VERSION = "v0.1 草案"
-DATE = "2026-10-12"
+VERSION = "v0.2"
+DATE = "2026-10-22"
 
 FONT = "Microsoft JhengHei"
 CODE = "Consolas"
@@ -77,11 +77,12 @@ intro = [
     ("對象", "負責 iOS／Android 原生殼的同事。照這份文件就可以開工，不用看網頁或韌體的程式碼。"),
     ("範圍", "只包括原生殼要做的事：① 網頁和原生之間的橋接接口 ② 藍牙配網（殼和設備之間）③ 殼本身的設定、權限、品牌 flavor 和上架要求。\n不包括：網頁介面、我們的伺服器 API、韌體。這些由我們負責。"),
     ("架構", "殼＝全屏 WebView，載入品牌的網址。畫面、帳號、資料、伺服器調用全部在網頁裡做；殼只提供網頁做不到的原生能力：藍牙、原生登入、推送、權限。\n殼不直接呼叫我們的伺服器，也不保存任何用戶資料。網頁改介面不用重新送審。"),
-    ("三個品牌", "一個專案、三個 build flavor：A 馬會快活、B 政協青年聯會版、C AI Buddy（自有 IP）。每個品牌各自的名稱、圖示、bundle id、開發者帳號和網址，見「品牌設定」。接口三個品牌完全一樣。"),
+    ("三個品牌", "一個專案、三個 build flavor：A 馬會快活、B 政協青年聯會版、C AI Buddy（自有 IP）。1/15 只上架 A 和 B；C 延後，先不用出 C 的測試版，但專案結構要留位。每個品牌各自的名稱、圖示、bundle id、開發者帳號和網址，見「品牌設定」。接口三個品牌完全一樣。\n每個品牌有自己一套伺服器（帳號、資料互不相通），所以同一個人在兩個品牌各有一個帳號。"),
+    ("先看", "「現在可以開工」分頁：按工作包列出現在可以做甚麼、做到哪裡、還在等甚麼。"),
     ("設備配網", "量產用戶的流程是：在 App 內用藍牙找到設備 → 選 Wi-Fi、填密碼 → 同時完成綁定；解綁也在 App 內做。\n設備上的熱點配網（AIBuddy-XXXX 熱點、192.168.4.1）只留給開發和運維，殼不需要支援。"),
-    ("分頁", "調用約定：網頁和原生怎樣互相調用\n注入腳本：殼要注入頁面的 JS（可直接複製）\n橋接接口：網頁可以呼叫的每個原生方法\n事件：原生主動通知網頁的事件\n錯誤碼：所有方法共用的錯誤碼\n藍牙配網流程：一次配網從頭到尾誰做甚麼\n設備藍牙協定：殼和設備之間的藍牙協定（草案，等韌體 R-21 定稿）\n殼設定與權限：WebView 設定、系統權限、上架要求\n品牌設定：三個 flavor 各自的設定\n待定事項：還沒定、會影響殼的事\n變更記錄"),
+    ("分頁", "現在可以開工：工作包清單和每項還在等甚麼\n調用約定：網頁和原生怎樣互相調用\n注入腳本：殼要注入頁面的 JS（可直接複製）\n橋接接口：網頁可以呼叫的每個原生方法\n事件：原生主動通知網頁的事件\n錯誤碼：所有方法共用的錯誤碼\n藍牙配網流程：一次配網從頭到尾誰做甚麼\n設備藍牙協定：殼和設備之間的藍牙協定（標準部分已定；自訂端點等韌體 R-21，10/30 前定稿）\n殼設定與權限：WebView 設定、系統權限、上架要求\n品牌設定：三個 flavor 各自的設定\n待定事項：還沒定、會影響殼的事\n變更記錄"),
     ("狀態", "可開工＝接口已定，可以照做\n草案＝方向已定，細節可能改，改了會在變更記錄寫明\n待定＝還沒決定，先不要做"),
-    ("時間", "W3（10/26–10/30）殼的藍牙配網和原生登入可用，網頁開始對接\nW6（11/16–11/20）三個殼上 TestFlight 和 Google 內部測試，含推送\nW8（11/30–12/4）提交審核；12/11 前要通過"),
+    ("時間", "W3（10/26–10/30）殼的骨架、標準藍牙配網和原生登入可用，網頁開始對接；韌體的自訂藍牙端點定稿\nW6（11/16–11/20）A、B 兩個殼上 TestFlight 和 Google 內部測試：藍牙、登入、推送（玩具上線、低電）可用，連續用 30 分鐘不閃退\nW8（11/30–12/4）11/30 提交審核；12/11 前要通過"),
     ("聯絡", "接口有疑問或想改，直接找我們；改動記在「變更記錄」。"),
 ]
 r = 1
@@ -104,6 +105,47 @@ for k, v in intro:
     b.border = BORDER
     ws.row_dimensions[r].height = 15 * (v.count("\n") + 1 + len(v) // 70) + 6
     r += 1
+
+# ---------------------------------------------------------------- 現在可以開工
+# 狀態 here means: 可開工 = do it now; 草案 = start, details may still move; 待定 = wait.
+sheet(
+    "現在可以開工",
+    ["#", "工作包", "包括（見各分頁）", "現在可以做到哪裡", "還在等甚麼", "等誰／何時", "需要日期", "狀態"],
+    [5, 22, 36, 52, 44, 20, 14, 9],
+    [
+        "現在就做",
+        (1, "殼專案骨架和品牌 flavor", "殼設定與權限（WebView 部分）、品牌設定",
+         "一個專案、A／B 兩個 flavor（C 留位）：全屏 WebView、持久登入狀態、音訊自動播放、白名單導航、離線頁、啟動畫面、直向、Android 返回鍵、debug 版遠端除錯。\n品牌代號用 hkjc、genex；名稱、圖示、bundle id 先用臨時值，首頁網址先指向 https://elatoai.hkqft.com（現有測試網址），做成 flavor 設定，之後只改設定。",
+         "正式 App 名稱、bundle id、網域、圖示", "我們和客戶（待定事項 #4）；圖示由 Navy", "W3（10/30 前）", "可開工"),
+        (2, "橋接層", "調用約定、注入腳本、錯誤碼",
+         "注入 window.AIBuddyNative、iOS／Android 收發訊息、_resolve／_emit、來源檢查、超時、UNKNOWN_METHOD、User-Agent。\n不用等網頁：在 Safari Web Inspector／Chrome 遠端除錯的 console 直接呼叫 AIBuddyNative.call(\"app.getInfo\") 就能測。",
+         "—", "—", "W3（10/30 前）", "可開工"),
+        (3, "應用和權限", "橋接接口 A-01–A-05、P-01–P-02；事件 app.resume、app.pause；殼設定與權限（系統權限、麥克風 getUserMedia）",
+         "全部照接口做。權限說明文字照「殼設定與權限」。", "—", "—", "W3（10/30 前）", "可開工"),
+        (4, "藍牙：掃描、連接、Wi-Fi 清單", "B-01–B-05、B-07；事件 ble.*；設備藍牙協定",
+         "協定已定：Espressif 標準配網（wifi_provisioning，BLE），Security 1。用官方 ESP Provisioning iOS／Android 庫，設備名前綴 AIBuddy-。\nPoP 先當作可選參數（ble.connect 的 pop，現在一律是 null）。\n我們提供一片燒了藍牙測試版韌體（spotpear-ai-toy-bleprobe）的板：可以掃描、連接、拿 Wi-Fi 清單、送 Wi-Fi 帳密。",
+         "aibuddy-info 端點（測試版只有一個臨時端點 aibuddy，所以 ble.connect 讀設備資料那一步先用假資料）；PoP 最後給不給", "我們（韌體 R-21）", "W3（10/30 前）", "可開工"),
+        (5, "原生登入", "L-01、L-02；品牌設定（Google client ID、Sign in with Apple）",
+         "照接口做到拿回 idToken。開發期間先在你或我們的開發者帳號下建測試用的 client ID 和 App ID；網頁端的 signInWithIdToken 還在做，所以端到端登入要等網頁。",
+         "各品牌開發者帳號下的正式 client ID、App ID；網頁端對接", "客戶開帳號（R-32）；網頁由我們做", "W3（10/30 前）", "可開工"),
+        "可以先做，細節可能改",
+        (6, "藍牙：送 Wi-Fi 和綁定票", "B-06；事件 ble.provisionProgress；設備藍牙協定的 aibuddy-bind、aibuddy-status",
+         "標準的送 Wi-Fi 帳密、等連上可以先做（測試版韌體支援）。綁定票的格式和伺服器 API 已定（見「藍牙配網流程」第 6 步），殼只要原樣轉交。",
+         "aibuddy-bind、aibuddy-status 兩個自訂端點的韌體實作", "我們（韌體 R-21）", "W3（10/30 前）", "草案"),
+        (7, "推送", "N-01、N-02；事件 push.*；品牌設定（推送）",
+         "接 Firebase Messaging，拿到 token 經 push.register 回給網頁；處理冷啟動和前台通知。每個品牌一個 Firebase 專案（見「品牌設定」）。",
+         "iOS 經 FCM 還是 APNs（建議 FCM）；推送內容", "你和我們（待定事項 #6、#7）", "W6（11/20 前）", "草案"),
+        (8, "上架準備", "殼設定與權限（上架）",
+         "權限文案、最低系統版本、審核說明的原生功能描述可以先寫。內部測試版可以先用我們的帳號和臨時 bundle id 上 TestFlight／Google 內部測試。",
+         "馬會、政協青年聯會的機構開發者帳號（要 D-U-N-S，需時 1–3 週）", "客戶（R-32），最遲 11/13", "W6（11/20 前）", "草案"),
+        "先不要做",
+        (9, "深層連結", "殼設定與權限（深層連結）",
+         "—", "正式網域；我們要在網域上放 apple-app-site-association 和 assetlinks.json", "我們（待定事項 #4）", "W6（11/20 前）", "待定"),
+        (10, "快活會員登入", "待定事項 #5",
+         "—", "馬會決定用我們的帳號還是馬會會員帳號（Q12）；如果接馬會帳號，會加一個新接口", "馬會", "W5（11/13 前）", "待定"),
+    ],
+    status_col=8,
+)
 
 # ---------------------------------------------------------------- 調用約定
 SHIM = r"""(function () {
@@ -205,14 +247,14 @@ api_rows = [
     ("B-02", "ble.startScan", "開始掃描附近的設備。每找到一台就發 ble.deviceFound；掃描結束發 ble.scanStopped。同一台設備只報一次，訊號變化不用再報。", '{"timeoutMs":15000}', "{}（立即回覆，結果經事件送出）",
      "PERMISSION_DENIED, BLE_OFF, BLE_UNSUPPORTED", "只報名稱以 AIBuddy- 開頭的設備。用 ESP Provisioning 庫：ESPProvisionManager.searchESPDevices(devicePrefix:\"AIBuddy-\", transport:.ble, security:.secure)", "ESPProvisionManager.searchBleEspDevices(\"AIBuddy-\")", "按 timeoutMs", W3, "可開工"),
     ("B-03", "ble.stopScan", "停止掃描。", "{}", "{}", "—", "", "", "1 秒", W3, "可開工"),
-    ("B-04", "ble.connect", "連接一台設備，建立加密連線，再讀出設備資料（自訂端點 aibuddy-info）。如果設備的 brand 和本 App 的品牌不同，斷開並回 WRONG_BRAND。", '{"deviceId":"A1B2"}  deviceId 用 ble.deviceFound 給的值',
+    ("B-04", "ble.connect", "連接一台設備，建立加密連線，再讀出設備資料（自訂端點 aibuddy-info）。如果設備的 brand 和本 App 的品牌不同，斷開並回 WRONG_BRAND。", '{"deviceId":"A1B2","pop":null}  deviceId 用 ble.deviceFound 給的值；pop 是 Security 1 的 proof of possession，null 或缺少＝不用 PoP（目前一律 null，見待定事項 #2）',
      '{"deviceId":"A1B2","name":"AIBuddy-6270","info":{"mac":"F8:5B:1B:53:62:70","brand":"hkjc","edition":"raceday","firmware":"1.0.1","wifiConfigured":false,"bound":false}}',
-     "DEVICE_NOT_FOUND, CONNECT_FAILED, SECURITY_FAILED, WRONG_BRAND, TIMEOUT", "ESPDevice.connect(...)，PoP 見「設備藍牙協定」", "ESPDevice.connectBLEDevice(...)", "20 秒", W3, "可開工"),
+     "DEVICE_NOT_FOUND, CONNECT_FAILED, SECURITY_FAILED, WRONG_BRAND, TIMEOUT", "ESPDevice.connect(...)，security .secure（Security 1）；pop 原樣交給庫的 ESPDeviceConnectionDelegate", "ESPDevice.connectBLEDevice(...)，ESPConstants.SecurityType.SECURITY_1；pop 用 setProofOfPossession", "20 秒", W3, "可開工"),
     ("B-05", "ble.scanWifi", "請設備掃描附近的 Wi-Fi，回傳清單。設備只支援 2.4GHz，所以清單只會有 2.4GHz 網絡。", '{"deviceId":"A1B2"}',
      '{"networks":[{"ssid":"HomeWiFi","rssi":-52,"secure":true}]}  按 rssi 由強到弱排序，同名只留最強一個，去掉空 SSID',
      "DEVICE_DISCONNECTED, TIMEOUT", "ESPDevice.scanWifiList", "ESPDevice.scanNetworks", "15 秒", W3, "可開工"),
     ("B-06", "ble.provision", "把 Wi-Fi 和綁定票交給設備，等它連上 Wi-Fi 並完成綁定。過程中發 ble.provisionProgress。\n步驟：① 寫 aibuddy-bind（有 bindTicket 時）② 送 Wi-Fi 帳密並套用 ③ 等設備回報 Wi-Fi 已連上 ④ 每秒讀一次 aibuddy-status，直到 claimed 或失敗。\nbindTicket 為 null 時只改 Wi-Fi（已綁定的設備換路由器），第 ③ 步成功就回覆。",
-     '{"deviceId":"A1B2","ssid":"HomeWiFi","password":"********","bindTicket":"bt_9f3c...（網頁向伺服器取得，5 分鐘有效）"}',
+     '{"deviceId":"A1B2","ssid":"HomeWiFi","password":"********","bindTicket":"q3Jx0bS2kV9mT1aZpL8wEg"}  bindTicket 是 22 個字元的 base64url 字串，網頁向伺服器取得（5 分鐘有效、只能用一次），殼原樣轉交、不用解讀',
      '{"result":"claimed"}；只改 Wi-Fi 時 {"result":"wifi_connected"}',
      "WIFI_AUTH_FAILED, WIFI_NOT_FOUND, WIFI_TIMEOUT, CLAIM_REJECTED（看 error.reason）, DEVICE_DISCONNECTED, TIMEOUT",
      "ESPDevice.sendData(path:\"aibuddy-bind\")；ESPDevice.provision(ssid:passPhrase:) 的狀態回調；再 sendData(path:\"aibuddy-status\")", "ESPDevice.sendDataToCustomEndPoint；ESPDevice.provision(ssid, password, ProvisionListener)", "90 秒", W3, "可開工"),
@@ -284,7 +326,7 @@ sheet(
         ("WIFI_AUTH_FAILED", "Wi-Fi 密碼錯誤", "讓用戶重新輸入密碼"),
         ("WIFI_NOT_FOUND", "設備找不到這個 Wi-Fi", "提示 5GHz 不支援、靠近路由器"),
         ("WIFI_TIMEOUT", "設備連 Wi-Fi 超時（原因不明）", "提示重試"),
-        ("CLAIM_REJECTED", "Wi-Fi 已連上，但伺服器拒絕綁定。error.reason：already_bound（已有主人）| ticket_expired | ticket_used | wrong_brand | server_unreachable", "按 reason 提示；already_bound 時提示請原主先解綁"),
+        ("CLAIM_REJECTED", "Wi-Fi 已連上，但綁定沒有成功。error.reason：\nalready_bound：設備已屬於另一個帳號（伺服器回 409 device_owned）\nticket_invalid：票過期、用過，或不是這個品牌的伺服器發的（伺服器回 403 bind_ticket_invalid，三種情況不分開）\ndevice_auth_failed：設備密鑰不對（伺服器回 401，正常不會出現，是出廠問題）\nserver_unreachable：設備連不上伺服器", "already_bound：提示請原主先解綁；ticket_invalid：自動取新票重試一次；其他：提示聯絡客服或重試"),
         "登入",
         ("AUTH_FAILED", "Apple／Google 回報失敗", "提示改用其他登入方式"),
     ],
@@ -303,12 +345,14 @@ sheet(
         (3, "殼", "掃描並逐台回報設備；網頁列出設備名稱（AIBuddy-XXXX，XXXX 印在設備或包裝上）。", "ble.startScan → ble.deviceFound", "列表按訊號強弱排序。"),
         (4, "殼", "用戶選一台：連接、建立加密連線、讀設備資料，檢查品牌。", "ble.connect", "bound=true 時，網頁會向伺服器確認是不是自己的設備；不是的話提示「請原主先解綁」，不繼續。"),
         (5, "殼 → 設備", "設備掃描 Wi-Fi，網頁顯示清單；用戶選一個並填密碼。", "ble.scanWifi", "可以讓用戶手動輸入隱藏的 SSID。"),
-        (6, "網頁", "向我們的伺服器取綁定票（一次性、5 分鐘有效、綁定這個帳號和品牌）。", "（網頁自己做，不經殼）", ""),
+        (6, "網頁", "向本品牌的伺服器取綁定票（一次性、5 分鐘有效、綁定這個帳號）。", "POST /api/device_bind_ticket（網頁自己做，不經殼）",
+         "已完成，殼不用呼叫，列出來讓你知道票從哪來。\n回 200 {ticket, expires_at, expires_in: 300}；401 未登入；429 同一帳號一分鐘內超過 5 張（Retry-After: 60）。\n每個品牌一套伺服器，票只在發出它的那套有效，所以別的品牌的 App 綁不走這台設備。"),
         (7, "殼 → 設備", "把綁定票、Wi-Fi 帳密交給設備，逐步回報進度。", "ble.provision → ble.provisionProgress", ""),
-        (8, "設備", "連上 Wi-Fi，用設備密鑰加綁定票向伺服器認領，結果寫入 aibuddy-status。", "（韌體做）", "殼只負責讀 aibuddy-status。"),
+        (8, "設備", "連上 Wi-Fi，用設備密鑰加綁定票向伺服器認領，結果寫入 aibuddy-status。", "（韌體做）", "伺服器端已完成（P0-11）。殼只負責讀 aibuddy-status。"),
         (9, "網頁", "收到 claimed，向伺服器確認綁定，斷開藍牙，跳到設備頁。", "ble.disconnect", ""),
         (10, "網頁", "失敗時按錯誤碼提示：密碼錯回到第 5 步，其他從第 7 步重試（重新取票）。", "", "綁定票只能用一次，重試必須取新票。"),
         "已綁定的設備換 Wi-Fi（例如換路由器）",
+        (0, "網頁", "設備還在線時，換 Wi-Fi 在網頁的 Wi-Fi 管理頁做，經伺服器轉給設備，不經殼。下面的藍牙流程只用在設備連不上任何已存的 Wi-Fi 時。", "（不經殼）", ""),
         (1, "用戶", "長按設備 BOOT 鍵 5 秒，設備開始藍牙廣播。", "", "韌體 R-18。"),
         (2, "殼／網頁", "同上第 1–5 步。", "", ""),
         (3, "殼 → 設備", "只送 Wi-Fi，不送綁定票。", "ble.provision（bindTicket: null）", "回 wifi_connected 即完成，綁定不變。"),
@@ -324,11 +368,14 @@ sheet(
     ["項目", "內容", "例子", "狀態"],
     [22, 70, 56, 9],
     [
-        ("協定", "Espressif 的標準 Wi-Fi 配網協定（wifi_provisioning／protocomm，BLE 傳輸）。殼可以直接用 Espressif 官方庫：iOS esp-idf-provisioning-ios、Android esp-idf-provisioning-android，不用自己寫 GATT。", "", "草案"),
-        ("廣播名稱", "AIBuddy-XXXX，XXXX 是設備 Wi-Fi MAC 最後 4 位 hex（大寫）。和現在熱點的名稱一致。", "AIBuddy-6270", "草案"),
+        ("協定", "已定：Espressif 的標準 Wi-Fi 配網協定（wifi_provisioning／protocomm，BLE 傳輸）。殼直接用 Espressif 官方庫：iOS esp-idf-provisioning-ios、Android esp-idf-provisioning-android，不用自己寫 GATT。藍牙測試版韌體（10/13）已用這套協定在 Spotpear 板上跑通。", "", "可開工"),
+        ("廣播名稱", "已定：AIBuddy-XXXX，XXXX 是設備 Wi-Fi MAC 最後 4 位 hex（大寫）。和現在熱點的名稱一致，測試版韌體已是這個名稱。", "AIBuddy-6270", "可開工"),
         ("何時廣播", "未配網、存好的 Wi-Fi 連不上、未綁定（包括剛被解綁）、或用戶長按 BOOT 5 秒時。配網完成後停止廣播並釋放藍牙。", "", "草案"),
-        ("加密", "Security 1（X25519 金鑰交換 + AES-CTR）。PoP（proof of possession）怎樣給，等韌體 R-21 決定，見「待定事項」。", "", "待定"),
-        ("標準端點", "prov-session、prov-scan、prov-config 由 Espressif 庫處理，殼不用直接碰。", "", "草案"),
+        ("加密", "已定：Security 1（X25519 金鑰交換 + AES-CTR）。iOS 庫用 security .secure，Android 庫用 SECURITY_1。", "", "可開工"),
+        ("PoP", "還沒定給不給、怎樣給。測試版韌體不用 PoP。殼把 ble.connect 的 pop 參數原樣交給庫，null＝不用；這樣以後定了也不用改殼。", "", "待定"),
+        ("韌體空間", "已解決：藍牙配網令韌體大約多 670KB，超出原來 2MB 的程式分區；量產板已改用每個 4MB 的程式分區（P2-12，11/13 凍結），放得下。藍牙配網要寫進 11/27 交 Spotpear 的出廠韌體，因為新設備第一次開機還沒有 Wi-Fi，不能經 OTA 補上。", "", "可開工"),
+        ("標準端點", "prov-session、prov-scan、prov-config 由 Espressif 庫處理，殼不用直接碰。", "", "可開工"),
+        ("測試版韌體", "spotpear-ai-toy-bleprobe：開機直接進藍牙配網，可以掃描、連接、拿 Wi-Fi 清單、送 Wi-Fi 帳密。它只有一個臨時自訂端點 aibuddy（寫入任何內容，回 {\"mac\":...,\"ticket_len\":...}），沒有下面三個正式端點，連上 Wi-Fi 後也不會認領。只用來開發殼，不是正式行為。", '回：{"mac":"F8:5B:1B:53:62:70","ticket_len":22}', "可開工"),
         ("自訂端點 aibuddy-info", "寫入 \"{}\"，回傳設備資料 JSON。", '回：{"mac":"F8:5B:1B:53:62:70","brand":"hkjc","edition":"raceday","firmware":"1.0.1","wifiConfigured":false,"bound":false}', "草案"),
         ("自訂端點 aibuddy-bind", "寫入綁定票，回傳是否收到。必須在送 Wi-Fi 帳密之前寫。", '寫：{"ticket":"bt_9f3c..."}\n回：{"ok":true}', "草案"),
         ("自訂端點 aibuddy-status", "寫入 \"{}\"，回傳目前進度。Wi-Fi 連上之後，殼每秒讀一次，直到 claimed 或 claim_failed。設備在這期間保持藍牙連線，最多 60 秒。", '回：{"stage":"claim_failed","reason":"already_bound"}\nstage：idle | wifi_connecting | wifi_failed | claiming | claimed | claim_failed\nreason 同錯誤碼 CLAIM_REJECTED', "草案"),
@@ -386,16 +433,17 @@ sheet(
     ["項目", "A 馬會快活", "B 政協青年聯會版", "C AI Buddy", "備註"],
     [22, 34, 34, 34, 40],
     [
-        ("品牌代號（brand）", "hkjc（暫定）", "待定", "aibuddy（暫定）", "注入腳本和 User-Agent 用；設備的 brand 也是這個值"),
-        ("App 名稱", "待馬會確認", "待定", "AI Buddy", ""),
-        ("Bundle ID／applicationId", "待定（馬會的帳號下）", "待定（政協青年聯會的帳號下）", "待定（我們的帳號下）", ""),
-        ("開發者帳號", "馬會的機構帳號（要 D-U-N-S）", "政協青年聯會的機構帳號（要 D-U-N-S）", "我們的帳號", "Apple 4.2.6／4.3"),
-        ("首頁網址", "待定", "待定", "待定", "網頁按網址判斷品牌"),
-        ("白名單網域", "待定", "待定", "待定", "目前的網域是 elatoai.hkqft.com，正式網域待定"),
+        ("1/15 上架", "是", "是", "否，延後", "C 先不用出測試版，但專案結構要留位"),
+        ("品牌代號（brand）", "hkjc", "genex", "aibuddy", "網頁的品牌設定已用這三個代號。注入腳本和 User-Agent 用；設備的 brand 也是這個值"),
+        ("App 名稱", "待馬會確認", "待客戶確認", "AI Buddy", ""),
+        ("Bundle ID／applicationId", "待定（馬會的帳號下）", "待定（政協青年聯會的帳號下）", "待定（我們的帳號下）", "開發期間用臨時 bundle id"),
+        ("開發者帳號", "馬會的機構帳號（要 D-U-N-S）", "政協青年聯會的機構帳號（要 D-U-N-S）", "我們的帳號", "Apple 4.2.6／4.3；最遲 11/13 要開好"),
+        ("首頁網址", "待定", "待定", "待定", "每個品牌一套伺服器和網頁，網頁的品牌由那套伺服器的設定決定，不看網址。開發期間先用 https://elatoai.hkqft.com"),
+        ("白名單網域", "待定", "待定", "待定", "每個品牌一個子網域，正式網域待定。開發期間白名單放 elatoai.hkqft.com；做成 flavor 設定"),
         ("登入方式", "待定（可能接馬會會員帳號，見待定事項）", "Email 驗證碼、Google、Apple", "Email 驗證碼、Google、Apple", "Email 驗證碼在網頁做，殼不用管"),
         ("Google OAuth client ID", "iOS、Android 各一個，由該品牌帳號建立", "同左", "同左", "Web client ID 由我們提供；新建的 client ID 要告訴我們，我們在 Supabase 登記"),
         ("Sign in with Apple", "該品牌帳號的 App ID 開啟", "同左", "同左", ""),
-        ("推送", "Firebase 專案中的一個 app", "同左", "同左", "建議三個品牌共用一個 Firebase 專案"),
+        ("推送", "自己的 Firebase 專案", "同左", "同左", "建議每個品牌一個 Firebase 專案：每個品牌的伺服器只拿自己的推送密鑰，和資料分開的做法一致（v0.1 建議共用，已改）"),
         ("圖示、啟動畫面、主色", "由馬會提供", "由客戶提供", "我們提供", "離線頁也用這套"),
     ],
 )
@@ -406,15 +454,16 @@ sheet(
     ["#", "事項", "影響殼的哪部分", "由誰決定", "需要日期", "狀態"],
     [5, 56, 36, 20, 16, 9],
     [
-        (1, "殼用 Capacitor 還是純原生", "不影響接口（網頁只認 window.AIBuddyNative）", "你", "W1（10/16 前）", "待定"),
-        (2, "藍牙配網的 PoP 怎樣給，以及 Security 1 或 2", "ble.connect", "我們（韌體 R-21）", "W3（10/30 前）", "待定"),
-        (3, "設備藍牙協定的自訂端點細節", "ble.connect、ble.provision", "我們（韌體 R-21）", "W3（10/30 前）", "草案"),
-        (4, "三個品牌的品牌代號、網域、App 名稱、bundle id", "品牌設定、白名單、深層連結", "我們和客戶", "W2（10/23 前）", "待定"),
+        (1, "殼用 Capacitor 還是純原生", "不影響接口（網頁只認 window.AIBuddyNative），不擋開工", "你", "盡快告訴我們", "待定"),
+        (2, "藍牙配網的 PoP 給不給、怎樣給（Security 1 已定，v0.2）", "只影響 ble.connect 的 pop 參數的值；殼照「設備藍牙協定」原樣轉交，不擋開工", "我們（韌體 R-21）", "W3（10/30 前）", "待定"),
+        (3, "設備藍牙協定的自訂端點 aibuddy-info／-bind／-status 細節", "ble.connect、ble.provision", "我們（韌體 R-21）", "W3（10/30 前）", "草案"),
+        (4, "A、B 的網域、App 名稱、bundle id（品牌代號已定：hkjc、genex、aibuddy，v0.2）", "品牌設定、白名單、深層連結；開發期間用臨時值，不擋開工", "我們和客戶", "W2（10/23 前），已逾期", "待定"),
         (5, "快活的登入是用我們的帳號，還是接馬會的會員帳號（Q12）", "如果接馬會帳號，要加 auth.signInWithHkjc 之類的接口", "馬會", "W5（11/13 前）", "待定"),
-        (6, "推送：iOS 經 FCM 還是直接用 APNs", "push.register 的 provider", "你和我們", "W5（11/13 前）", "草案"),
-        (7, "推送要通知甚麼（例如設備離線、低電、韌體更新）", "不影響接口，只影響推送內容", "我們", "W5（11/13 前）", "待定"),
+        (6, "推送：iOS 經 FCM 還是直接用 APNs（建議 FCM）", "push.register 的 provider", "你和我們", "W5（11/13 前）", "草案"),
+        (7, "推送要通知甚麼（至少：玩具第一次上線、低電）", "不影響接口，只影響推送內容", "我們", "W5（11/13 前）", "待定"),
         (8, "最低支援的 iOS／Android 版本", "殼設定", "你", "W2（10/23 前）", "草案"),
         (9, "Android 上要不要提供 Apple 登入（建議不提供）", "auth.signInWithApple", "我們", "W3（10/30 前）", "草案"),
+        (10, "馬會、政協青年聯會的機構開發者帳號（R-32）", "正式 bundle id、Google client ID、Sign in with Apple、送審；內部測試版可先用我們的帳號", "客戶", "最遲 W5（11/13）", "待定"),
     ],
     status_col=6,
 )
@@ -424,7 +473,10 @@ sheet(
     "變更記錄",
     ["日期", "版本", "變更", "誰"],
     [14, 12, 80, 14],
-    [(DATE, "v0.1", "初版：調用約定、注入腳本、橋接接口（app、permission、ble、auth、push）、事件、錯誤碼、藍牙配網流程、設備藍牙協定（草案）、殼設定與權限、品牌設定、待定事項。", "")],
+    [
+        ("2026-10-12", "v0.1", "初版：調用約定、注入腳本、橋接接口（app、permission、ble、auth、push）、事件、錯誤碼、藍牙配網流程、設備藍牙協定（草案）、殼設定與權限、品牌設定、待定事項。", ""),
+        (DATE, "v0.2", "新增「現在可以開工」分頁。\n藍牙：協定（Espressif 標準配網＋官方庫）、廣播名稱、Security 1 改為已定；新增 PoP、韌體空間（4MB 程式分區）、測試版韌體三行；ble.connect 加可選參數 pop。\n綁定：綁定票格式（22 字元 base64url）和伺服器 API（POST /api/device_bind_ticket，已完成）寫進流程第 6 步；CLAIM_REJECTED 的 reason 改為和伺服器一致：already_bound、ticket_invalid、device_auth_failed、server_unreachable（v0.1 的 ticket_expired、ticket_used、wrong_brand 合併為 ticket_invalid）。\n換 Wi-Fi：設備在線時改在網頁做，不經殼。\n品牌：1/15 只上架 A、B；品牌代號定為 hkjc、genex、aibuddy；每個品牌一套伺服器，網頁不按網址判斷品牌；推送改建議每個品牌一個 Firebase 專案。\n待定事項：更新 #1、#2、#4、#7，新增 #10 開發者帳號。", ""),
+    ],
 )
 
 for ws in wb.worksheets:
