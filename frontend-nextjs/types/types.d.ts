@@ -531,6 +531,10 @@ declare global {
         offer_count: number;
         running_at: string | null;
         failed_at: string | null;
+        /** crash, crash_loop or lost_installs; null when the firmware did not say (before 2026-10-22). */
+        failed_reason: string | null;
+        /** The reset that decided it, e.g. poweron, brownout, task_wdt. */
+        failed_reset: string | null;
     }
 
     /** A firmware release for the admin OTA page, with what the rollout has done so far. */

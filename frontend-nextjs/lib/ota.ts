@@ -11,8 +11,19 @@ export const bearerToken = (req: Request): string | null => {
 // Same shapes as the firmware_releases CHECK constraints.
 const BOARD = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/;
+// Same as the firmware_rollout_devices CHECK constraints (20261022120000).
+const FAILED_REASONS = ["crash", "crash_loop", "lost_installs"] as const;
+const RESET = /^[a-z_]{1,16}$/;
 
-export type FirmwareReport = { board: string; version: string; failedVersion: string | null };
+export type FailedReason = (typeof FAILED_REASONS)[number];
+
+export type FirmwareReport = {
+    board: string;
+    version: string;
+    failedVersion: string | null;
+    failedReason: FailedReason | null;
+    failedReset: string | null;
+};
 
 export type OtaAnswer =
     | { update: false }
@@ -21,22 +32,44 @@ export type OtaAnswer =
 /**
  * What a board says it runs, as it sends it with its token request:
  *
- *   "firmware": { "board": "spotpear-ai-toy", "version": "1.2.0", "failed_version": "1.3.0" }
+ *   "firmware": { "board": "spotpear-ai-toy", "version": "1.2.0", "failed_version": "1.3.0",
+ *                 "failed_reason": "lost_installs", "failed_reset": "poweron" }
  *
  * `failed_version` only follows a rollback from that image. Null for anything
  * malformed or missing -- older firmware sends nothing.
+ *
+ * `failed_reason` says why (firmware-arduino/src/OTA.cpp): a crash on
+ * probation, a crash loop after it, or installs lost to resets that were not
+ * crashes -- a flat battery, as a rule. `failed_reset` is the reset that
+ * decided it. Firmware before 2026-10-22 sends neither, and a reason that does
+ * not parse is dropped rather than the report: the rollback still counts.
  */
 export const parseFirmwareReport = (value: unknown): FirmwareReport | null => {
     if (!value || typeof value !== "object") {
         return null;
     }
-    const { board, version, failed_version: failed } = value as Record<string, unknown>;
+    const {
+        board,
+        version,
+        failed_version: failed,
+        failed_reason: reason,
+        failed_reset: reset,
+    } = value as Record<string, unknown>;
     if (typeof board !== "string" || !BOARD.test(board) ||
         typeof version !== "string" || !VERSION.test(version) ||
         (failed != null && (typeof failed !== "string" || !VERSION.test(failed)))) {
         return null;
     }
-    return { board, version, failedVersion: (failed as string | undefined) ?? null };
+    const failedVersion = (failed as string | undefined) ?? null;
+    return {
+        board,
+        version,
+        failedVersion,
+        failedReason: failedVersion && FAILED_REASONS.includes(reason as FailedReason)
+            ? reason as FailedReason
+            : null,
+        failedReset: failedVersion && typeof reset === "string" && RESET.test(reset) ? reset : null,
+    };
 };
 
 /**
@@ -86,6 +119,10 @@ export const recordReportAndDecide = async (
         p_board: report.board,
         p_version: report.version,
         p_failed_version: report.failedVersion,
+        // Only when there is one: a database without 20261022120000 has the
+        // four-parameter function, and boards that send no reason keep working.
+        ...(report.failedReason ? { p_failed_reason: report.failedReason } : {}),
+        ...(report.failedReset ? { p_failed_reset: report.failedReset } : {}),
     });
     if (noteError) {
         throw new Error(noteError.message);

@@ -272,11 +272,22 @@ bool supplyTakeReminder() {
     return true;
 }
 
+// The window mean, not a fresh reading: this runs on wifiTask while loop()
+// owns the ADC. Before the first sample is due the window holds the boot
+// reading, so an install right after boot is judged too.
+bool supplyTooLowForUpdate(float &percent, float &lowLine) {
+    if (!started) return false;
+    percent = percentOfReference(windowMean);
+    lowLine = kLowRatio * 100;
+    return low || windowMean < reference * kLowRatio;
+}
+
 #else
 
 void supplyMonitorBegin() {}
 void supplyMonitorPoll() {}
 bool supplyLow() { return false; }
 bool supplyTakeReminder() { return false; }
+bool supplyTooLowForUpdate(float &, float &) { return false; }
 
 #endif
