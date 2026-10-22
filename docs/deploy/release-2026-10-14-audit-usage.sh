@@ -8,7 +8,14 @@
 # with five more (bind tickets, four for OTA rollouts) and the web app's new
 # env vars. Extended 2026-10-16 with device_wifi (R-37) and the fixes since
 # 63f3b06, which UAT runs; every step is re-runnable, so the same command
-# takes UAT forward. Schema changes, all in step 3:
+# takes UAT forward. Extended 2026-10-22 with the OTA failure reason.
+# Schema changes, all in step 3:
+#   - OTA failure reason: firmware_rollout_devices gains failed_reason and
+#     failed_reset; ota_note_report takes them (two new parameters that default
+#     to NULL, so the old web app's four-name call still resolves). Auto-pause
+#     now leaves out lost_installs (installs lost to power, not the build) and
+#     needs at least 2 rollbacks as well as more than 5%. One flat toy no
+#     longer pauses a release, as AIBuddy-16C0 did to 1.1.0 on 2026-10-16
 #   - R-37: device_wifi holds each board's saved Wi-Fi names (never
 #     passwords), written by the voice server through record_device_wifi()
 #     (service role only); parents read only their own boards' rows, and a
@@ -129,6 +136,7 @@ MARK_FILE="$BACKUP_DIR/release-2026-10-14-voice-started-at"
 # 170500 replaces the admin_list_devices() that 140000 creates, and 190000
 # replaces 120000's audit_admin_change() and audits firmware_releases.
 # 20261012170000 and 20261016120000 stand alone (devices and users only).
+# 20261022120000 replaces 200000's ota_maybe_pause() and ota_note_report().
 MIGRATIONS=(
     20261012170000_device_bind_tickets.sql
     20261014120000_admin_audit_log.sql
@@ -143,6 +151,7 @@ MIGRATIONS=(
     20261014210000_admin_firmware_upload.sql
     20261014220000_admin_firmware_rollout.sql
     20261016120000_device_wifi.sql
+    20261022120000_ota_failure_reason.sql
 )
 # Each admin function is refused to anon and checks the role itself.
 ADMIN_FUNCTIONS=(
@@ -161,7 +170,7 @@ SERVICE_FUNCTIONS=(
     "issue_device_bind_ticket(uuid,text,integer,integer)"
     "claim_device_with_ticket(uuid,text)"
     "ota_note_offer(uuid,uuid)"
-    "ota_note_report(uuid,text,text,text)"
+    "ota_note_report(uuid,text,text,text,text,text)"
     "ota_maybe_pause(uuid)"
     "record_device_wifi(text,text,smallint,jsonb,smallint)"
 )
