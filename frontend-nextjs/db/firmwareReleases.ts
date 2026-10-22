@@ -25,7 +25,7 @@ export const listFirmwareReleasesForAdmin = async (
             .order("created_at", { ascending: false }),
         supabase
             .from("firmware_rollout_devices")
-            .select("release_id, device_id, first_offered_at, last_offered_at, offer_count, running_at, failed_at"),
+            .select("release_id, device_id, first_offered_at, last_offered_at, offer_count, running_at, failed_at, failed_reason, failed_reset"),
     ]);
     if (error || rolloutError) {
         console.log("error listFirmwareReleasesForAdmin", error ?? rolloutError);

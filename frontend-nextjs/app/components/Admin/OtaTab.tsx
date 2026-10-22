@@ -42,8 +42,9 @@ import { cn } from "@/lib/utils";
  * A release goes: uploaded as a draft -> made current at the whitelist stage ->
  * widened to 10%, 50%, 100%. A board is offered the current release when it is
  * on the whitelist or its MAC hashes into the stage's share (lib/otaRollout.ts);
- * the counts beside each stage are worked out with that same hash. More than 5%
- * of the offered boards rolling back pauses it on its own (P2-19).
+ * the counts beside each stage are worked out with that same hash. At least 2
+ * rollbacks that are also more than 5% of the offered boards pause it on its
+ * own (P2-19, 20261022120000); installs lost to power do not count.
  */
 
 const STAGES = [0, 10, 50, 100] as const;
@@ -92,6 +93,21 @@ function when(iso: string | null): string {
 
 const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 const rolledBack = (release: IAdminFirmwareRelease) => release.rollout.filter((row) => row.failed_at);
+// Installs lost to power, not crashes: a flat battery, as a rule. Auto-pause
+// leaves them out (20261022120000); so do the rollback counts here.
+const lostPower = (row: IAdminRolloutDevice) => row.failed_reason === "lost_installs";
+const crashed = (release: IAdminFirmwareRelease) => rolledBack(release).filter((row) => !lostPower(row));
+const poweredOff = (release: IAdminFirmwareRelease) => rolledBack(release).filter(lostPower);
+
+function failureLabel(row: IAdminRolloutDevice): string {
+    const reset = row.failed_reset ? ` (${row.failed_reset})` : "";
+    switch (row.failed_reason) {
+        case "crash": return `crashed${reset}`;
+        case "crash_loop": return `crash loop${reset}`;
+        case "lost_installs": return `lost power${reset}`;
+        default: return "no reason sent";
+    }
+}
 
 interface OtaTabProps {
     releases: IAdminFirmwareRelease[];
@@ -118,7 +134,12 @@ const OtaTab: React.FC<OtaTabProps> = ({ releases, devices, onOpenDevice }) => {
                 <Stat value={current?.version ?? "—"} label="Current release" />
                 <Stat value={current ? stateLabel(current) : "—"} label="Stage" />
                 <Stat value={current ? current.running : "—"} label="Toys running it" />
-                <Stat value={current ? rolledBack(current).length : "—"} label="Rolled back from it" />
+                <Stat
+                    value={current ? crashed(current).length : "—"}
+                    label={current && poweredOff(current).length > 0
+                        ? `Rolled back from it (+${poweredOff(current).length} lost power)`
+                        : "Rolled back from it"}
+                />
             </div>
 
             <UploadPanel onUploaded={(release) => { setBoard(release.board); setSelected(release.release_id); }} />
@@ -168,8 +189,15 @@ const OtaTab: React.FC<OtaTabProps> = ({ releases, devices, onOpenDevice }) => {
                                             <TableCell className="whitespace-nowrap font-mono text-xs font-medium">{release.version}</TableCell>
                                             <TableCell><StatePill release={release} /></TableCell>
                                             <TableCell className="text-right">{release.running || "—"}</TableCell>
-                                            <TableCell className={cn("text-right", rolledBack(release).length > 0 && "font-medium text-rose-600")}>
-                                                {rolledBack(release).length || "—"}
+                                            <TableCell className="whitespace-nowrap text-right">
+                                                <span className={cn(crashed(release).length > 0 && "font-medium text-rose-600")}>
+                                                    {crashed(release).length || (poweredOff(release).length ? "0" : "—")}
+                                                </span>
+                                                {poweredOff(release).length > 0 && (
+                                                    <span className="ml-1 text-xs text-muted-foreground" title="Lost power during the install; not counted for auto-pause">
+                                                        +{poweredOff(release).length}⚡
+                                                    </span>
+                                                )}
                                             </TableCell>
                                             <TableCell className="whitespace-nowrap text-right font-mono text-xs">{mb(release.size_bytes)}</TableCell>
                                             <TableCell className="whitespace-nowrap text-sm">{when(release.created_at)}</TableCell>
@@ -454,7 +482,7 @@ function ReleaseDetail({
                             onClick={() =>
                                 setPending({
                                     title: `Resume ${release.version}`,
-                                    body: `It is offered again at ${STAGE_LABELS[stage]}. If another toy rolls back and more than 5% have, the server pauses it again.`,
+                                    body: `It is offered again at ${STAGE_LABELS[stage]}. If another toy rolls back, and at least 2 have and they are more than 5%, the server pauses it again. A single rollback never pauses it on its own.`,
                                     confirm: "Resume",
                                     run: change({ action: "resume" }),
                                     done: `${release.version} resumed`,
@@ -577,6 +605,12 @@ function ReleaseDetail({
 
                 <div>
                     <h4 className="mb-1.5 text-sm font-semibold text-gray-900">Rolled back ({failed.length})</h4>
+                    {failed.some(lostPower) && (
+                        <p className="mb-1.5 text-xs text-muted-foreground">
+                            {failed.filter(lostPower).length} lost power during the install (a flat battery, as a rule)
+                            and do not count towards auto-pause.
+                        </p>
+                    )}
                     {failed.length === 0 ? (
                         <p className="text-sm text-muted-foreground">No toy has rolled back from {release.version}.</p>
                     ) : (
@@ -591,7 +625,11 @@ function ReleaseDetail({
                                         <span className="font-medium">{deviceName(row.mac_address)}</span>{" "}
                                         <span className="font-mono text-[11px] text-muted-foreground">{row.mac_address}</span>
                                     </button>
-                                    <span className="shrink-0 text-xs text-muted-foreground">{when(row.failed_at)}</span>
+                                    <span className="shrink-0 text-right text-xs text-muted-foreground">
+                                        <span className={cn(!lostPower(row) && "text-rose-600")}>{failureLabel(row)}</span>
+                                        {" · "}
+                                        {when(row.failed_at)}
+                                    </span>
                                 </li>
                             ))}
                         </ul>

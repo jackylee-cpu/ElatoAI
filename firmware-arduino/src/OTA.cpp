@@ -4,6 +4,7 @@
 #include <Update.h>
 #include <WiFiClientSecure.h>
 
+#include "SupplyMonitor.h"
 #include "esp_ota_ops.h"
 #include "mbedtls/sha256.h"
 
@@ -42,7 +43,16 @@
  * watchdog is the image's fault, and the next check reports it as failed so
  * the backend never offers it to this board again. A power cut, a brownout or
  * an external reset is not -- this board loses power on its own now and then
- * (R-17) -- so the image is tried again, up to OTA_MAX_TRIES installs.
+ * (R-17) -- so the image is tried again, up to OTA_MAX_TRIES installs. The
+ * report says which it was ("failed_reason": crash, crash_loop or
+ * lost_installs, plus the reset), so the backend's auto-pause can tell a bad
+ * build from a flat battery.
+ *
+ * Lost installs are mostly a dying battery: AIBuddy-16C0 lost both installs of
+ * 1.1.0 to power-on resets within a minute of each, with its supply under the
+ * low-battery line, and reported a good release as failed (2026-10-16). So no
+ * install starts while the supply reads low or right after a brownout, and a
+ * download is dropped if the supply goes low under it; a later boot tries again.
  *
  * Probation only covers the first minutes. An image that is confirmed and
  * starts crash-looping later would otherwise need a USB cable to recover, and
@@ -69,6 +79,10 @@ static const uint32_t OTA_HEALTHY_MS = 5UL * 60UL * 1000UL;
 static bool onProbation = false;
 static bool checkedThisBoot = false;
 static String failedVersion;
+// Why failedVersion failed ("crash", "crash_loop" or "lost_installs") and the
+// reset that decided it (resetKey()), for the report.
+static String failedReason;
+static String failedReset;
 // Each start time comes with its own flag. Marking "set" by forcing the low
 // bit (millis() | 1) put the time up to 1ms in the future, so the next poll's
 // unsigned millis() - t wrapped to ~49 days: 1.1.1 rolled itself back the
@@ -91,6 +105,23 @@ static bool isCrashReset(esp_reset_reason_t reason) {
            reason == ESP_RST_WDT;
 }
 
+// A reset reason as the report spells it (lib/ota.ts accepts [a-z_]).
+static const char *resetKey(esp_reset_reason_t reason) {
+    switch (reason) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_EXT: return "ext";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "unknown";
+    }
+}
+
 // Weak in the Arduino core (esp32-hal-misc.c, C linkage). Returning true
 // leaves the image's rollback state alone at startup; otaPoll() settles it.
 extern "C" bool verifyRollbackLater() { return true; }
@@ -104,11 +135,13 @@ static String nvsTarget() {
     return target;
 }
 
-// Clearing the target also clears what hangs off it: the install count and the
-// crash-loop verdict.
+// Clearing the target also clears what hangs off it: the install count, the
+// crash-loop verdict and the failure's reason. Setting one starts a new reason.
 static void setNvsTarget(const String &version, uint8_t tries = 0, bool crashed = false) {
     Preferences p;
     p.begin("ota", false);
+    p.remove("why");
+    p.remove("reset");
     if (version.isEmpty()) {
         p.remove("target");
         p.remove("tries");
@@ -118,6 +151,25 @@ static void setNvsTarget(const String &version, uint8_t tries = 0, bool crashed 
         p.putUChar("tries", tries);
         p.putBool("crashed", crashed);
     }
+    p.end();
+}
+
+// Why the target failed, kept until the report lands. A boot whose report does
+// not get through must not judge the rollback again by its own reset reason:
+// the next boot is a plain power-on, and a crash would become a retry.
+static void setNvsVerdict(const String &why, const String &reset) {
+    Preferences p;
+    p.begin("ota", false);
+    p.putString("why", why);
+    p.putString("reset", reset);
+    p.end();
+}
+
+static void nvsVerdict(String &why, String &reset) {
+    Preferences p;
+    p.begin("ota", false);
+    why = p.isKey("why") ? p.getString("why", "") : "";
+    reset = p.isKey("reset") ? p.getString("reset", "") : "";
     p.end();
 }
 
@@ -201,10 +253,29 @@ void otaBootCheck() {
                 Serial.printf("[OTA] Firmware %s confirmed again after the fall-back\n", FIRMWARE_VERSION);
             }
         }
-        if (fellBack || crashed || tries >= OTA_MAX_TRIES) {
+        String why, reset;
+        nvsVerdict(why, reset);
+        if (why.isEmpty()) {
+            if (fellBack) {
+                // Set at the fall-back by an image older than the reasons.
+                why = "crash_loop";
+            } else if (crashed) {
+                why = "crash";
+                reset = resetKey(reason);
+            } else if (tries >= OTA_MAX_TRIES) {
+                why = "lost_installs";
+                reset = resetKey(reason);
+            }
+            if (!why.isEmpty()) {
+                setNvsVerdict(why, reset);
+            }
+        }
+        if (!why.isEmpty()) {
             failedVersion = target;
-            Serial.printf("[OTA] Back from %s (reset reason %d, install %u): reporting it as failed\n",
-                          target.c_str(), (int)reason, (unsigned)tries);
+            failedReason = why;
+            failedReset = reset;
+            Serial.printf("[OTA] Back from %s (%s, reset %s, install %u): reporting it as failed\n",
+                          target.c_str(), why.c_str(), reset.isEmpty() ? "?" : reset.c_str(), (unsigned)tries);
         } else {
             // Not its fault: keep target and count so the next install is try 2.
             Serial.printf("[OTA] Back from %s after a non-crash reset (reason %d); will try it again\n",
@@ -218,6 +289,7 @@ void otaBootCheck() {
         if (other && esp_ota_set_boot_partition(other) == ESP_OK) {
             fellBackThisStreak = 1;
             setNvsTarget(FIRMWARE_VERSION, nvsTries(), true);
+            setNvsVerdict("crash_loop", resetKey(reason));
             Serial.printf("[OTA] %u crashes in a row: switching back to %s\n", (unsigned)crashStreak, other->label);
             delay(100);
             esp_restart();
@@ -277,6 +349,13 @@ static bool installImage(const String &path, size_t size, const String &sha256) 
     unsigned lastTenth = 0;
     bool ok = true;
     while (done < size) {
+        // Restarting into the image on a failing cell would only lose it.
+        if (supplyLow()) {
+            Serial.printf("[OTA] Supply went low at %u/%u bytes, dropping the install\n", (unsigned)done,
+                          (unsigned)size);
+            ok = false;
+            break;
+        }
         const size_t available = stream->available();
         if (available == 0) {
             if (!http.connected() || millis() - lastByteAt > OTA_STALL_MS) {
@@ -344,6 +423,10 @@ void otaAddReport(JsonDocument &request) {
     firmware["version"] = FIRMWARE_VERSION;
     if (!failedVersion.isEmpty()) {
         firmware["failed_version"] = failedVersion;
+        firmware["failed_reason"] = failedReason;
+        if (!failedReset.isEmpty()) {
+            firmware["failed_reset"] = failedReset;
+        }
     }
 }
 
@@ -358,6 +441,8 @@ void otaTakeAnswer(JsonVariantConst ota) {
     // The backend has the failure on record now; stop carrying it.
     if (!failedVersion.isEmpty()) {
         failedVersion = "";
+        failedReason = "";
+        failedReset = "";
         setNvsTarget("");
     }
 
@@ -413,6 +498,17 @@ void otaCheckAndUpdate() {
     if (offer.version.isEmpty() || !offer.path.startsWith("/api/ota/firmware/") || offer.sha256.length() != 64 ||
         offer.size == 0) {
         Serial.println("[OTA] Update offer incomplete, ignoring it");
+        return;
+    }
+    // Not on a battery that may not last the probation; the next boot asks again.
+    if (esp_reset_reason() == ESP_RST_BROWNOUT) {
+        Serial.printf("[OTA] %s is available; not installing after a brownout reset\n", offer.version.c_str());
+        return;
+    }
+    float supplyPercent = 0, lowLine = 0;
+    if (supplyTooLowForUpdate(supplyPercent, lowLine)) {
+        Serial.printf("[OTA] %s is available; not installing with the supply at %.1f%% (low under %.1f%%)\n",
+                      offer.version.c_str(), supplyPercent, lowLine);
         return;
     }
 

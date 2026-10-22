@@ -24,4 +24,9 @@ bool supplyLow();
 // next. audioStreamTask asks while the device is idle and plays it.
 bool supplyTakeReminder();
 
+// Whether the supply is too low to start a firmware install (OTA.cpp): flagged
+// low already, or under the low-battery line right now. percent and lowLine get
+// the reading and the line as shares of the reference. False on other boards.
+bool supplyTooLowForUpdate(float &percent, float &lowLine);
+
 #endif
