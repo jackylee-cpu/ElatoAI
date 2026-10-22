@@ -137,6 +137,9 @@ extern const i2s_port_t I2S_PORT_OUT;
 extern const int I2S_SD_OUT;
 
 extern volatile bool sleepRequested;
+// Why, for the "bye" the board sends before it sleeps (sayBye() in Audio.cpp):
+// "sleep_idle", "sleep_button" or "sleep_session_end". Set it with the flag.
+extern const char *volatile sleepReason;
 
 // SSL certificate
 extern const char *CA_cert;

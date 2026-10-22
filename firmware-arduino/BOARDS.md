@@ -336,6 +336,10 @@ partition table is not the same: this board ships with `partition_16m.csv`
   sleep described above, woken by BOOT into a restart. Verified on 62:70 on
   2026-10-14 with a 30s build: chime, LED off, no reconnect during the chime,
   BOOT wakes it into a normal boot and greeting. Sleep current not measured.
+  Before the socket closes it sends `{"type":"bye","reason":"sleep_idle"}`
+  (2026-10-16), so the app shows the toy as asleep; a close with no "bye"
+  after a low-battery report shows as "probably out of battery". Not yet
+  seen on hardware; the server side was tested with a simulated board.
 - **esptool cannot reset it out of the bootloader.** After a read or a write,
   `--after hard_reset` leaves it in download mode. Either unplug it and plug it
   back in, or open the port with pyserial and pulse RTS with DTR low:

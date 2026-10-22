@@ -99,6 +99,11 @@ extern volatile bool i2sInputFlushScheduled;
 void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length);
 void websocketSetup(const String& server_domain, int port, const String& path);
 String websocketExtraHeaders();
+// Tells the server why the socket is about to close ("sleep_idle",
+// "sleep_button", "sleep_session_end" or "restart"), so the app can show the
+// toy as asleep rather than lost. Call with wsMutex held, right before the
+// disconnect or restart. Does nothing when the socket is down.
+void sayBye(const char *reason);
 extern bool websocketStarted;  // websocketSetup() has run; the socket now reconnects itself
 // The socket's token was refused, so it stops reconnecting until
 // startSessionIfReady() has a new one in its headers. Guarded by wsMutex.
