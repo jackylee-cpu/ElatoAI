@@ -4,7 +4,14 @@ The board sends {"type":"power"} once per session after "auth" and again when
 the state changes (firmware Audio.cpp reportPower()):
 
     {"type":"power","low":true}                                   Spotpear: VDD sag only
-    {"type":"power","low":false,"percent":72,"charging":false}    boards with battery sense
+    {"type":"power","low":false,"percent":72,"charging":false,"full":false}
+                                                                  boards with battery sense
+
+Only "low" is always there. Each other field comes only from a board that can
+sense it, and a missing one is stored as null, "unknown", so the app never
+says "not charging" about a board that cannot tell (the Spotpear board as sold:
+its charger's CHRG pin reaches only an LED). Firmware up to 1.1.0 sends "charging"
+only with "percent", and no "full".
 
 It goes to the database rather than a cache here because a toy spends most of
 its time asleep with no socket: the app has to show the last known state, and
@@ -49,19 +56,21 @@ def clean(message: dict[str, Any]) -> dict[str, Any] | None:
     low = message.get("low")
     if not isinstance(low, bool):
         return None
-    row: dict[str, Any] = {
-        "battery_low": low,
-        "battery_percent": None,
-        "battery_charging": None,
-        "battery_at": datetime.now(timezone.utc).isoformat(),
-    }
     percent = message.get("percent")
     # bool is an int in Python; True is not a percentage.
-    if isinstance(percent, int) and not isinstance(percent, bool) and 0 <= percent <= 100:
-        row["battery_percent"] = percent
-        charging = message.get("charging")
-        row["battery_charging"] = charging if isinstance(charging, bool) else None
-    return row
+    if not (isinstance(percent, int) and not isinstance(percent, bool) and 0 <= percent <= 100):
+        percent = None
+    charging = message.get("charging")
+    full = message.get("full")
+    # Every column is written each time, so a board that stops sensing
+    # something (a firmware rollback) does not leave an old value behind.
+    return {
+        "battery_low": low,
+        "battery_percent": percent,
+        "battery_charging": charging if isinstance(charging, bool) else None,
+        "battery_full": full if isinstance(full, bool) else None,
+        "battery_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 async def write(mac: str, row: dict[str, Any]) -> bool:
@@ -93,10 +102,12 @@ async def write(mac: str, row: dict[str, Any]) -> bool:
             logger.warning("Battery for {} not recorded: {}", mac, type(exc).__name__)
             return False
     logger.info(
-        "Battery for {}: {}{}",
+        "Battery for {}: {}{}{}{}",
         mac,
         "LOW" if row["battery_low"] else "ok",
         f", {row['battery_percent']}%" if row["battery_percent"] is not None else "",
+        ", charging" if row["battery_charging"] else "",
+        ", full" if row["battery_full"] else "",
     )
     return True
 

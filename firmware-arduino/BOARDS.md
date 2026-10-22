@@ -388,6 +388,11 @@ How it warns:
   `{"type":"power","low":...}` once per session after "auth" and on every
   change (`reportPower()` in `src/Audio.cpp`); the server writes it to
   `devices.battery_low`, and the app shows the last report with its time.
+- **Not charging, not full.** This board cannot tell either, so it never
+  sends them and the app never shows them. On USB the load-sharing path cuts
+  the cell off and the regulator holds VDD at 3.3V whether the cell is
+  charging, full or flat, and the charger's CHRG pin drives only an LED.
+  What it takes is under "Battery sense for the production board" below.
 
 Verified 2026-10-06 with `SUPPLY_LOW_RATIO_OVERRIDE=1.05f`, which forces the
 low state: the reminder played after the greeting turn ended, and the LED was
@@ -430,10 +435,26 @@ Why these values:
 - **Node.** Measured on the system rail instead, it would read the USB
   supply whenever the toy is plugged in.
 
-A charge-status output is worth asking for too: the charger's CHRG pin to
-GPIO12 or GPIO13. Those are the two free pins, and the xmini-c3 uses GPIO12
-for this. Both are the flash's HD and WP lines, so Spotpear has to confirm
-they are not wired to the flash on this board.
+**Charging and full (asked for 2026-10-16).** The app can show "charging"
+and "full" (`devices.battery_charging` / `battery_full`), but the board needs
+two more signals for them:
+
+| Signal | Ask | Gives |
+|---|---|---|
+| CHRG | the PL4054's CHRG pin to GPIO12, keeping its LED | low = charging |
+| USB present | USB VCC (before D1) -> 100k -> GPIO13 -> 200k -> GND, so 5V reads 3.3V | tells "charge finished" from "unplugged" |
+
+GPIO12 and GPIO13 are the two free pins (the xmini-c3 uses GPIO12 for CHRG).
+Both are the flash's HD and WP lines, so Spotpear has to confirm they are not
+wired to the flash on this board. The PL4054 has no separate "done" pin:
+CHRG lets go both when the charge finishes and when USB is pulled, so without
+USB sense "full" can only be guessed from the cell divider's reading (the
+firmware's 95% rule for boards with a percentage, `kPowerFullPercent`).
+
+The toy sleeps after 5 minutes idle, and a charge takes longer, so the end of
+a charge happens asleep. The firmware for the revised board should wake on a
+CHRG edge, report, and sleep again; otherwise the app keeps saying
+"charging" until the next time someone talks to the toy.
 
 Firmware that follows the hardware: a reading path keyed to millivolts
 rather than the xmini-c3's raw table, battery polling that does not depend
