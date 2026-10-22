@@ -29,6 +29,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import struct
 import sys
 import urllib.error
@@ -170,6 +171,14 @@ def publish(args, db):
         "sha256": sha256, "size_bytes": len(image), "notes": args.notes,
     })
     print(f"published {board} {version}: {len(image)} bytes, sha256 {sha256}")
+    # Crash reports carry addresses; this ELF is what turns them into source
+    # lines (tools/decode_crash.py). Not in git: it is ~20 MB per release.
+    elf = binary.parent / "firmware.elf"
+    if elf.exists():
+        kept = ROOT / "release-elf" / f"{board}-{version}.elf"
+        kept.parent.mkdir(exist_ok=True)
+        shutil.copyfile(elf, kept)
+        print(f"kept {kept.relative_to(ROOT)} for decoding crash reports")
     if args.current:
         db.promote(board, version)
     else:

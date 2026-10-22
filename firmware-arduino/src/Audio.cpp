@@ -1,3 +1,4 @@
+#include "CrashReport.h"
 #include "OTA.h"
 #include "Audio.h"
 #include "WifiManager.h"
@@ -1440,6 +1441,8 @@ static bool powerSentLow = false;
 static int powerSentPercent = -1;
 static bool powerSentCharging = false;
 static bool powerSentFull = false;
+// The crash report waiting in NVS has gone out on this session.
+static bool crashSent = false;
 static unsigned long powerSentAt = 0;
 
 void sayBye(const char *reason) {
@@ -1551,6 +1554,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             wsAuthed = true;
             // A new session on the server: reportPower() says it again.
             powerSent = false;
+            crashSent = false;
             // as<float>() on a missing key yields 0, and a factor of 0 makes
             // PitchShiftFixedOutput emit one sample of the grain buffer over
             // and over -- a constant tone at full volume, which is exactly the
@@ -1609,6 +1613,11 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                 // setFactoryResetStatusInNVS(true);
                 restartWithBye();
             }
+        }
+
+        // The server stored the crash report (CrashReport.cpp).
+        if (strcmp((char*)type.c_str(), "crash_ack") == 0) {
+            crashReportAcked(doc["id"].as<uint32_t>());
         }
 
         // The volume was changed in the web app while connected
@@ -2075,6 +2084,18 @@ static void reportPower() {
     powerSentAt = millis();
 }
 
+// Once per session, until the server acknowledges it (crash_ack). A board
+// that crashed reports at its next "auth", however many boots later.
+// Runs on networkTask with wsMutex held.
+static void reportCrash() {
+    if (crashSent || !wsAuthed || !webSocket.isConnected()) return;
+    crashSent = true;
+    String out = crashReportJson();
+    if (out.isEmpty()) return;
+    webSocket.sendTXT(out);
+    Serial.printf("[WSc] crash: %s\n", out.c_str());
+}
+
 // networkTask -> webSocket.loop()
 void networkTask(void *parameter) {
     int64_t lastServicedAt = esp_timer_get_time();
@@ -2110,6 +2131,10 @@ void networkTask(void *parameter) {
             webSocket.loop();
         }
         reportPower();
+        reportCrash();
+#if CRASH_TEST
+        crashTestPoll(wsAuthed && webSocket.isConnected());
+#endif
         xSemaphoreGive(wsMutex);
 
         vTaskDelay(1);

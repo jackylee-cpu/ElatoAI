@@ -36,6 +36,7 @@ interface AdminDashboardProps {
     audit: IAdminAuditEntry[];
     devices: IAdminDevice[];
     presence: PresenceMap;
+    crashes: IAdminDeviceCrash[];
     firmwareReleases: IAdminFirmwareRelease[];
     usage: React.ComponentProps<typeof UsageTab>;
 }
@@ -57,6 +58,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     audit,
     devices,
     presence,
+    crashes,
     firmwareReleases,
     usage,
 }) => {
@@ -120,6 +122,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <DevicesTab
                         devices={devices}
                         presence={presence}
+                        crashes={crashes}
                         usage={usage}
                         ips={ips}
                         initialQuery={deviceQuery}
