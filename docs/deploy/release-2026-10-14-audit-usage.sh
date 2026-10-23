@@ -8,8 +8,14 @@
 # with five more (bind tickets, four for OTA rollouts) and the web app's new
 # env vars. Extended 2026-10-16 with device_wifi (R-37) and the fixes since
 # 63f3b06, which UAT runs; every step is re-runnable, so the same command
-# takes UAT forward. Extended 2026-10-22 with the OTA failure reason.
+# takes UAT forward. Extended 2026-10-22 with the OTA failure reason, and
+# 2026-10-23 with the draft-stage fix.
 # Schema changes, all in step 3:
+#   - Draft stage: picking a draft's starting stage no longer stamps
+#     stage_changed_at, which made the OTA page show the draft as Old and
+#     admin_delete_firmware_release() refuse it. Drafts stamped that way
+#     (the audit log shows they were never current, no board was offered
+#     them) are cleared
 #   - OTA failure reason: firmware_rollout_devices gains failed_reason and
 #     failed_reset; ota_note_report takes them (two new parameters that default
 #     to NULL, so the old web app's four-name call still resolves). Auto-pause
@@ -145,6 +151,8 @@ MARK_FILE="$BACKUP_DIR/release-2026-10-14-voice-started-at"
 # replaces 120000's audit_admin_change() and audits firmware_releases.
 # 20261012170000 and 20261016120000 stand alone (devices and users only).
 # 20261022120000 replaces 200000's ota_maybe_pause() and ota_note_report().
+# 20261023120000 replaces 190000's firmware_releases_stamp_stage() and reads
+# 120000's audit log.
 MIGRATIONS=(
     20261012170000_device_bind_tickets.sql
     20261014120000_admin_audit_log.sql
@@ -163,6 +171,7 @@ MIGRATIONS=(
     20261016160000_device_connection.sql
     20261016170000_device_crashes.sql
     20261022120000_ota_failure_reason.sql
+    20261023120000_firmware_draft_stage.sql
 )
 # Each admin function is refused to anon and checks the role itself.
 ADMIN_FUNCTIONS=(
@@ -307,6 +316,8 @@ if step 3; then
     has_table device_bind_tickets && has_table firmware_rollout_devices \
         && has_column firmware_releases rollout_percent && has_column firmware_releases stage_changed_at \
         || { echo "  bind-ticket or rollout objects missing"; exit 1; }
+    [ "$(q "select prosrc like '%NEW.is_current AND NEW.rollout_percent%' from pg_proc where oid='public.firmware_releases_stamp_stage()'::regprocedure")" = "t" ] \
+        || { echo "  firmware_releases_stamp_stage() still stamps drafts -- 20261023120000 did not run"; exit 1; }
     has_table device_wifi \
         && [ "$(q "select count(*) from pg_trigger where tgrelid='public.devices'::regclass and tgname='devices_forget_wifi_on_owner_change'")" = "1" ] \
         || { echo "  device_wifi or its owner-change trigger missing"; exit 1; }

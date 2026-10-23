@@ -342,7 +342,9 @@ function ReleaseDetail({
 
     const askStage = (to: Stage) =>
         setPending({
-            title: `${to > stage ? "Widen" : "Narrow"} ${release.version} to ${STAGE_LABELS[to]}`,
+            title: release.is_current
+                ? `${to > stage ? "Widen" : "Narrow"} ${release.version} to ${STAGE_LABELS[to]}`
+                : `Start ${release.version} at ${STAGE_LABELS[to]}`,
             body: release.is_current
                 ? `It will be offered to ${release.reach[to]} toy${release.reach[to] === 1 ? "" : "s"} of this kind${to === 0 ? " (the whitelist)" : ", whitelist included"}.${to < stage ? " Toys that already took it keep it." : ""}`
                 : `It is not current, so nothing is offered yet. When it is made current it starts at ${STAGE_LABELS[to]}: ${release.reach[to]} toy${release.reach[to] === 1 ? "" : "s"}.`,
