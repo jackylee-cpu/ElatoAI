@@ -4,7 +4,10 @@
     {
       "name": "frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "frontend-nextjs",
       "port": 3000,
       "autoPort": true
@@ -12,16 +15,114 @@
     {
       "name": "frontend-devboard",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "-p", "52727"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "52727"
+      ],
       "cwd": "frontend-nextjs",
       "port": 52727
     },
     {
       "name": "voice-server",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["server.py"],
+      "runtimeArgs": [
+        "server.py"
+      ],
       "cwd": "server/fastapi",
       "port": 7860
+    },
+    {
+      "name": "hwtest",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "(cd ../aibuddy-hwtest/server/fastapi && exec .venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 7870 2>&1 | sed -u 's/^/[voice] /') & exec npm --prefix ../aibuddy-hwtest/frontend-nextjs run dev -- -p 3230"
+      ],
+      "port": 3230
+    },
+    {
+      "name": "wifiload-voice",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd ../aibuddy-wifiload/server/fastapi && exec .venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 7880"
+      ],
+      "port": 7880
+    },
+    {
+      "name": "wifiload-web",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "exec npm --prefix ../aibuddy-wifiload/frontend-nextjs run dev -- -H 0.0.0.0 -p 3250"
+      ],
+      "port": 3250
+    },
+    {
+      "name": "battery-web",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "exec npm --prefix ../aibuddy-battery/frontend-nextjs run dev -- -H 0.0.0.0 -p 3260"
+      ],
+      "port": 3260
+    },
+    {
+      "name": "battery-voice",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd ../aibuddy-battery/server/fastapi && exec /Users/lee/project/aibuddy/server/fastapi/.venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 7890"
+      ],
+      "port": 7890
+    },
+    {
+      "name": "brands-aibuddy",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "BRAND=aibuddy exec npm --prefix ../aibuddy-brands/frontend-nextjs run dev -- -H 0.0.0.0 -p 3270"
+      ],
+      "port": 3270
+    },
+    {
+      "name": "brands-hkjc",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "BRAND=hkjc exec npm --prefix ../aibuddy-brands/frontend-nextjs run dev -- -H 0.0.0.0 -p 3270"
+      ],
+      "port": 3270
+    },
+    {
+      "name": "brands-genex",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "BRAND=genex exec npm --prefix ../aibuddy-brands/frontend-nextjs run dev -- -H 0.0.0.0 -p 3270"
+      ],
+      "port": 3270
+    },
+    {
+      "name": "tools-voice",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd ../aibuddy-tools/server/fastapi && exec /Users/lee/project/aibuddy/server/fastapi/.venv/bin/python server.py"
+      ],
+      "port": 7895
+    },
+    {
+      "name": "tools-web",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "exec npm --prefix ../aibuddy-tools/frontend-nextjs run dev -- -H 0.0.0.0 -p 3280"
+      ],
+      "port": 3280
     }
   ]
 }

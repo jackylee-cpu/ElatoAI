@@ -97,7 +97,7 @@ a = wb.create_sheet("軟件開發與測試")
 a.sheet_view.showGridLines = False
 a["A1"] = "軟件開發與測試：網頁、App、Tool call、RAG、後台、測試、UAT"
 a["A1"].font = font(14, True)
-a["A2"] = "網頁統一開發一套，三個品牌是三套外觀，包在原生殼裡；1/15 上架快活和政協青年聯會兩個 App（AI Buddy 隨玩具延後）。殼由 Neo 負責；設計、角色和 App 圖由 Navy 負責；網頁、後台、語音系統和韌體由 Jacky 負責。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
+a["A2"] = "網頁統一開發一套，三個品牌是三套外觀，包在原生殼裡；1/15 上架快活和政協青年聯會兩個 App（AI Buddy 隨玩具延後）。殼的負責人待定；設計、角色和 App 圖的負責人待定；網頁、後台、語音系統和韌體由 Jacky 負責。殼過審後，網頁畫面可以繼續更新，不用重新送審。"
 a["A2"].font = font(10, color="5B6474")
 a.merge_cells("A1:F1"); a.merge_cells("A2:F2")
 a["A2"].alignment = Alignment(wrap_text=True, vertical="top")

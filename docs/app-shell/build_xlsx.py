@@ -116,7 +116,7 @@ sheet(
         "現在就做",
         (1, "殼專案骨架和品牌 flavor", "殼設定與權限（WebView 部分）、品牌設定",
          "一個專案、A／B 兩個 flavor（C 留位）：全屏 WebView、持久登入狀態、音訊自動播放、白名單導航、離線頁、啟動畫面、直向、Android 返回鍵、debug 版遠端除錯。\n品牌代號用 hkjc、genex；名稱、圖示、bundle id 先用臨時值，首頁網址先指向 https://elatoai.hkqft.com（現有測試網址），做成 flavor 設定，之後只改設定。",
-         "正式 App 名稱、bundle id、網域、圖示", "我們和客戶（待定事項 #4）；圖示由 Navy", "W3（10/30 前）", "可開工"),
+         "正式 App 名稱、bundle id、網域、圖示", "我們和客戶（待定事項 #4）；圖示由設計負責人（待定）", "W3（10/30 前）", "可開工"),
         (2, "橋接層", "調用約定、注入腳本、錯誤碼",
          "注入 window.AIBuddyNative、iOS／Android 收發訊息、_resolve／_emit、來源檢查、超時、UNKNOWN_METHOD、User-Agent。\n不用等網頁：在 Safari Web Inspector／Chrome 遠端除錯的 console 直接呼叫 AIBuddyNative.call(\"app.getInfo\") 就能測。",
          "—", "—", "W3（10/30 前）", "可開工"),

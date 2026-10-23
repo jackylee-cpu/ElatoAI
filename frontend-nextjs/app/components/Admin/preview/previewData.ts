@@ -96,10 +96,10 @@ export interface PreviewAuditEntry {
 
 export const PREVIEW_AUDIT: PreviewAuditEntry[] = [
     { at: "today 14:22", who: "Jacky", action: "Released OTA", target: "1.0.2 → 10%", reason: "Fix C3 TLS fragmentation, two toys first", diff: [["-", "rollout: internal (4 toys)"], ["+", "rollout: 10%"]] },
-    { at: "today 11:05", who: "Navy", action: "Edited character", target: "波波熊 · first message", reason: "—", diff: [["-", "first_message: 你好呀！我係波波熊。"], ["+", "first_message: 哈囉！我係波波熊，你今日過得點呀？"]] },
+    { at: "today 11:05", who: "d***@hkqft.com", action: "Edited character", target: "波波熊 · first message", reason: "—", diff: [["-", "first_message: 你好呀！我係波波熊。"], ["+", "first_message: 哈囉！我係波波熊，你今日過得點呀？"]] },
     { at: "yesterday 19:31", who: "Jacky", action: "Changed model", target: "Voice LLM", reason: "R-02 evaluation result", diff: [["-", "llm_model: google/gemma-4-26b"], ["+", "llm_model: deepseek/deepseek-v4-flash"], ["+", "provider.allow_fallbacks: false"]] },
     { at: "10/13 16:10", who: "Jacky", action: "Created account", target: "c***@example.com", reason: "Internal test family", diff: [["+", "account: c***@example.com (parent)"]] },
-    { at: "10/13 09:12", who: "Jacky", action: "Granted role", target: "Navy → content admin", reason: "Owns characters and IPs", diff: [["+", "admin_roles: content_admin"]] },
+    { at: "10/13 09:12", who: "Jacky", action: "Granted role", target: "d***@hkqft.com → content admin", reason: "Owns characters and IPs", diff: [["+", "admin_roles: content_admin"]] },
 ];
 
 // 14 days, oldest first.
