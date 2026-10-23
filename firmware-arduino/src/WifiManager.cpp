@@ -22,6 +22,8 @@
 static volatile bool connectRequested = false;
 // The join under way is for credentials just typed into the setup page.
 static bool joiningFromPortal = false;
+// When the setup page's scan was started (0: none running). /scan polls it.
+static uint32_t pageScanStartedAt = 0;
 
 // Backoff for the "online but nobody has claimed me yet" poll.
 static uint64_t nextProvisionAttemptMillis = 0;
@@ -1307,14 +1309,34 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
     int32_t channel;
 
     scanResult = WiFi.scanComplete();
+    // scanComplete() calls a scan failed once it has run 20x the per-channel
+    // time, and the radio keeps scanning regardless. With a phone on the AP
+    // the scan takes longer than that, so taking the word for it restarted
+    // the scan on every poll and the page timed out (16C0, 2026-10-23): until
+    // this one has had SCAN_GIVE_UP_MS, a "failed" means it is still going.
+    static const uint32_t SCAN_GIVE_UP_MS = 15000;
+    if (scanResult == WIFI_SCAN_FAILED && pageScanStartedAt && millis() - pageScanStartedAt < SCAN_GIVE_UP_MS) {
+      scanResult = WIFI_SCAN_RUNNING;
+    }
     if (scanResult == WIFI_SCAN_FAILED) {
-      scanResult = WiFi.scanNetworks(true, true);   // FIXME: scanNetworks is disconnecting clients!
+      // 120ms a channel, as tryConnect() scans from the AP.
+      scanResult = WiFi.scanNetworks(true, true, false, 120);   // FIXME: scanNetworks is disconnecting clients!
+      pageScanStartedAt = scanResult == WIFI_SCAN_RUNNING ? millis() : 0;
       jsonDoc["status"] = "scanning";
-    } else if (scanResult > 0) {
+    } else if (scanResult == WIFI_SCAN_RUNNING) {
+      jsonDoc["status"] = "scanning";
+    } else if (scanResult >= 0) {
+      if (pageScanStartedAt) {
+        Serial.printf("[WIFI] Setup page scan: %d networks in %lums\n", scanResult,
+                      (unsigned long)(millis() - pageScanStartedAt));
+        pageScanStartedAt = 0;
+      }
+      // An array even when empty: anything else reads as "still scanning".
+      JsonArray found = jsonDoc.to<JsonArray>();
       for (int8_t i = 0; i < scanResult; i++) {
         WiFi.getNetworkInfo(i, ssid, encryptionType, rssi, bssid, channel);
 
-        JsonObject wifiNet = jsonDoc.createNestedObject();
+        JsonObject wifiNet = found.add<JsonObject>();
         wifiNet["ssid"] = ssid;
         wifiNet["encryptionType"] = encryptionType;
         wifiNet["rssi"] = rssi;
@@ -1655,7 +1677,7 @@ void WIFIMANAGER::attachUI() {
                 // /wifi/scan answers {"status":"scanning"} until the radio is
                 // done, then the array. There is no separate results route.
                 let scanned = null;
-                for (let attempt = 0; attempt < 10; attempt++) {
+                for (let attempt = 0; attempt < 20; attempt++) {
                     const response = await fetch(`${API_BASE}/wifi/scan`);
                     if (!response.ok) throw new Error('Network scan failed');
                     const payload = await response.json();
