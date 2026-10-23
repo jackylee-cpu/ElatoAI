@@ -92,6 +92,8 @@ class WIFIMANAGER {
 #else
     WebServer * webServer;              // The Webserver to register routes on
 #endif
+    bool webServerListening = false;    // Only while the setup AP is up (runSoftAP())
+    bool webServerStarted = false;      // Ever this boot: AsyncTCP's task stays from then on
     String apiPrefix = "/api/wifi";     // Prefix for all IP endpionts
     String uiPrefix = "/wifi";          // Prefix for all UI endpionts
 

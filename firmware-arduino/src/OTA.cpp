@@ -320,6 +320,15 @@ static bool installImage(const String &path, size_t size, const String &sha256) 
         return false;
     }
 
+    // Before the download, not after it: begin() mallocs the 4KB sector buffer
+    // (it writes nothing yet), and once the TLS session is streaming there may
+    // be no 4KB block left. Taken after the GET it failed 4 times in 6 on 16C0
+    // (2026-10-23) while the web server still started at every boot.
+    if (!Update.begin(size, U_FLASH)) {
+        Serial.printf("[OTA] Cannot start the update: %s\n", Update.errorString());
+        return false;
+    }
+
     HTTPClient http;
     WiFiClientSecure client;
     beginBackendRequest(http, client, path);
@@ -329,11 +338,7 @@ static bool installImage(const String &path, size_t size, const String &sha256) 
     if (code != HTTP_CODE_OK || http.getSize() != (int)size) {
         Serial.printf("[OTA] Download refused: HTTP %d, %d bytes\n", code, http.getSize());
         http.end();
-        return false;
-    }
-    if (!Update.begin(size, U_FLASH)) {
-        Serial.printf("[OTA] Cannot start the update: %s\n", Update.errorString());
-        http.end();
+        Update.abort();
         return false;
     }
 

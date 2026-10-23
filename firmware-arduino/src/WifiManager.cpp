@@ -20,6 +20,10 @@
 // blocks for seconds and the handler runs on the AsyncTCP task, where blocking
 // is a known crash source.
 static volatile bool connectRequested = false;
+// The join under way is for credentials just typed into the setup page.
+static bool joiningFromPortal = false;
+// When the setup page's scan was started (0: none running). /scan polls it.
+static uint32_t pageScanStartedAt = 0;
 
 // Backoff for the "online but nobody has claimed me yet" poll.
 static uint64_t nextProvisionAttemptMillis = 0;
@@ -196,6 +200,9 @@ void WIFIMANAGER::logMessage(String msg) {
   Serial.print(msg);
 }
 
+// Set once startBackgroundTask() has made the boot connect attempt.
+static volatile bool bootConnectDone = false;
+
 /**
  * @brief Background Task running as a loop forever
  * @param param needs to be a valid WIFIMANAGER instance
@@ -203,6 +210,9 @@ void WIFIMANAGER::logMessage(String msg) {
 void wifiTask(void* param) {
   yield();
   delay(500); // wait a short time until everything is setup before executing the loop forever
+  // Created before the boot connect in startBackgroundTask(); loop() running
+  // alongside it would start a second connect and a second token request.
+  while (!bootConnectDone) delay(50);
   yield();
   const TickType_t xDelay = 10000 / portTICK_PERIOD_MS;
   WIFIMANAGER * wifimanager = (WIFIMANAGER *) param;
@@ -288,8 +298,15 @@ void WIFIMANAGER::startBackgroundTask(String softApName, String softApPass) {
 
   WiFi.setSleep(false);
   loadFromNVS();
-  if (!tryConnect()) staLostMillis = millis();  // the setup grace counts from boot
 
+  // The tasks first, before the connect below opens the first TLS session.
+  // Their stacks stay for good. Created after it, they (and the web server's
+  // AsyncTCP task, see runSoftAP()) landed in the free block the websocket's
+  // TLS was connecting into -- it needs two ~16.7KB buffers -- and about one
+  // boot in three then failed every wss attempt with "SSL - Memory allocation
+  // failed" until ServerReach restarted the board 180s later (16C0,
+  // 2026-10-23). wifiTask waits for bootConnectDone, so this connect is still
+  // the only one.
   BaseType_t taskCreated = xTaskCreatePinnedToCore(
     wifiTask,
     "WifiManager",
@@ -307,6 +324,9 @@ void WIFIMANAGER::startBackgroundTask(String softApName, String softApPass) {
   if (xTaskCreatePinnedToCore(captiveDnsTask, "Captive DNS", 3072, NULL, 1, NULL, 0) != pdPASS) {
     logMessage("[ERROR] WifiManager: Error creating captive DNS task\n");
   }
+
+  if (!tryConnect()) staLostMillis = millis();  // the setup grace counts from boot
+  bootConnectDone = true;
 }
 
 /**
@@ -663,7 +683,9 @@ void WIFIMANAGER::loop() {
     logMessage("[WIFI] New credentials saved, connecting now\n");
     delay(500);  // the portal's "added" answer leaves before the AP does
     if (softApRunning) stopSoftAP();
+    joiningFromPortal = true;
     tryConnect();
+    joiningFromPortal = false;
     return;
   }
 
@@ -962,6 +984,20 @@ bool WIFIMANAGER::tryConnect(bool evenWithPhone) {
         // the session should not start in SOFT_AP.
         if (softApRunning) logMessage("[WIFI] Back on a saved network, closing the setup AP\n");
         stopSoftAP();
+        if (webServerStarted) {
+          // The setup page's AsyncTCP task and its 16KB stack cannot be
+          // stopped, and next to them the C3 has too little heap for the token
+          // request's TLS: after a setup through the page, every attempt on
+          // 16C0 failed "SSL - Memory allocation failed" until ServerReach
+          // restarted it 3 minutes later (2026-10-23). A boot that never opens
+          // the AP has the memory, and rejoins the network just saved in ~1s.
+          // Quietly unless a person just set it up: a chime then says it is
+          // ready, while after an outage nobody is expecting one.
+          logMessage("[WIFI] Joined from the setup AP, restarting to free its memory\n");
+          if (!joiningFromPortal) serverReachSilenceNextBoot();
+          delay(100);
+          ESP.restart();
+        }
         connectCb();
         return true;
         break;
@@ -1024,6 +1060,17 @@ bool WIFIMANAGER::runSoftAP(String apName, String apPass) {
   if (state) {
     IPAddress IP = WiFi.softAPIP();
     logMessage("[WIFI] AP created. My IP is: " + String(IP) + "\n");
+    // The setup page is all the web server is for, so it listens only while
+    // the AP is up: on the home network it was an unauthenticated API to the
+    // toy's Wi-Fi, and its AsyncTCP task's 16KB stack, allocated at every
+    // boot, left an OTA download too little heap to stream (16C0,
+    // 2026-10-23). The task stays once started; AsyncTCP cannot stop it.
+    if (webServer && !webServerListening) {
+      webServer->begin();
+      webServerListening = true;
+      webServerStarted = true;
+      logMessage("[WIFI] Setup page listening\n");
+    }
     return true;
   } else {
     logMessage("[WIFI] Unable to create SoftAP!\n");
@@ -1037,6 +1084,11 @@ bool WIFIMANAGER::runSoftAP(String apName, String apPass) {
 void WIFIMANAGER::stopSoftAP() {
   WiFi.softAPdisconnect();
   WiFi.mode(WIFI_STA);
+  if (webServerListening) {
+    webServer->end();
+    webServerListening = false;
+    logMessage("[WIFI] Setup page closed\n");
+  }
 }
 
 /**
@@ -1257,14 +1309,34 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
     int32_t channel;
 
     scanResult = WiFi.scanComplete();
+    // scanComplete() calls a scan failed once it has run 20x the per-channel
+    // time, and the radio keeps scanning regardless. With a phone on the AP
+    // the scan takes longer than that, so taking the word for it restarted
+    // the scan on every poll and the page timed out (16C0, 2026-10-23): until
+    // this one has had SCAN_GIVE_UP_MS, a "failed" means it is still going.
+    static const uint32_t SCAN_GIVE_UP_MS = 15000;
+    if (scanResult == WIFI_SCAN_FAILED && pageScanStartedAt && millis() - pageScanStartedAt < SCAN_GIVE_UP_MS) {
+      scanResult = WIFI_SCAN_RUNNING;
+    }
     if (scanResult == WIFI_SCAN_FAILED) {
-      scanResult = WiFi.scanNetworks(true, true);   // FIXME: scanNetworks is disconnecting clients!
+      // 120ms a channel, as tryConnect() scans from the AP.
+      scanResult = WiFi.scanNetworks(true, true, false, 120);   // FIXME: scanNetworks is disconnecting clients!
+      pageScanStartedAt = scanResult == WIFI_SCAN_RUNNING ? millis() : 0;
       jsonDoc["status"] = "scanning";
-    } else if (scanResult > 0) {
+    } else if (scanResult == WIFI_SCAN_RUNNING) {
+      jsonDoc["status"] = "scanning";
+    } else if (scanResult >= 0) {
+      if (pageScanStartedAt) {
+        Serial.printf("[WIFI] Setup page scan: %d networks in %lums\n", scanResult,
+                      (unsigned long)(millis() - pageScanStartedAt));
+        pageScanStartedAt = 0;
+      }
+      // An array even when empty: anything else reads as "still scanning".
+      JsonArray found = jsonDoc.to<JsonArray>();
       for (int8_t i = 0; i < scanResult; i++) {
         WiFi.getNetworkInfo(i, ssid, encryptionType, rssi, bssid, channel);
 
-        JsonObject wifiNet = jsonDoc.createNestedObject();
+        JsonObject wifiNet = found.add<JsonObject>();
         wifiNet["ssid"] = ssid;
         wifiNet["encryptionType"] = encryptionType;
         wifiNet["rssi"] = rssi;
@@ -1605,7 +1677,7 @@ void WIFIMANAGER::attachUI() {
                 // /wifi/scan answers {"status":"scanning"} until the radio is
                 // done, then the array. There is no separate results route.
                 let scanned = null;
-                for (let attempt = 0; attempt < 10; attempt++) {
+                for (let attempt = 0; attempt < 20; attempt++) {
                     const response = await fetch(`${API_BASE}/wifi/scan`);
                     if (!response.ok) throw new Error('Network scan failed');
                     const payload = await response.json();

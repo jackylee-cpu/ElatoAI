@@ -382,8 +382,10 @@ void setupWiFi() {
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char softApName[16];
   snprintf(softApName, sizeof softApName, "AIBuddy-%02X%02X", mac[4], mac[5]);
-  WifiManager.startBackgroundTask(
-      softApName); // Run the background task to take care of our Wifi
+
+  // Routes only: the setup AP starts the server (WIFIMANAGER::runSoftAP()),
+  // and it is attached before startBackgroundTask() because the boot connect
+  // below can already open that AP.
   WifiManager.fallbackToSoftAp(
       true); // Run a SoftAP if no known AP can be reached
   WifiManager.attachWebServer(&webServer); // Attach our API to the Webserver
@@ -404,7 +406,9 @@ void setupWiFi() {
     }
     request->send(404, "text/plain", "Not found");
   });
-  webServer.begin();
+
+  WifiManager.startBackgroundTask(
+      softApName); // Run the background task to take care of our Wifi
 }
 
 #ifdef TOUCH_MODE
