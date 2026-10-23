@@ -206,7 +206,7 @@ fastapi_container()  { (cd "$FASTAPI_DIR" && docker compose -f docker-compose.gh
 # the container must run the release image, and answer.
 runs_release() {   # runs_release <container id> <image name>
     [ -n "$1" ] && [ "$(docker inspect -f '{{.Image}}' "$1")" = \
-        "$(docker image inspect -f '{{.Id}}' "ghcr.io/jackylee-cpu/aibuddy/$2:$RELEASE" 2>/dev/null)" ]
+        "$(docker image inspect -f '{{.Id}}' "ghcr.io/hkqft/aibuddy/$2:$RELEASE" 2>/dev/null)" ]
 }
 # A 2MB POST to the OTA page's upload route, signed out: the web app refuses
 # it (401/403), but only nginx answers 413, so anything else means the body
@@ -374,7 +374,7 @@ if step 4; then
         || { echo "  DEVICE_CLAIM_LIST is not in .env.production -- run step 3 (3b) first"; exit 1; }
     for img in fastapi frontend; do
         tries=0
-        until out="$(docker pull -q "ghcr.io/jackylee-cpu/aibuddy/$img:$RELEASE" 2>&1)"; do
+        until out="$(docker pull -q "ghcr.io/hkqft/aibuddy/$img:$RELEASE" 2>&1)"; do
             if echo "$out" | grep -qiE "unauthorized|denied|authentication"; then
                 echo "  GHCR refused the pull: docker login ghcr.io with a read:packages PAT first"; exit 1
             fi
@@ -382,11 +382,11 @@ if step 4; then
             echo "  waiting for $img:$RELEASE ..."; sleep 30
         done
     done
-    (cd "$FASTAPI_DIR" && export FASTAPI_IMAGE="ghcr.io/jackylee-cpu/aibuddy/fastapi:$RELEASE" \
+    (cd "$FASTAPI_DIR" && export FASTAPI_IMAGE="ghcr.io/hkqft/aibuddy/fastapi:$RELEASE" \
         && docker compose -f docker-compose.ghcr.yml pull && docker compose -f docker-compose.ghcr.yml up -d)
     mkdir -p "$BACKUP_DIR"
     q "select now()" > "$MARK_FILE"
-    (cd "$FRONTEND_DIR" && export FRONTEND_IMAGE="ghcr.io/jackylee-cpu/aibuddy/frontend:$RELEASE" \
+    (cd "$FRONTEND_DIR" && export FRONTEND_IMAGE="ghcr.io/hkqft/aibuddy/frontend:$RELEASE" \
         && docker compose -f docker-compose.ghcr.yml pull && docker compose -f docker-compose.ghcr.yml up -d)
     tries=0
     until web_is_new; do

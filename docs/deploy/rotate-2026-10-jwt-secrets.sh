@@ -22,7 +22,7 @@
 #   1  prepare: new secret + keys into $ROT_DIR (mode 600). Prints the new
 #      anon key -- it is public, it ships in every page -- for the GitHub
 #      secret. Production is untouched.
-#      THEN, by hand, on github.com/jackylee-cpu/aibuddy:
+#      THEN, by hand, on github.com/HKQFT/aibuddy:
 #        Settings > Secrets and variables > Actions > NEXT_PUBLIC_SUPABASE_ANON_KEY = <new anon key>
 #        Actions > "Publish frontend image to GHCR" > Run workflow (main)
 #      and wait for it to go green; its image tag is main's short sha.
@@ -54,7 +54,7 @@ FASTAPI_DIR="$REPO/server/fastapi"
 FRONTEND_DIR="$REPO/frontend-nextjs"
 SITE="${SITE:-https://elatoai.hkqft.com}"
 SUPA_URL="${SUPA_URL:-$SITE/supabase-api}"
-FRONTEND_REPO="${FRONTEND_REPO:-ghcr.io/jackylee-cpu/aibuddy/frontend}"
+FRONTEND_REPO="${FRONTEND_REPO:-ghcr.io/hkqft/aibuddy/frontend}"
 ROT_DIR="${ROT_DIR:-$HOME/aibuddy-rotation}"
 ROTATE_DEVICE="${ROTATE_DEVICE:-1}"
 STEP="${STEP:-0}"

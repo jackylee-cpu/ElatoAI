@@ -1,6 +1,6 @@
 services:
   fastapi:
-    image: ${FASTAPI_IMAGE:-ghcr.io/jackylee-cpu/aibuddy/fastapi:latest}
+    image: ${FASTAPI_IMAGE:-ghcr.io/hkqft/aibuddy/fastapi:latest}
     build: .
     ports:
       - "7860:7860"

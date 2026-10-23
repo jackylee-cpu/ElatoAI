@@ -34,7 +34,7 @@ Where a section says "verify", the fact was true on that date but drifts
 
 | remote | repo | use |
 |---|---|---|
-| `mygithub` | jackylee-cpu/aibuddy | **the real repo; push here** |
+| `mygithub` | HKQFT/aibuddy (moved from jackylee-cpu/aibuddy; the old URL still redirects for git) | **the real repo; push here** |
 | `origin` | jackylee-cpu/ElatoAI | a different repo. `git push origin main` looks plausible and goes to the wrong place |
 | `upstream` | akdeb/elatoai | the open-source project this was forked from |
 
@@ -99,7 +99,12 @@ On `mygithub` only `main` is left. The old merged branches
    (DEVICE_CLAIM_LIST, DEVICE_VOICE_URL, DEVICE_BACKEND_URL), sets nginx's
    16 MB upload limit, pulls the images and runs checks. Pull first, so that the
    host has the latest runbook.
-4. Any release that adds a migration or an env var must extend the runbook and
+4. Images live under `ghcr.io/hkqft/aibuddy/` since the repo moved to the HKQFT
+   org. The old `ghcr.io/jackylee-cpu/aibuddy/` path still answers but stops at
+   e488c0a, so a script or compose file that names it waits forever or quietly
+   runs an old build. On 2026-10-23 the runbook sat at "waiting for
+   fastapi:bec5090" with both CI runs green for exactly this reason.
+5. Any release that adds a migration or an env var must extend the runbook and
    rehearse it (§5.2).
 
 Containers: `fastapi-fastapi-1` (compose `docker-compose.ghcr.yml`, service
@@ -142,7 +147,7 @@ them** (`p0-07-rotate-secrets`).
 | what | where it lives |
 |---|---|
 | host login, Cloudflare, domain `hkqft.com` | owner's accounts |
-| GitHub `jackylee-cpu/aibuddy` (code, GHCR images, Actions secrets incl. the baked `NEXT_PUBLIC_SUPABASE_URL`) | GitHub |
+| GitHub `HKQFT/aibuddy` (code, GHCR images under `ghcr.io/hkqft/aibuddy/`, Actions secrets incl. the baked `NEXT_PUBLIC_SUPABASE_URL`) | GitHub |
 | Supabase service key, JWT secret, `POSTGRES_PASSWORD` | host: `~/supabase-selfhost/.env`, `~/aibuddy/frontend-nextjs/.env.production`. The service key is **not** on the dev Mac |
 | `DEVICE_JWT_SECRET`, `INTERNAL_API_TOKEN` | both server envs; **must be identical** in the web and voice envs, or the web returns 500s and every device is refused |
 | OpenRouter, Azure STT, MiniMax/Azure TTS keys | `server/fastapi/.env` (dev Mac), host env |
