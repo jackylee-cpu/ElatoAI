@@ -92,6 +92,11 @@ bool serverReachSilentBoot() {
     return silent;
 }
 
+void serverReachSilenceNextBoot() {
+    initRtc();
+    silentNextBoot = 1;
+}
+
 bool serverReachTakeWifiCheck() {
     if (!wifiCheckWanted) return false;
     wifiCheckWanted = false;

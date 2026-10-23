@@ -55,6 +55,9 @@ NetStatus serverReachStatus();
 // Once at boot: true when this boot is a recovery restart, so it stays quiet.
 bool serverReachSilentBoot();
 
+// Before a restart that nobody nearby asked for: the next boot is a quiet one.
+void serverReachSilenceNextBoot();
+
 // WifiManager::loop(): true once each time the poll wants the internet
 // checked, after which it reports what it found with one of these two.
 bool serverReachTakeWifiCheck();
