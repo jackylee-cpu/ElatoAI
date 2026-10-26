@@ -26,6 +26,15 @@
       "port": 52727
     },
     {
+      "name": "frontend-claimtest",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd frontend-nextjs && NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION=False DEVICE_CLAIM_LIST=True exec npm run dev -- -H 0.0.0.0 -p 52727"
+      ],
+      "port": 52727
+    },
+    {
       "name": "voice-server",
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": [

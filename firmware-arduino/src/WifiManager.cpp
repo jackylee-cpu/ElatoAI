@@ -29,6 +29,12 @@ static uint32_t pageScanStartedAt = 0;
 static uint64_t nextProvisionAttemptMillis = 0;
 static uint32_t provisionBackoffMillis = 5000;
 static const uint32_t PROVISION_BACKOFF_MAX = 30000;
+// How often an unclaimed board asks again. Each ask is a TLS handshake, about
+// 1.3s of CPU on the C3, and idle sleep still ends the polling after 5 minutes.
+static const uint32_t UNCLAIMED_POLL_MS = 3000;
+// The last token request got a 202. deviceUnclaimed alone would also cover a
+// failed request after one, which should back off like any other failure.
+static bool lastAnswerUnclaimed = false;
 
 // The board's own secret, issued by the web app the first time it called in
 // and never shown again. It is the only thing that proves this board is this
@@ -61,6 +67,7 @@ static bool deviceTokenFresh() {
 // Trade the device secret for a device token. A board calling in for the very
 // first time has no secret yet and is issued one with the answer.
 static bool fetchDeviceToken() {
+    lastAnswerUnclaimed = false;
     HTTPClient http;
     WiFiClientSecure client;
     beginBackendRequest(http, client, "/api/generate_auth_token");
@@ -116,6 +123,7 @@ static bool fetchDeviceToken() {
         Serial.printf("[AUTH] Registered, waiting to be claimed (code %s)\n",
                       (const char *)(doc["user_code"] | "?"));
         deviceUnclaimed = true;
+        lastAnswerUnclaimed = true;
         authTokenGlobal = "";
         return false;
     }
@@ -171,6 +179,15 @@ void startSessionIfReady() {
   }
 
   if (ok) {
+    provisionBackoffMillis = 5000;
+    return;
+  }
+  // A 202 is the server answering, not failing: somebody is claiming this
+  // board right now, so ask again soon. The backoff grew to 30s here, and with
+  // the task's own sleep a claim took up to 40s to reach the board, which read
+  // as "it only notices after a restart".
+  if (lastAnswerUnclaimed) {
+    nextProvisionAttemptMillis = millis() + UNCLAIMED_POLL_MS;
     provisionBackoffMillis = 5000;
     return;
   }
@@ -233,7 +250,10 @@ void wifiTask(void* param) {
     // Sleeps the same 10s as before, but a remote Wi-Fi request (R-37) wakes
     // it early so the web page is not left waiting. loop() keeps its own
     // interval, so an early wake does not mean an early health check.
-    ulTaskNotifyTake(pdTRUE, xDelay);
+    // While it polls to be claimed, loop()'s 3s interval is what counts; the
+    // 10s sleep used to override it.
+    const bool polling = WiFi.status() == WL_CONNECTED && authTokenGlobal.isEmpty();
+    ulTaskNotifyTake(pdTRUE, polling ? pdMS_TO_TICKS(3000) : xDelay);
     wifimanager->serviceRemote();
   }
 }
