@@ -110,7 +110,6 @@ def build_voice_pipeline(
     tts_voices: dict[str, str] | None = None,
     title: str | None = None,
     character_prompt: str | None = None,
-    voice_prompt: str | None = None,
     extra_after_stt=None,
     extra_after_llm=None,
     memory=None,
@@ -163,7 +162,6 @@ def build_voice_pipeline(
     system_instruction = build_session_prompt(
         title=title,
         character_prompt=character_prompt,
-        voice_prompt=voice_prompt,
         child_name=child.get("name"),
         child_age=child.get("age"),
         child_persona=child.get("persona"),

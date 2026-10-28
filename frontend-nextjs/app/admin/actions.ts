@@ -112,7 +112,6 @@ const EDITABLE_FIELDS = [
     "short_description",
     "character_prompt",
     "first_message_prompt",
-    "voice_prompt",
     "oai_voice",
     "voices",
     "provider",
@@ -219,6 +218,10 @@ export async function createPersonalityAction(
             ...pickEditable(personality),
             key,
             title,
+            // Not editable any more (MiniMax takes no voice description), but
+            // written empty: the column's default is a sentence the voice
+            // server would still add to the prompt as "YOUR VOICE IS: ...".
+            voice_prompt: "",
         });
     } catch (error) {
         console.error("createPersonalityAction failed", error);

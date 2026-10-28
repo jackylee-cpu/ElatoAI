@@ -46,7 +46,6 @@ const EMPTY: Partial<IPersonality> = {
     short_description: "",
     character_prompt: "",
     first_message_prompt: "",
-    voice_prompt: "",
     oai_voice: "Friendly_Person",
     voices: {},
     provider: "openrouter",
@@ -414,14 +413,6 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                                 onChange={(event) =>
                                     set("first_message_prompt", event.target.value)
                                 }
-                            />
-                        </Field>
-
-                        <Field label="Voice prompt" hint="How the voice should sound.">
-                            <Textarea
-                                rows={2}
-                                value={draft.voice_prompt ?? ""}
-                                onChange={(event) => set("voice_prompt", event.target.value)}
                             />
                         </Field>
 

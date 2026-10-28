@@ -56,7 +56,7 @@ _IP_SELECT = (
 )
 
 _CHARACTER_FIELDS = (
-    "key,title,character_prompt,voice_prompt,first_message_prompt,oai_voice,voices,"
+    "key,title,character_prompt,first_message_prompt,oai_voice,voices,"
     f"mode_key,style_key,{_IP_SELECT}"
 )
 
@@ -84,7 +84,6 @@ _SELECT = (
 class DevicePersonality:
     title: str | None = None
     character_prompt: str | None = None
-    voice_prompt: str | None = None
     # How the character opens a browser session. The toy keeps the bot's own
     # greeting, as it always has.
     first_message_prompt: str | None = None
@@ -169,7 +168,6 @@ def _parse(row: dict) -> DevicePersonality:
     return DevicePersonality(
         title=_clean(personality.get("title")),
         character_prompt=_clean(personality.get("character_prompt")),
-        voice_prompt=_clean(personality.get("voice_prompt")),
         first_message_prompt=_clean(personality.get("first_message_prompt")),
         tts_voice=_clean(personality.get("oai_voice")),
         tts_voices=language_profiles.parse_voices(personality.get("voices")),

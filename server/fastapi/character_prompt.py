@@ -104,7 +104,6 @@ def build_child_block(
 def build_session_prompt(
     title: str | None = None,
     character_prompt: str | None = None,
-    voice_prompt: str | None = None,
     child_name: str | None = None,
     child_age: int | None = None,
     child_persona: str | None = None,
@@ -159,9 +158,9 @@ def build_session_prompt(
     if name:
         parts.append(f"You are {name}.")
     parts.append(prompt)
-    voice = (voice_prompt or "").strip()
-    if voice:
-        parts.append(f"YOUR VOICE IS: {voice}")
+    # personalities.voice_prompt is not read any more. It went in here as
+    # "YOUR VOICE IS: ...", but the voice is whatever MiniMax id the character
+    # names; telling the LLM how it sounds changed nothing it could control.
     parts.extend(shaping)
     if child_block:
         parts.append(child_block)
