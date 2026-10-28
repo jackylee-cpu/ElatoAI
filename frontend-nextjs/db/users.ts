@@ -17,10 +17,10 @@ export const createUser = async (
             supervisee_age: 14,
             supervisee_persona: "",
             personality_id: userProps.personality_id, // selecting default personality
-            avatar_url: user.user_metadata?.avatar_url ??
-                `/user_avatar/user_avatar_${
-                    Math.floor(Math.random() * 10)
-                }.png`,
+            // Only an OAuth provider gives an avatar. Email sign-ups get '',
+            // which AccountAvatar draws as the placeholder icon (there are no
+            // default avatar files to point at).
+            avatar_url: user.user_metadata?.avatar_url ?? "",
         } as IUser,
     ]);
 
