@@ -114,6 +114,7 @@ const EDITABLE_FIELDS = [
     "first_message_prompt",
     "oai_voice",
     "voices",
+    "tts_speed",
     "provider",
     "image_url",
     "is_hidden",
@@ -137,6 +138,9 @@ export async function updatePersonalityAction(
     const clean = pickEditable(updates);
     if (Object.keys(clean).length === 0) {
         return { ok: false, error: "Nothing to save" };
+    }
+    if (!speedIsValid(clean.tts_speed)) {
+        return { ok: false, error: SPEED_ERROR };
     }
 
     try {
@@ -212,6 +216,9 @@ export async function createPersonalityAction(
     if (!title) {
         return { ok: false, error: "Title is required" };
     }
+    if (!speedIsValid(personality.tts_speed)) {
+        return { ok: false, error: SPEED_ERROR };
+    }
 
     try {
         await createBuiltinPersonality(supabase, {
@@ -276,6 +283,15 @@ function pickEditable(updates: Partial<IPersonality>): Partial<IPersonality> {
         clean.voices = cleanVoices(clean.voices);
     }
     return clean as Partial<IPersonality>;
+}
+
+const SPEED_ERROR = "Speech speed must be between 0.5 and 2.0";
+
+/** MiniMax refuses a whole request on a speed outside 0.5-2.0, so a bad one
+ *  is turned back here rather than by the column's CHECK as a bare 500. */
+function speedIsValid(speed: unknown): boolean {
+    if (speed === undefined) return true;
+    return typeof speed === "number" && speed >= 0.5 && speed <= 2.0;
 }
 
 /** language_code -> MiniMax voice id. Empty strings are dropped so clearing a

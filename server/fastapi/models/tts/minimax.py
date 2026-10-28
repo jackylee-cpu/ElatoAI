@@ -600,6 +600,7 @@ def create_service(**kwargs):
             _parse_language(kwargs.get("language") or os.getenv("MINIMAX_LANGUAGE"))
         ),
         emotion=kwargs.get("emotion") or os.getenv("MINIMAX_EMOTION"),
+        speed=kwargs.get("speed"),
     )
     base_url = kwargs.get("base_url") or os.getenv("MINIMAX_BASE_URL")
 

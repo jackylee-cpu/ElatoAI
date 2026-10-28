@@ -108,6 +108,7 @@ def build_voice_pipeline(
     context: LLMContext,
     tts_voice: str | None = None,
     tts_voices: dict[str, str] | None = None,
+    tts_speed: float | None = None,
     title: str | None = None,
     character_prompt: str | None = None,
     extra_after_stt=None,
@@ -234,6 +235,11 @@ def build_voice_pipeline(
         tts_kwargs["voice"] = session_voice
     if language:
         tts_kwargs["language"] = language.tts_language
+    # MiniMax only: the other providers are autodiscovered Pipecat services
+    # (models/_unsupported.py), and a `speed` they do not take would fail
+    # their constructor rather than be ignored.
+    if tts_speed is not None and tts_provider == "minimax":
+        tts_kwargs["speed"] = tts_speed
     tts = create_tts_service(tts_provider, **tts_kwargs)
 
     # Whisper is a segmented STT: it only transcribes after VAD start/stop.

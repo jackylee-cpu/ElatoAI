@@ -48,6 +48,7 @@ const EMPTY: Partial<IPersonality> = {
     first_message_prompt: "",
     oai_voice: "Friendly_Person",
     voices: {},
+    tts_speed: 1,
     provider: "openrouter",
     image_url: null,
     is_child_voice: false,
@@ -446,6 +447,22 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
                                 value={draft.voices?.["zh-CN"] ?? ""}
                                 onChange={(event) =>
                                     setLangVoice("zh-CN", event.target.value)
+                                }
+                            />
+                        </Field>
+
+                        <Field
+                            label="Speech speed"
+                            hint="MiniMax, 0.5 to 2.0. 1.0 is normal; lower is slower. Applies in every language."
+                        >
+                            <Input
+                                type="number"
+                                min={0.5}
+                                max={2}
+                                step={0.05}
+                                value={draft.tts_speed ?? 1}
+                                onChange={(event) =>
+                                    set("tts_speed", Number(event.target.value))
                                 }
                             />
                         </Field>

@@ -451,6 +451,8 @@ declare global {
         first_message_prompt: string;
         creator_id: string | null;
         pitch_factor: number;
+        // MiniMax speech speed, 0.5-2.0 (the column's CHECK). 1.0 is normal.
+        tts_speed?: number;
         // Public URL of the uploaded artwork. Null means the character has
         // none: a built-in falls back to the bundled /personality image, a
         // user-made one to the emoji derived from its id.

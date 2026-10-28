@@ -56,7 +56,7 @@ _IP_SELECT = (
 )
 
 _CHARACTER_FIELDS = (
-    "key,title,character_prompt,first_message_prompt,oai_voice,voices,"
+    "key,title,character_prompt,first_message_prompt,oai_voice,voices,tts_speed,"
     f"mode_key,style_key,{_IP_SELECT}"
 )
 
@@ -89,6 +89,8 @@ class DevicePersonality:
     first_message_prompt: str | None = None
     tts_voice: str | None = None
     tts_voices: dict[str, str] | None = None
+    # MiniMax speech speed, 0.5-2.0. None leaves the TTS at its own 1.0.
+    tts_speed: float | None = None
     volume: int | None = None
     # Identity and child profile. All optional: a device that cannot be
     # resolved still gets a session, just without memory or personalisation.
@@ -134,6 +136,21 @@ def _int_or(value: object, default: int | None = None) -> int | None:
     return value
 
 
+def _speed_or_none(value: object) -> float | None:
+    """personalities.tts_speed, or None if missing or outside MiniMax's range.
+
+    The column has a CHECK for the same range; this only guards a row that
+    arrives malformed, since MiniMax refuses the whole request on a bad speed
+    and the child would hear nothing.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not 0.5 <= value <= 2.0:
+        logger.warning("TTS speed {} out of range, ignoring", value)
+        return None
+    return float(value)
+
+
 def _parse_region(value: object) -> Region | None:
     """The embedded `regions` row, or None if unset or malformed."""
     if not isinstance(value, dict):
@@ -171,6 +188,7 @@ def _parse(row: dict) -> DevicePersonality:
         first_message_prompt=_clean(personality.get("first_message_prompt")),
         tts_voice=_clean(personality.get("oai_voice")),
         tts_voices=language_profiles.parse_voices(personality.get("voices")),
+        tts_speed=_speed_or_none(personality.get("tts_speed")),
         volume=volume,
         user_id=_clean(row.get("user_id")),
         personality_key=_clean(personality.get("key")),
