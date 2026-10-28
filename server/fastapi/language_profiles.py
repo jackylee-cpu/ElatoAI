@@ -197,13 +197,27 @@ def voice_for(
 ) -> str:
     """Which MiniMax voice this session speaks with.
 
-    The character's own voice wins when it can say these words -- when its id
-    carries this language's prefix, or when it is one of the unprefixed legacy
-    ids and this profile claims them. Otherwise the language's voice wins,
-    because a Cantonese session running an English voice id is not a session
-    in Cantonese at all.
+    An id typed into this language's slot of `voices` is used as written. The
+    admin chose it for this language, and a cloned voice (daijaizai_yue01) has
+    whatever id it was cloned under, never a language prefix. Only an id that
+    carries another language's prefix is refused there, since that is a system
+    voice that cannot say these words.
+
+    `character_voice` (oai_voice) was not chosen for any one language, so it
+    wins only when it can say these words -- when its id carries this
+    language's prefix, or when it is one of the unprefixed legacy ids and this
+    profile claims them. Otherwise the language's voice wins, because a
+    Cantonese session running an English voice id is not a session in
+    Cantonese at all.
     """
-    voice = intended_voice(profile, character_voice, voices)
+    mapped = ((voices or {}).get(profile.code) or "").strip()
+    if mapped:
+        if mapped.startswith(profile.voice_prefixes) or not mapped.startswith(
+            _ALL_PREFIXES
+        ):
+            return mapped
+        return os.getenv(profile.voice_env) or profile.default_voice
+    voice = (character_voice or "").strip()
     if voice:
         if voice.startswith(profile.voice_prefixes):
             return voice

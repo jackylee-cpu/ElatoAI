@@ -91,14 +91,37 @@ def test_a_character_can_name_a_different_voice_per_language():
     assert language_profiles.voice_for(english, "Lively_Girl", voices) == "Lively_Girl"
 
 
-def test_a_wrong_language_in_the_map_is_still_replaced():
-    # An English id typed into the Cantonese field is the same mistake as
-    # putting it in oai_voice: it cannot say these words.
+def test_a_cloned_voice_in_the_map_is_used_as_written():
+    # A cloned voice's id is whatever it was cloned under and never carries a
+    # language prefix. Typed into the Cantonese field it is the admin's choice
+    # for Cantonese, so it must not fall back to Cantonese_KindWoman.
     cantonese = language_profiles.resolve("zh-HK")
-    voices = {"zh-HK": "Calm_Woman"}
-    assert language_profiles.voice_for(cantonese, "Lively_Girl", voices).startswith(
+    mandarin = language_profiles.resolve("zh-CN")
+    voices = {"zh-HK": "daijaizai_yue01", "zh-CN": "daijaizai_zh01"}
+    assert (
+        language_profiles.voice_for(cantonese, "Calm_Woman", voices)
+        == "daijaizai_yue01"
+    )
+    assert (
+        language_profiles.voice_for(mandarin, "Calm_Woman", voices)
+        == "daijaizai_zh01"
+    )
+    # The same id in oai_voice was not chosen for Cantonese and is still
+    # replaced.
+    assert language_profiles.voice_for(cantonese, "daijaizai_yue01").startswith(
         "Cantonese_"
     )
+
+
+def test_another_languages_system_voice_in_the_map_is_still_replaced():
+    # An English or Mandarin system voice typed into the Cantonese field is
+    # recognisable by its prefix and cannot say these words.
+    cantonese = language_profiles.resolve("zh-HK")
+    for wrong in ("English_Kind-heartedGirl", "Chinese (Mandarin)_Warm_Girl"):
+        voices = {"zh-HK": wrong}
+        assert language_profiles.voice_for(
+            cantonese, "Lively_Girl", voices
+        ).startswith("Cantonese_"), wrong
 
 
 def test_parse_voices_drops_blanks_and_junk():

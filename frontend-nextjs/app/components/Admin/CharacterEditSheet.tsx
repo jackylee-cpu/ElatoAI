@@ -437,7 +437,7 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
 
                         <Field
                             label="Cantonese voice id"
-                            hint="e.g. Cantonese_CuteGirl or Cantonese_KindWoman. Empty uses the language default."
+                            hint="e.g. Cantonese_CuteGirl, or a cloned voice id such as daijaizai_yue01. Empty uses the language default."
                         >
                             <Input
                                 value={draft.voices?.["zh-HK"] ?? ""}
@@ -449,7 +449,7 @@ const CharacterEditSheet: React.FC<CharacterEditSheetProps> = ({
 
                         <Field
                             label="Mandarin voice id"
-                            hint="e.g. Chinese (Mandarin)_Warm_Girl. Empty uses the language default."
+                            hint="e.g. Chinese (Mandarin)_Warm_Girl, or a cloned voice id. Empty uses the language default."
                         >
                             <Input
                                 value={draft.voices?.["zh-CN"] ?? ""}
